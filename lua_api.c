@@ -12,14 +12,12 @@ static struct mainwindow *get_mainwindow(lua_State *L)
 
 int lapi_peek(lua_State *L)
 {
-	lua_Integer l_address = luaL_checkinteger(L, 1);
-	if (l_address < 0) {
-		luaL_error(L, "negative address: %d", l_address);
-		return 1;
-	}
-	uint32_t address = (uint32_t) l_address;
+	long long addr = luaL_checkinteger(L, 1);
 	struct mainwindow *w = get_mainwindow(L);
-	lua_pushinteger(L, mainwindow_getbyte(w, address));
+	if (addr < 0 || addr >= w->file_size) {
+		return luaL_error(L, "address out of bounds");
+	}
+	lua_pushinteger(L, mainwindow_getbyte(w, addr));
 	return 1;
 }
 
@@ -29,15 +27,18 @@ static struct tree *convert_tree(lua_State *L)
 	tree->parent = 0;
 
 	lua_getfield(L, -1, "start");
-	tree->start = luaL_checkinteger(L, -1);
+	if (!lua_isinteger(L, -1)) goto error;
+	tree->start = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "size");
-	tree->len = luaL_checkinteger(L, -1);
+	if (!lua_isinteger(L, -1)) goto error;
+	tree->len = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "name");
-	tree->name = strdup(luaL_checkstring(L, -1));
+	if (!lua_isstring(L, -1)) goto error;
+	tree->name = strdup(lua_tostring(L, -1));
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "value");
@@ -63,6 +64,10 @@ static struct tree *convert_tree(lua_State *L)
 		// beware that indices start at 1 in Lua
 		lua_rawgeti(L, -1, 1+i); // push child
 		tree->children[i] = convert_tree(L);
+		if (!tree->children[i]) {
+			free(tree->children);
+			goto error;
+		}
 		tree->children[i]->parent = tree;
 		lua_pop(L, 1);
 	}
@@ -71,11 +76,17 @@ static struct tree *convert_tree(lua_State *L)
 	lua_pop(L, 1);
 
 	return tree;
+error:
+	free(tree);
+	return 0;
 }
 
 int lapi_set_tree(lua_State *L)
 {
 	struct tree *tree = convert_tree(L);
+	if (!tree) {
+		return luaL_error(L, "invalid argument");
+	}
 	struct mainwindow *w = get_mainwindow(L);
 	mainwindow_set_tree(w, tree);
 	return 0;
@@ -92,7 +103,9 @@ int lapi_goto(lua_State *L)
 {
 	struct mainwindow *w = get_mainwindow(L);
 	long long addr = luaL_checkinteger(L, 1);
-	// TODO: bounds check
+	if (addr < 0 || addr >= w->file_size) {
+		luaL_error(L, "address out of bounds");
+	}
 	mainwindow_goto_address(w, addr);
 	return 0;
 }

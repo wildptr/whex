@@ -53,12 +53,12 @@ int mainwindow_find_cache(struct mainwindow *w, long long address)
 		if ((tag & 1) && address >> 12 == tag >> 12) return i;
 	}
 
-	long long base = address & -0x1000;
+	long long base = address & -CACHE_BLOCK_SIZE;
 	long long tag = base|1;
 	SetFilePointer(w->file, base, 0, FILE_BEGIN);
 	DWORD nread;
 	int ret = next_cache;
-	ReadFile(w->file, w->cache[ret].data, 0x1000, &nread, 0);
+	ReadFile(w->file, w->cache[ret].data, CACHE_BLOCK_SIZE, &nread, 0);
 	w->cache[ret].tag = tag;
 	next_cache = (ret+1)&(N_CACHE_BLOCK-1);
 
@@ -70,7 +70,7 @@ int mainwindow_find_cache(struct mainwindow *w, long long address)
 uint8_t mainwindow_getbyte(struct mainwindow *w, long long address)
 {
 	int block = mainwindow_find_cache(w, address);
-	return w->cache[block].data[address & 0xfff];
+	return w->cache[block].data[address & (CACHE_BLOCK_SIZE-1)];
 }
 
 static void kmp_table(int *T, const uint8_t *pat, int len)
@@ -170,7 +170,7 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 			}
 		} else {
 			int block = mainwindow_find_cache(w, address);
-			int base = address & 0xfff;
+			int base = address & (CACHE_BLOCK_SIZE-1);
 			wsprintf(p, TEXT("%08I64x: "), address);
 			p += 10;
 			int end = 0;
@@ -1076,13 +1076,13 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 
 int mainwindow_init_cache(struct mainwindow *w)
 {
-	uint8_t *cache_data = malloc(N_CACHE_BLOCK*0x1000);
+	uint8_t *cache_data = malloc(N_CACHE_BLOCK << LOG2_CACHE_BLOCK_SIZE);
 	if (!cache_data) {
 		return -1;
 	}
 	for (int i=0; i<N_CACHE_BLOCK; i++) {
 		w->cache[i].tag = 0;
-		w->cache[i].data = cache_data + i*0x1000;
+		w->cache[i].data = cache_data + (i << LOG2_CACHE_BLOCK_SIZE);
 	}
 	return 0;
 }
@@ -1127,6 +1127,8 @@ WinMain(HINSTANCE instance,
 	LPSTR cmdline,
 	int show)
 {
+	TCHAR *cmdline_tstr = GetCommandLine();
+
 	char filepath[512];
 	struct mainwindow *w;
 

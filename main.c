@@ -166,7 +166,13 @@ void update_monoedit_buffer(uint32_t buffer_line, uint32_t num_lines)
 			int base = address & 0xfff;
 			sprintf(p, "%08x: ", address);
 			p += 10;
-			int end = absolute_line+1 >= g_total_lines ? g_file_size&15 : 16;
+			int end = 0;
+		       	if (absolute_line+1 >= g_total_lines) {
+				end = g_file_size&15;
+			}
+			if (!end) {
+				end = 16;
+			}
 			for (int j=0; j<end; j++) {
 				sprintf(p, "%02x ", g_cache[cache].data[base|j]);
 				p += 3;

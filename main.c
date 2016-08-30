@@ -110,6 +110,42 @@ uint32_t kmp_search(const uint8_t *pat, uint32_t len, uint32_t start)
 	return g_file_size;
 }
 
+/*
+ * ...|xx|x..
+ * position of first mark = start
+ * number of bytes after the second mark = N-(start+len-1)
+ */
+uint32_t kmp_search_backward(const uint8_t *pat, uint32_t len, uint32_t start)
+{
+	assert(len);
+	uint32_t T[len];
+	uint8_t revpat[len];
+	for (uint32_t i=0; i<len; i++) {
+		revpat[i] = pat[len-1-i];
+	}
+	pat = revpat;
+	/* T[0] is left undefined */
+	kmp_table(T, pat, len);
+	uint32_t m = start;
+	uint32_t i = 0;
+	while (m+i < g_file_size) {
+		if (pat[i] == getbyte(g_file_size-1-(m+i))) {
+			if (i == len-1) return g_file_size-(m+len);
+			i++;
+		} else {
+			if (i) {
+				m += i-T[i];
+				i = T[i];
+			} else {
+				m++;
+				i = 0;
+			}
+		}
+	}
+	/* no match */
+	return g_file_size;
+}
+
 void update_monoedit_buffer(uint32_t buffer_line, uint32_t num_lines)
 {
 	uint32_t address = g_current_line + buffer_line << 4;
@@ -233,7 +269,41 @@ char *cmd_find(char *arg)
 	if (matchpos == g_file_size) {
 		return "pattern not found";
 	}
-	printf("found match at %08x\n", matchpos);
+	goto_address(matchpos);
+	return 0;
+}
+
+char *repeat_search(bool reverse)
+{
+	if (!g_last_search_pattern) {
+		return "no previous pattern";
+	}
+	uint32_t (*search_func)(const uint8_t *pat, uint32_t patlen, uint32_t start);
+	uint32_t start;
+	if (reverse) {
+		uint32_t tmp = g_cursor_pos + g_last_search_pattern_len - 1;
+		if (g_file_size >= tmp) {
+			start = g_file_size - tmp;
+		} else {
+			return "pattern not found";
+			//start = g_file_size;
+		}
+		search_func = kmp_search_backward;
+	} else {
+		if (g_cursor_pos+1 < g_file_size) {
+			start = g_cursor_pos+1;
+		} else {
+			return "pattern not found";
+			//start = 0;
+		}
+		search_func = kmp_search;
+	}
+	uint32_t matchpos = search_func(g_last_search_pattern, 
+					g_last_search_pattern_len,
+					start);
+	if (matchpos == g_file_size) {
+		return "pattern not found";
+	}
 	goto_address(matchpos);
 	return 0;
 }
@@ -241,30 +311,17 @@ char *cmd_find(char *arg)
 /* arg unused */
 char *cmd_findnext(char *arg)
 {
-	if (!g_last_search_pattern) {
-		return "no previous pattern";
-	}
-	uint32_t start;
-	if (g_cursor_pos+1 < g_file_size) {
-		start = g_cursor_pos+1;
-	} else {
-		/* TODO notify user of wrapped search */
-		start = 0;
-	}
-	uint32_t matchpos = kmp_search(g_last_search_pattern, 
-				       g_last_search_pattern_len,
-				       start);
-	if (matchpos == g_file_size) {
-		return "pattern not found";
-	}
-	printf("found match at %08x\n", matchpos);
-	goto_address(matchpos);
-	return 0;
+	return repeat_search(false);
+}
+
+/* arg unused */
+char *cmd_findprev(char *arg)
+{
+	return repeat_search(true);
 }
 
 char *execute_command(char *cmd)
 {
-	printf("command: %s\n", cmd);
 	char *p = cmd;
 	while (*p == ' ') p++;
 	char *start = p;
@@ -282,6 +339,8 @@ char *execute_command(char *cmd)
 	case 8:
 		if (!memcmp(start, "findnext", 8)) {
 			cmdproc = cmd_findnext;
+		} else if (!memcmp(start, "findprev", 8)) {
+			cmdproc = cmd_findprev;
 		}
 		break;
 	}
@@ -476,6 +535,9 @@ monoedit_wndproc(HWND hwnd,
 			break;
 		case 'n':
 			execute_command_directly(cmd_findnext, 0);
+			break;
+		case 'N':
+			execute_command_directly(cmd_findprev, 0);
 			break;
 		}
 		return 0;

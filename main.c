@@ -31,6 +31,7 @@ HWND g_cmd_edit;
 WNDPROC g_edit_wndproc;
 WNDPROC g_monoedit_wndproc;
 /* current position in file */
+/* invariant: g_cursor_pos = (g_current_line + g_cursor_y) * 16 + g_cursor_x */
 uint32_t g_cursor_pos;
 uint32_t g_cursor_x;
 uint32_t g_cursor_y;
@@ -247,22 +248,40 @@ uint8_t hextobyte(const uint8_t *p)
 	return hexval(p[0]) << 4 | hexval(p[1]);
 }
 
-char *cmd_find(char *arg)
+char *find_binary_or_text(char *arg, bool istext)
 {
-	const char *p = arg;
+	uint32_t patlen;
+	uint8_t *pat;
+	char *p = arg;
 	while (*p == ' ') p++;
-	uint32_t slen = strlen(p);
-	if (slen&1 || !slen) {
-		return "invalid argument";
-	}
-	uint32_t patlen = slen >> 1;
-	uint8_t pat[patlen];
-	for (uint32_t i=0; i<patlen; i++) {
-		if (!(isxdigit(p[0]) && isxdigit(p[1]))) {
+	if (istext) {
+		if (*p == '"') {
+			/* TODO */
+			return "TODO";
+		} else {
+			char *start = p;
+			while (iswordchar(*p)) p++;
+			if (*p) {
+				/* trailing character(s) found */
+				return "invalid argument";
+			}
+			patlen = p - start;
+			pat = start;
+		}
+	} else {
+		uint32_t slen = strlen(p);
+		if (slen&1 || !slen) {
 			return "invalid argument";
 		}
-		pat[i] = hextobyte(p);
-		p += 2;
+		patlen = slen >> 1;
+		pat = malloc(patlen);
+		for (uint32_t i=0; i<patlen; i++) {
+			if (!(isxdigit(p[0]) && isxdigit(p[1]))) {
+				return "invalid argument";
+			}
+			pat[i] = hextobyte(p);
+			p += 2;
+		}
 	}
 	if (g_last_search_pattern) {
 		free(g_last_search_pattern);
@@ -271,11 +290,24 @@ char *cmd_find(char *arg)
 	memcpy(g_last_search_pattern, pat, patlen);
 	g_last_search_pattern_len = patlen;
 	uint32_t matchpos = kmp_search(pat, patlen, g_cursor_pos);
+	if (!istext) {
+		free(pat);
+	}
 	if (matchpos == g_file_size) {
 		return "pattern not found";
 	}
 	goto_address(matchpos);
 	return 0;
+}
+
+char *cmd_find(char *arg)
+{
+	return find_binary_or_text(arg, false);
+}
+
+char *cmd_findtext(char *arg)
+{
+	return find_binary_or_text(arg, true);
 }
 
 char *repeat_search(bool reverse)
@@ -346,6 +378,8 @@ char *execute_command(char *cmd)
 			cmdproc = cmd_findnext;
 		} else if (!memcmp(start, "findprev", 8)) {
 			cmdproc = cmd_findprev;
+		} else if (!memcmp(start, "findtext", 8)) {
+			cmdproc = cmd_findtext;
 		}
 		break;
 	}

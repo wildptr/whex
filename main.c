@@ -38,12 +38,17 @@ uint32_t g_cursor_y;
 char *g_last_search_pattern;
 uint32_t g_last_search_pattern_len;
 
+bool cache_valid(int cache)
+{
+	return g_cache[cache].tag != -1;
+};
+
 int find_cache(uint32_t address)
 {
 	static int next_cache = 0;
 
 	for (int i=0; i<N_CACHE; i++) {
-		if (g_cache[i].tag <= address && address < g_cache[i].tag+0x1000) return i;
+		if (cache_valid(i) && address - g_cache[i].tag <= 0x1000) return i;
 	}
 
 	uint32_t tag = address & ~0xfff;
@@ -148,19 +153,19 @@ uint32_t kmp_search_backward(const uint8_t *pat, uint32_t len, uint32_t start)
 
 void update_monoedit_buffer(uint32_t buffer_line, uint32_t num_lines)
 {
-	uint32_t address = g_current_line + buffer_line << 4;
-	uint32_t len = num_lines << 4;
-	uint32_t address_end = address + len;
-	while (address < address_end) {
+	uint32_t absolute_line = g_current_line + buffer_line;
+	uint32_t absolute_line_end = absolute_line + num_lines;
+	while (absolute_line < absolute_line_end) {
 		char *p = &g_monoedit_buffer[buffer_line*80];
-		if (address >= g_file_size) {
+		uint32_t address = absolute_line << 4;
+		if (absolute_line >= g_total_lines) {
 			memset(p, ' ', 80);
 		} else {
 			int cache = find_cache(address);
 			int base = address & 0xfff;
 			sprintf(p, "%08x: ", address);
 			p += 10;
-			int end = address+16 > g_file_size ? g_file_size&15 : 16;
+			int end = absolute_line+1 >= g_total_lines ? g_file_size&15 : 16;
 			for (int j=0; j<end; j++) {
 				sprintf(p, "%02x ", g_cache[cache].data[base|j]);
 				p += 3;
@@ -180,7 +185,7 @@ void update_monoedit_buffer(uint32_t buffer_line, uint32_t num_lines)
 			}
 		}
 		buffer_line++;
-		address += 16;
+		absolute_line++;
 	}
 }
 
@@ -393,7 +398,7 @@ void move_up(void)
 
 void move_down(void)
 {
-	if (g_cursor_pos + 16 < g_file_size) {
+	if (g_file_size >= 16 && g_cursor_pos < g_file_size - 16) {
 		g_cursor_pos += 16;
 		if (g_cursor_y < g_cheight-1) {
 			g_cursor_y++;
@@ -462,7 +467,7 @@ void move_up_page(void)
 
 void move_down_page(void)
 {
-	if (g_cursor_pos + 16*g_cheight < g_file_size) {
+	if (g_file_size >= 16*g_cheight && g_cursor_pos < g_file_size - 16*g_cheight) {
 		g_cursor_pos += 16*g_cheight;
 		scroll_down_page();
 	}
@@ -718,21 +723,10 @@ ATOM register_wndclass(void)
 	return RegisterClass(&wndclass);
 }
 
-int open_file(const char *path) 
+void format_error_code(char *buf, size_t buflen, DWORD error_code)
 {
-	static char errfmt[] = "Failed to open %s: %s\n";
-
-	g_file = CreateFile(path,
-			    GENERIC_READ,
-			    FILE_SHARE_READ,
-			    0, // lpSecurityAttributes
-			    OPEN_EXISTING,
-			    0,
-			    0);
-	if (g_file == INVALID_HANDLE_VALUE) {
 #if 0
    DWORD FormatMessage(
-
     DWORD dwFlags,	// source and processing options 
     LPCVOID lpSource,	// pointer to  message source 
     DWORD dwMessageId,	// requested message identifier 
@@ -742,27 +736,52 @@ int open_file(const char *path)
     va_list *Arguments 	// address of array of message inserts 
    );
 #endif
-		char errtext[512];
-		DWORD lasterr = GetLastError();
-   		FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
-			      0,
-			      lasterr,
-			      0,
-			      errtext,
-			      sizeof errtext,
-			      0);
-		fprintf(stderr, errfmt, path, errtext);
+	DWORD lasterr = GetLastError();
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
+		      0,
+		      error_code,
+		      0,
+		      buf,
+		      buflen,
+		      0);
+}
+
+int open_file(const char *path) 
+{
+	static char errfmt_open[] = "Failed to open %s: %s\n";
+	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
+	char errtext[512];
+
+	g_file = CreateFile(path,
+			    GENERIC_READ,
+			    FILE_SHARE_READ,
+			    0, // lpSecurityAttributes
+			    OPEN_EXISTING,
+			    0,
+			    0);
+	if (g_file == INVALID_HANDLE_VALUE) {
+		format_error_code(errtext, sizeof errtext, GetLastError());
+		fprintf(stderr, errfmt_open, path, errtext);
 		return -1;
 	}
 	DWORD file_size_high;
 	g_file_size = GetFileSize(g_file, &file_size_high);
+	if (g_file_size == 0xffffffff) {
+		DWORD error_code = GetLastError();
+		if (error_code) {
+			format_error_code(errtext, sizeof errtext, GetLastError());
+			fprintf(stderr, errfmt_size, path, errtext);
+			return -1;
+		}
+	}
+	if (file_size_high) {
+		fprintf(stderr, errfmt_open, path, "file is too large");
+		return -1;
+	}
+	printf("file size: %u (0x%x)\n", g_file_size, g_file_size);
 	g_total_lines = g_file_size >> 4;
 	if (g_file_size&15) {
 		g_total_lines += 1;
-	}
-	if (file_size_high) {
-		fprintf(stderr, errfmt, path, "file is too large");
-		return -1;
 	}
 	return 0;
 }

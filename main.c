@@ -475,6 +475,26 @@ monoedit_wndproc(HWND hwnd,
 		 LPARAM lparam)
 {
 	switch (message) {
+	case WM_LBUTTONDOWN:
+		{
+			int x = LOWORD(lparam);
+			int y = HIWORD(lparam);
+			SetFocus(hwnd);
+			/* TODO hard-coded constant */
+			int cx = x / 8;
+			int cy = y / 16;
+			if (cx >= 10 && cx < 58) {
+				cx = (cx-10)/3;
+				uint32_t pos = (g_current_line + cy << 4) + cx;
+				if (pos < g_file_size) {
+					g_cursor_pos = pos;
+					g_cursor_x = cx;
+					g_cursor_y = cy;
+					update_cursor_pos();
+				}
+			}
+		}
+		return 0;
 	case WM_KEYDOWN:
 		switch (wparam) {
 		case VK_UP:

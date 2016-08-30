@@ -799,6 +799,18 @@ int init_cache(void)
 	return 0;
 }
 
+int file_chooser_dialog(char *buf, int buflen)
+{
+	buf[0] = 0;
+	OPENFILENAME ofn = {0};
+	ofn.lStructSize = sizeof ofn;
+	ofn.hInstance = GetModuleHandle(0);
+	ofn.lpstrFile = buf;
+	ofn.nMaxFile = buflen;
+	if (!GetOpenFileName(&ofn)) return -1;
+	return 0;
+}
+
 int APIENTRY
 WinMain(HINSTANCE instance,
 	HINSTANCE prev_instance,
@@ -810,6 +822,13 @@ WinMain(HINSTANCE instance,
 	}
 	if (!register_wndclass()) {
 		return 1;
+	}
+	char filepath[512];
+	if (!cmdline[0]) {
+		if (file_chooser_dialog(filepath, sizeof filepath) < 0) {
+			return 1;
+		}
+		cmdline = filepath;
 	}
 	if (open_file(cmdline) < 0) {
 		return 1;

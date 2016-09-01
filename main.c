@@ -8,7 +8,7 @@
 #include "monoedit.h"
 
 #define N_CACHE 16
-#define INITIAL_CHEIGHT 32
+#define INITIAL_N_ROW 32
 
 HWND g_mainwindow;
 /* the MonoEdit control */
@@ -26,7 +26,7 @@ char *g_monoedit_buffer;
 uint32_t g_monoedit_buffer_cap_lines;
 uint32_t g_current_line;
 /* number of lines displayed */
-uint32_t g_cheight;
+uint32_t g_nrows;
 HWND g_cmd_edit;
 WNDPROC g_edit_wndproc;
 WNDPROC g_monoedit_wndproc;
@@ -35,9 +35,11 @@ WNDPROC g_monoedit_wndproc;
 uint32_t g_cursor_pos;
 uint32_t g_cursor_x;
 uint32_t g_cursor_y;
-
 char *g_last_search_pattern;
 uint32_t g_last_search_pattern_len;
+int g_charwidth;
+int g_charheight;
+HFONT g_mono_font;
 
 bool cache_valid(int cache)
 {
@@ -205,7 +207,7 @@ void goto_line(uint32_t line)
 {
 	assert(line <= g_total_lines);
 	g_current_line = line;
-	update_monoedit_buffer(0, g_cheight);
+	update_monoedit_buffer(0, g_nrows);
 	InvalidateRect(g_monoedit, 0, FALSE);
 }
 
@@ -408,7 +410,7 @@ void scroll_up_line(void)
 	if (g_current_line) {
 		g_current_line--;
 		SendMessage(g_monoedit, MONOEDIT_WM_SCROLL, 0, -1);
-		memmove(g_monoedit_buffer+80, g_monoedit_buffer, 80*(g_cheight-1));
+		memmove(g_monoedit_buffer+80, g_monoedit_buffer, 80*(g_nrows-1));
 		update_monoedit_buffer(0, 1);
 	}
 }
@@ -418,8 +420,8 @@ void scroll_down_line(void)
 	if (g_current_line < g_total_lines) {
 		g_current_line++;
 		SendMessage(g_monoedit, MONOEDIT_WM_SCROLL, 0, 1);
-		memmove(g_monoedit_buffer, g_monoedit_buffer+80, 80*(g_cheight-1));
-		update_monoedit_buffer(g_cheight-1, 1);
+		memmove(g_monoedit_buffer, g_monoedit_buffer+80, 80*(g_nrows-1));
+		update_monoedit_buffer(g_nrows-1, 1);
 	}
 }
 
@@ -440,7 +442,7 @@ void move_down(void)
 {
 	if (g_file_size >= 16 && g_cursor_pos < g_file_size - 16) {
 		g_cursor_pos += 16;
-		if (g_cursor_y < g_cheight-1) {
+		if (g_cursor_y < g_nrows-1) {
 			g_cursor_y++;
 			update_cursor_pos();
 		} else {
@@ -469,46 +471,46 @@ void move_right(void)
 
 void scroll_up_page(void)
 {
-	if (g_current_line >= g_cheight) {
-		g_current_line -= g_cheight;
+	if (g_current_line >= g_nrows) {
+		g_current_line -= g_nrows;
 		InvalidateRect(g_monoedit, 0, FALSE);
-		update_monoedit_buffer(0, g_cheight);
+		update_monoedit_buffer(0, g_nrows);
 	} else {
 		uint32_t delta = g_current_line;
 		g_current_line = 0;
 		SendMessage(g_monoedit, MONOEDIT_WM_SCROLL, 0, -delta);
-		memmove(g_monoedit_buffer+80*delta, g_monoedit_buffer, 80*(g_cheight-delta));
+		memmove(g_monoedit_buffer+80*delta, g_monoedit_buffer, 80*(g_nrows-delta));
 		update_monoedit_buffer(0, delta);
 	}
 }
 
 void scroll_down_page(void)
 {
-	if (g_current_line + g_cheight <= g_total_lines) {
-		g_current_line += g_cheight;
+	if (g_current_line + g_nrows <= g_total_lines) {
+		g_current_line += g_nrows;
 		InvalidateRect(g_monoedit, 0, FALSE);
-		update_monoedit_buffer(0, g_cheight);
+		update_monoedit_buffer(0, g_nrows);
 	} else {
 		uint32_t delta = g_total_lines - g_current_line;
 		g_current_line = g_total_lines;
 		SendMessage(g_monoedit, MONOEDIT_WM_SCROLL, 0, delta);
-		memmove(g_monoedit_buffer, g_monoedit_buffer+80*delta, 80*(g_cheight-delta));
-		update_monoedit_buffer(g_cheight-delta, delta);
+		memmove(g_monoedit_buffer, g_monoedit_buffer+80*delta, 80*(g_nrows-delta));
+		update_monoedit_buffer(g_nrows-delta, delta);
 	}
 }
 
 void move_up_page(void)
 {
-	if (g_cursor_pos >= 16*g_cheight) {
-		g_cursor_pos -= 16*g_cheight;
+	if (g_cursor_pos >= 16*g_nrows) {
+		g_cursor_pos -= 16*g_nrows;
 		scroll_up_page();
 	}
 }
 
 void move_down_page(void)
 {
-	if (g_file_size >= 16*g_cheight && g_cursor_pos < g_file_size - 16*g_cheight) {
-		g_cursor_pos += 16*g_cheight;
+	if (g_file_size >= 16*g_nrows && g_cursor_pos < g_file_size - 16*g_nrows) {
+		g_cursor_pos += 16*g_nrows;
 		scroll_down_page();
 	}
 }
@@ -525,9 +527,8 @@ monoedit_wndproc(HWND hwnd,
 			int x = LOWORD(lparam);
 			int y = HIWORD(lparam);
 			SetFocus(hwnd);
-			/* TODO hard-coded constant */
-			int cx = x / 8;
-			int cy = y / 16;
+			int cx = x / g_charwidth;
+			int cy = y / g_charheight;
 			if (cx >= 10 && cx < 58) {
 				cx = (cx-10)/3;
 				uint32_t pos = (g_current_line + cy << 4) + cx;
@@ -648,6 +649,19 @@ cmdedit_wndproc(HWND hwnd,
 	return CallWindowProc(g_edit_wndproc, hwnd, message, wparam, lparam);
 }
 
+void init_font(void)
+{
+	g_mono_font = GetStockObject(OEM_FIXED_FONT);
+	HDC dc = GetDC(0);
+	printf("dc=%x\n", dc);
+	SelectObject(dc, g_mono_font);
+	TEXTMETRIC tm;
+	GetTextMetrics(dc, &tm);
+	g_charwidth = tm.tmAveCharWidth;
+	g_charheight = tm.tmHeight;
+	ReleaseDC(0, dc);
+}
+
 void handle_wm_create(HWND hwnd, LPCREATESTRUCT create)
 {
 	HINSTANCE instance = create->hInstance;
@@ -663,14 +677,17 @@ void handle_wm_create(HWND hwnd, LPCREATESTRUCT create)
 				  0,
 				  instance,
 				  0);
-	g_cheight = INITIAL_CHEIGHT;
-	g_monoedit_buffer = malloc(80*INITIAL_CHEIGHT);
-	g_monoedit_buffer_cap_lines = INITIAL_CHEIGHT;
-	memset(g_monoedit_buffer, ' ', 80*INITIAL_CHEIGHT);
-	SendMessage(g_monoedit, MONOEDIT_WM_SET_CSIZE, 80, INITIAL_CHEIGHT);
+	g_nrows = INITIAL_N_ROW;
+	g_monoedit_buffer = malloc(80*INITIAL_N_ROW);
+	g_monoedit_buffer_cap_lines = INITIAL_N_ROW;
+	memset(g_monoedit_buffer, ' ', 80*INITIAL_N_ROW);
+	SendMessage(g_monoedit, MONOEDIT_WM_SET_CSIZE, 80, INITIAL_N_ROW);
 	SendMessage(g_monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) g_monoedit_buffer);
-	SendMessage(g_monoedit, WM_SETFONT, (WPARAM) GetStockObject(OEM_FIXED_FONT), 0);
-	update_monoedit_buffer(0, INITIAL_CHEIGHT);
+	SendMessage(g_monoedit, WM_SETFONT, (WPARAM) g_mono_font, 0);
+	update_monoedit_buffer(0, INITIAL_N_ROW);
+	g_monoedit_wndproc = (WNDPROC) SetWindowLong(g_monoedit, GWL_WNDPROC, (LONG) monoedit_wndproc);
+	SetFocus(g_monoedit);
+	update_cursor_pos();
 	/* create command area */
 	g_cmd_edit = CreateWindow("EDIT",
 				  "",
@@ -683,26 +700,23 @@ void handle_wm_create(HWND hwnd, LPCREATESTRUCT create)
 				  0,
 				  instance,
 				  0);
-	SendMessage(g_cmd_edit, WM_SETFONT, (WPARAM) GetStockObject(OEM_FIXED_FONT), 0);
-	g_monoedit_wndproc = (WNDPROC) SetWindowLong(g_monoedit, GWL_WNDPROC, (LONG) monoedit_wndproc);
+	SendMessage(g_cmd_edit, WM_SETFONT, (WPARAM) g_mono_font, 0);
 	g_edit_wndproc = (WNDPROC) SetWindowLong(g_cmd_edit, GWL_WNDPROC, (LONG) cmdedit_wndproc);
-	SetFocus(g_monoedit);
-	update_cursor_pos();
 }
 
 void resize_monoedit(uint32_t width, uint32_t height)
 {
-	uint32_t new_cheight = height/16;
-	if (new_cheight > g_cheight) {
-		if (new_cheight > g_monoedit_buffer_cap_lines) {
-			g_monoedit_buffer = realloc(g_monoedit_buffer, 80*new_cheight);
-			g_monoedit_buffer_cap_lines = new_cheight;
+	uint32_t new_nrows = height/g_charheight;
+	if (new_nrows > g_nrows) {
+		if (new_nrows > g_monoedit_buffer_cap_lines) {
+			g_monoedit_buffer = realloc(g_monoedit_buffer, 80*new_nrows);
+			g_monoedit_buffer_cap_lines = new_nrows;
 			SendMessage(g_monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) g_monoedit_buffer);
 		}
-		update_monoedit_buffer(g_cheight, new_cheight - g_cheight);
-		g_cheight = new_cheight;
+		update_monoedit_buffer(g_nrows, new_nrows - g_nrows);
+		g_nrows = new_nrows;
 	}
-	SendMessage(g_monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/16);
+	SendMessage(g_monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/g_charheight);
 	SetWindowPos(g_monoedit,
 		     0,
 		     0,
@@ -730,9 +744,9 @@ wndproc(HWND hwnd,
 			uint32_t width  = LOWORD(lparam);
 			uint32_t height = HIWORD(lparam);
 			uint32_t cmd_y, cmd_height;
-			if (height >= 16) {
-				cmd_y = height-16;
-				cmd_height = 16;
+			if (height >= g_charheight) {
+				cmd_y = height - g_charheight;
+				cmd_height = g_charheight;
 			} else {
 				cmd_y = 0;
 				cmd_height = height;
@@ -743,7 +757,7 @@ wndproc(HWND hwnd,
 				     0,
 				     cmd_y,
 				     width,
-				     32,
+				     g_charheight,
 				     SWP_NOZORDER);
 		}
 		return 0;
@@ -876,7 +890,8 @@ WinMain(HINSTANCE instance,
 	if (init_cache() < 0) {
 		return 1;
 	}
-	RECT rect = { 0, 0, 8*80, 16*(INITIAL_CHEIGHT+1) };
+	init_font();
+	RECT rect = { 0, 0, g_charwidth*80, g_charheight*(INITIAL_N_ROW+1) };
 	AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hwnd = CreateWindow("MonoEditDemo", // class name
 				 "Whex", // window title

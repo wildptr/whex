@@ -3,18 +3,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* character size */
-#define CW  8
-#define CH 16
-
 struct monoedit_state {
 	/* in characters */
-	int cwidth;
-	int cheight;
+	int ncols;
+	int nrows;
 	const char *buffer;
 	HFONT font;
 	int cursorx;
 	int cursory;
+	int charwidth;
+	int charheight;
 };
 
 static void monoedit_paint(struct monoedit_state *s, HWND hwnd)
@@ -22,40 +20,15 @@ static void monoedit_paint(struct monoedit_state *s, HWND hwnd)
 	PAINTSTRUCT paint;
 	HDC hdc = BeginPaint(hwnd, &paint);
 
-#if 0
-	if (s->getline) {
-		RECT rect;
-		GetClientRect(hwnd, &rect);
-
-		int height = rect.bottom - rect.top;
-		int nc = height / CH;
-
-		int start = s->top_line;
-		int end = s->total_lines;
-
-		/* determine number of lines to paint */
-		int n = end-start;
-		if (n > nc) n = nc;
-
-		HGDIOBJ old_font = SelectObject(hdc, GetStockObject(OEM_FIXED_FONT));
-
-		for (int i=0; i<n; i++) {
-			const char *line = s->getline(start+i);
-			TextOut(hdc, 0, CH*i, line, strlen(line));
-		}
-
-		SelectObject(hdc, old_font);
-	}
-#endif
 	if (s->buffer) {
 		HGDIOBJ old_font;
 		if (s->font) {
 			old_font = SelectObject(hdc, s->font);
 		}
 		const char *bufp = s->buffer;
-		for (int i=0; i<s->cheight; i++) {
-			TextOut(hdc, 0, CH*i, bufp, s->cwidth);
-			bufp += s->cwidth;
+		for (int i=0; i<s->nrows; i++) {
+			TextOut(hdc, 0, s->charheight*i, bufp, s->ncols);
+			bufp += s->ncols;
 		}
 		if (s->font) {
 			SelectObject(hdc, old_font);
@@ -92,55 +65,48 @@ monoedit_wndproc(HWND hwnd,
 	case WM_PAINT:
 		monoedit_paint(state, hwnd);
 		return 0;
-#if 0
-	case MONOEDIT_WM_SET_GETLINE_FUNC:
-		state->getline = (void *) lparam;
-		return 0;
-	case MONOEDIT_WM_SET_TOTAL_LINES:
-		state->total_lines = (int) lparam;
-		return 0;
-#endif
 	case MONOEDIT_WM_SCROLL:
 		{
 			int delta = (int) lparam;
 			RECT scroll_rect = {
 			       	0,
 				0,
-				CW * state->cwidth,
-				CH * state->cheight
+				state->charwidth * state->ncols,
+				state->charheight * state->nrows
 			};
-			ScrollWindow(hwnd, 0, -delta*CH, &scroll_rect, &scroll_rect);
+			ScrollWindow(hwnd, 0, -delta*state->charheight, &scroll_rect, &scroll_rect);
 		}
 		return 0;
-#if 0
-	case MONOEDIT_WM_GET_NUM_LINES:
-		{
-			RECT rect;
-			GetClientRect(hwnd, &rect);
-			return (rect.bottom - rect.top) / CH;
-		}
-#endif
 	case MONOEDIT_WM_SET_BUFFER:
 		state->buffer = (void *) lparam;
 		return 0;
 	case MONOEDIT_WM_SET_CSIZE:
 		{
-			int cwidth  = (int) wparam;
-			int cheight = (int) lparam;
-			if (cwidth >= 0) {
-				state->cwidth = cwidth;
+			int ncols  = (int) wparam;
+			int nrows = (int) lparam;
+			if (ncols >= 0) {
+				state->ncols = ncols;
 			}
-			if (cheight >= 0) {
-				state->cheight = cheight;
+			if (nrows >= 0) {
+				state->nrows = nrows;
 			}
 		}
 		return 0;
 	case WM_SETFONT:
-		state->font = (HFONT) wparam;
+		{
+			state->font = (HFONT) wparam;
+			HDC dc = GetDC(hwnd);
+			SelectObject(dc, state->font);
+			TEXTMETRIC tm;
+			GetTextMetrics(dc, &tm);
+			ReleaseDC(hwnd, dc);
+			state->charwidth = tm.tmAveCharWidth;
+			state->charheight = tm.tmHeight;
+		}
 		return 0;
 	case WM_SETFOCUS:
-		CreateCaret(hwnd, 0, CW, CH);
-		SetCaretPos(state->cursorx*CW, state->cursory*CH);
+		CreateCaret(hwnd, 0, state->charwidth, state->charheight);
+		SetCaretPos(state->cursorx*state->charwidth, state->cursory*state->charheight);
 		ShowCaret(hwnd);
 		return 0;
 	case WM_KILLFOCUS:
@@ -153,7 +119,7 @@ monoedit_wndproc(HWND hwnd,
 			int cursory = (int) lparam;
 			state->cursorx = cursorx;
 			state->cursory = cursory;
-			SetCaretPos(cursorx*CW, cursory*CH);
+			SetCaretPos(cursorx*state->charwidth, cursory*state->charheight);
 		}
 		return 0;
 	}

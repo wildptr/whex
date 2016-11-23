@@ -44,26 +44,25 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct monoedit_state *state = (void *) GetWindowLong(hwnd, 0);
+	struct monoedit_state *st = (void *) GetWindowLong(hwnd, 0);
 	switch (message) {
-		int printf(const char *fmt, ...);
 	case WM_NCCREATE:
-		state = calloc(1, sizeof *state);
-		if (!state) {
+		st = calloc(1, sizeof *st);
+		if (!st) {
 			return FALSE;
 		}
-		SetWindowLong(hwnd, 0, (LONG) state);
+		SetWindowLong(hwnd, 0, (LONG) st);
 		return TRUE;
 	case WM_NCDESTROY:
-		if (state) {
+		if (st) {
 			/* This check is necessary, since we reach here even
 			 * when WM_NCCREATE returns FALSE (which means we
-			 * failed to allocate state). */
-			free(state);
+			 * failed to allocate st). */
+			free(st);
 		}
 		return 0;
 	case WM_PAINT:
-		monoedit_paint(state, hwnd);
+		monoedit_paint(st, hwnd);
 		return 0;
 	case MONOEDIT_WM_SCROLL:
 		{
@@ -71,42 +70,42 @@ monoedit_wndproc(HWND hwnd,
 			RECT scroll_rect = {
 			       	0,
 				0,
-				state->charwidth * state->ncols,
-				state->charheight * state->nrows
+				st->charwidth * st->ncols,
+				st->charheight * st->nrows
 			};
-			ScrollWindow(hwnd, 0, -delta*state->charheight, &scroll_rect, &scroll_rect);
+			ScrollWindow(hwnd, 0, -delta*st->charheight, &scroll_rect, &scroll_rect);
 		}
 		return 0;
 	case MONOEDIT_WM_SET_BUFFER:
-		state->buffer = (void *) lparam;
+		st->buffer = (void *) lparam;
 		return 0;
 	case MONOEDIT_WM_SET_CSIZE:
 		{
 			int ncols  = (int) wparam;
 			int nrows = (int) lparam;
 			if (ncols >= 0) {
-				state->ncols = ncols;
+				st->ncols = ncols;
 			}
 			if (nrows >= 0) {
-				state->nrows = nrows;
+				st->nrows = nrows;
 			}
 		}
 		return 0;
 	case WM_SETFONT:
 		{
-			state->font = (HFONT) wparam;
+			st->font = (HFONT) wparam;
 			HDC dc = GetDC(hwnd);
-			SelectObject(dc, state->font);
+			SelectObject(dc, st->font);
 			TEXTMETRIC tm;
 			GetTextMetrics(dc, &tm);
 			ReleaseDC(hwnd, dc);
-			state->charwidth = tm.tmAveCharWidth;
-			state->charheight = tm.tmHeight;
+			st->charwidth = tm.tmAveCharWidth;
+			st->charheight = tm.tmHeight;
 		}
 		return 0;
 	case WM_SETFOCUS:
-		CreateCaret(hwnd, 0, state->charwidth, state->charheight);
-		SetCaretPos(state->cursorx*state->charwidth, state->cursory*state->charheight);
+		CreateCaret(hwnd, 0, st->charwidth, st->charheight);
+		SetCaretPos(st->cursorx*st->charwidth, st->cursory*st->charheight);
 		ShowCaret(hwnd);
 		return 0;
 	case WM_KILLFOCUS:
@@ -117,11 +116,18 @@ monoedit_wndproc(HWND hwnd,
 		{
 			int cursorx = (int) wparam;
 			int cursory = (int) lparam;
-			state->cursorx = cursorx;
-			state->cursory = cursory;
-			SetCaretPos(cursorx*state->charwidth, cursory*state->charheight);
+			st->cursorx = cursorx;
+			st->cursory = cursory;
+			SetCaretPos(cursorx*st->charwidth, cursory*st->charheight);
 		}
 		return 0;
+	case WM_CHAR:
+		{
+			/* forward WM_CHAR to parent */
+			HWND parent = GetParent(hwnd);
+			SendMessage(parent, WM_CHAR, wparam, lparam);
+			return 0;
+		}
 	}
 	return DefWindowProc(hwnd, message, wparam, lparam);
 }

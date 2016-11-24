@@ -233,12 +233,18 @@ void goto_address(uint32_t address)
 {
 	uint32_t line = address >> 4;
 	uint32_t col = address & 15;
+	uint32_t line1;
 	assert(address <= g_file_size);
-	goto_line(line);
+	if (line >= g_nrows >> 1) {
+		line1 = line - (g_nrows >> 1);
+	} else {
+		line1 = 0;
+	}
+	goto_line(line1);
 	SendMessage(g_state->monoedit, MONOEDIT_WM_SET_CURSOR_POS, 10+col*3, 0);
 	g_cursor_pos = address;
 	g_cursor_x = col;
-	g_cursor_y = 0;
+	g_cursor_y = line - line1;
 	update_cursor_pos();
 }
 

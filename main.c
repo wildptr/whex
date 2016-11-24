@@ -242,7 +242,7 @@ void goto_address(uint32_t address)
 	update_cursor_pos();
 }
 
-char *cmd_goto(char *arg)
+const char *cmd_goto(char *arg)
 {
 	const char *p = arg;
 	uint32_t address;
@@ -318,12 +318,12 @@ char *find_binary_or_text(char *arg, bool istext)
 	return 0;
 }
 
-char *cmd_find(char *arg)
+const char *cmd_find(char *arg)
 {
 	return find_binary_or_text(arg, false);
 }
 
-char *cmd_findtext(char *arg)
+const char *cmd_findtext(char *arg)
 {
 	return find_binary_or_text(arg, true);
 }
@@ -364,18 +364,18 @@ char *repeat_search(bool reverse)
 }
 
 /* arg unused */
-char *cmd_findnext(char *arg)
+const char *cmd_findnext(char *arg)
 {
 	return repeat_search(false);
 }
 
 /* arg unused */
-char *cmd_findprev(char *arg)
+const char *cmd_findprev(char *arg)
 {
 	return repeat_search(true);
 }
 
-char *execute_command(char *cmd)
+const char *execute_command(char *cmd)
 {
 	printf("execute cmd {%s}\n", cmd);
 	char *p = cmd;
@@ -383,7 +383,7 @@ char *execute_command(char *cmd)
 	char *start = p;
 	while (iswordchar(*p)) p++;
 	char *end = p;
-	char *(*cmdproc)(char *) = 0;
+	const char *(*cmdproc)(char *) = 0;
 	switch (end-start) {
 	case 4:
 		if (!memcmp(start, "goto", 4)) {
@@ -408,9 +408,9 @@ char *execute_command(char *cmd)
 	return "invalid command";
 }
 
-void execute_command_directly(char *(*cmdproc)(char *), char *arg)
+void execute_command_directly(const char *(*cmdproc)(char *), char *arg)
 {
-	char *errmsg = cmdproc(arg);
+	const char *errmsg = cmdproc(arg);
 	if (errmsg) {
 		MessageBox(g_state->self, errmsg, "Error", MB_ICONERROR);
 	}
@@ -533,11 +533,14 @@ int char_handler_command(int c)
 	switch (c) {
 	case '\r':
 		switch (g_state->cmd[0]) {
+		case '/':
+			execute_command_directly(cmd_find, g_state->cmd+1);
+			break;
 		case ':':
 			execute_command(g_state->cmd+1);
 			break;
-		case '/':
-			execute_command_directly(cmd_find, g_state->cmd+1);
+		case 'g':
+			execute_command_directly(cmd_goto, g_state->cmd+1);
 			break;
 		}
 		/* fallthrough */
@@ -571,6 +574,11 @@ void add_char_to_command(char c)
 int char_handler_normal(int c)
 {
 	switch (c) {
+	case '/':
+	case ':':
+	case 'g':
+		g_state->char_handler = char_handler_command;
+		return 0;
 	case '1':
 	case '2':
 	case '3':
@@ -582,6 +590,9 @@ int char_handler_normal(int c)
 	case '9':
 		g_state->cmd_arg = g_state->cmd_arg*10 + (c-'0');
 		return 0;
+	case 'N':
+		execute_command_directly(cmd_findprev, 0);
+		return 1;
 	case 'h':
 		move_left();
 		return 1;
@@ -597,15 +608,6 @@ int char_handler_normal(int c)
 	case 'n':
 		execute_command_directly(cmd_findnext, 0);
 		return 1;
-	case 'N':
-		execute_command_directly(cmd_findprev, 0);
-		return 1;
-	case ':':
-		g_state->char_handler = char_handler_command;
-		return 0;
-	case '/':
-		g_state->char_handler = char_handler_command;
-		return 0;
 	}
 	return 1;
 }

@@ -10,7 +10,7 @@
 #define N_CACHE_BLOCK 16
 #define INITIAL_N_ROW 32
 
-/* each cache line holds 0x1000 bytes */
+/* each cache block holds 0x1000 bytes */
 struct cache_entry {
 	uint32_t tag;
 	uint8_t *data;
@@ -273,7 +273,7 @@ const char *mainwindow_cmd_goto(struct mainwindow *w, char *arg)
 	return "invalid argument";
 }
 
-char *mainwindow_find_binary_or_text(struct mainwindow *w, char *arg, bool istext)
+char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 {
 	uint32_t patlen;
 	uint8_t *pat;
@@ -325,14 +325,14 @@ char *mainwindow_find_binary_or_text(struct mainwindow *w, char *arg, bool istex
 	return 0;
 }
 
-const char *mainwindow_cmd_find(struct mainwindow *w, char *arg)
+const char *mainwindow_cmd_find_hex(struct mainwindow *w, char *arg)
 {
-	return mainwindow_find_binary_or_text(w, arg, false);
+	return mainwindow_find(w, arg, false);
 }
 
-const char *mainwindow_cmd_findtext(struct mainwindow *w, char *arg)
+const char *mainwindow_cmd_find_text(struct mainwindow *w, char *arg)
 {
-	return mainwindow_find_binary_or_text(w, arg, true);
+	return mainwindow_find(w, arg, true);
 }
 
 char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
@@ -381,7 +381,7 @@ const char *mainwindow_cmd_findprev(struct mainwindow *w, char *arg)
 	return mainwindow_repeat_search(w, true);
 }
 
-const char *mainwindow_execute_command(struct mainwindow *w, char *cmd)
+const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd)
 {
 	printf("execute command {%s}\n", cmd);
 	char *p = cmd;
@@ -395,7 +395,7 @@ const char *mainwindow_execute_command(struct mainwindow *w, char *cmd)
 		if (!memcmp(start, "goto", 4)) {
 			cmdproc = mainwindow_cmd_goto;
 		} else if (!memcmp(start, "find", 4)) {
-			cmdproc = mainwindow_cmd_find;
+			cmdproc = mainwindow_cmd_find_hex;
 		}
 		break;
 	case 8:
@@ -404,7 +404,7 @@ const char *mainwindow_execute_command(struct mainwindow *w, char *cmd)
 		} else if (!memcmp(start, "findprev", 8)) {
 			cmdproc = mainwindow_cmd_findprev;
 		} else if (!memcmp(start, "findtext", 8)) {
-			cmdproc = mainwindow_cmd_findtext;
+			cmdproc = mainwindow_cmd_find_text;
 		}
 		break;
 	}
@@ -414,7 +414,7 @@ const char *mainwindow_execute_command(struct mainwindow *w, char *cmd)
 	return "invalid command";
 }
 
-void mainwindow_execute_command_directly(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
+void mainwindow_execute_command(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
 {
 	const char *errmsg = cmdproc(w, arg);
 	if (errmsg) {
@@ -536,25 +536,34 @@ int mainwindow_char_handler_normal(struct mainwindow *w, int c);
 
 int mainwindow_char_handler_command(struct mainwindow *w, int c)
 {
+	const char *errmsg = 0;
+
 	switch (c) {
 	case '\r':
 		switch (w->cmd[0]) {
 		case '/':
-			mainwindow_execute_command_directly(w, mainwindow_cmd_find, w->cmd+1);
+			mainwindow_execute_command(w, mainwindow_cmd_find_text, w->cmd+1);
 			break;
 		case ':':
-			mainwindow_execute_command(w, w->cmd+1);
+			errmsg = mainwindow_parse_and_execute_command(w, w->cmd+1);
+			break;
+		case '\\':
+			mainwindow_execute_command(w, mainwindow_cmd_find_hex, w->cmd+1);
 			break;
 		case 'g':
-			mainwindow_execute_command_directly(w, mainwindow_cmd_goto, w->cmd+1);
+			mainwindow_execute_command(w, mainwindow_cmd_goto, w->cmd+1);
 			break;
+		}
+		if (errmsg) {
+			puts(errmsg);
 		}
 		/* fallthrough */
 	case 27: // escape
 		w->char_handler = mainwindow_char_handler_normal;
 		return 1;
+	default:
+		return 0;
 	}
-	return 0;
 }
 
 void mainwindow_add_char_to_command(struct mainwindow *w, char c)
@@ -583,6 +592,7 @@ int mainwindow_char_handler_normal(struct mainwindow *w, int c)
 	switch (c) {
 	case '/':
 	case ':':
+	case '\\':
 	case 'g':
 		w->char_handler = mainwindow_char_handler_command;
 		return 0;
@@ -598,7 +608,7 @@ int mainwindow_char_handler_normal(struct mainwindow *w, int c)
 		w->cmd_arg = w->cmd_arg*10 + (c-'0');
 		return 0;
 	case 'N':
-		mainwindow_execute_command_directly(w, mainwindow_cmd_findprev, 0);
+		mainwindow_execute_command(w, mainwindow_cmd_findprev, 0);
 		return 1;
 	case 'h':
 		mainwindow_move_left(w);
@@ -613,7 +623,7 @@ int mainwindow_char_handler_normal(struct mainwindow *w, int c)
 		mainwindow_move_right(w);
 		return 1;
 	case 'n':
-		mainwindow_execute_command_directly(w, mainwindow_cmd_findnext, 0);
+		mainwindow_execute_command(w, mainwindow_cmd_findnext, 0);
 		return 1;
 	}
 	return 1;
@@ -683,11 +693,17 @@ monoedit_wndproc(HWND hwnd,
 
 void mainwindow_init_font(struct mainwindow *w)
 {
+	static LOGFONT logfont = {
+		.lfHeight = 16,
+		.lfFaceName = "Courier New",
+	};
+
 	HDC dc;
 	TEXTMETRIC tm;
 	HFONT mono_font;
 
-	mono_font = GetStockObject(OEM_FIXED_FONT);
+	//mono_font = GetStockObject(OEM_FIXED_FONT);
+	mono_font = CreateFontIndirect(&logfont);
 	dc = GetDC(0);
 	//printf("dc=%x\n", dc);
 	SelectObject(dc, mono_font);

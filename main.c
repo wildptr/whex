@@ -7,80 +7,81 @@
 
 #include "monoedit.h"
 
-#define N_CACHE 16
+#define N_CACHE_BLOCK 16
 #define INITIAL_N_ROW 32
 
-struct mainwindow_state {
-	HWND self;
-	HWND monoedit;
-	HWND status_edit;
-	/* returns 1 if a full command has been recognized or the character is
-	 * not recognized, 0 otherwise */
-	int (*char_handler)(int c);
-	int cmd_cap;
-	int cmd_len;
-	char *cmd;
-	int cmd_arg;
-};
-
-/* struct mainwindow_state associated with main window */
-struct mainwindow_state *g_state;
 /* each cache line holds 0x1000 bytes */
 struct cache_entry {
 	uint32_t tag;
 	uint8_t *data;
-} g_cache[N_CACHE];
-uint32_t g_file_size;
-uint32_t g_total_lines;
-HANDLE g_file;
-char *g_monoedit_buffer;
-/* capacity of buffer, in lines (80 bytes per line) */
-uint32_t g_monoedit_buffer_cap_lines;
-uint32_t g_current_line;
-/* number of lines displayed */
-uint32_t g_nrows;
-WNDPROC g_monoedit_wndproc;
-/* current position in file */
-/* invariant: g_cursor_pos = (g_current_line + g_cursor_y) * 16 + g_cursor_x */
-uint32_t g_cursor_pos;
-uint32_t g_cursor_x;
-uint32_t g_cursor_y;
-char *g_last_search_pattern;
-uint32_t g_last_search_pattern_len;
-int g_charwidth;
-int g_charheight;
-HFONT g_mono_font;
-
-bool cache_valid(int cache)
-{
-	return g_cache[cache].tag != -1;
 };
 
-int find_cache(uint32_t address)
+struct mainwindow {
+	HWND hwnd;
+	HWND monoedit;
+	HWND status_edit;
+	/* returns 1 if a full command has been recognized or the character is
+	 * not recognized, 0 otherwise */
+	int (*char_handler)(struct mainwindow *w, int c);
+	int cmd_cap;
+	int cmd_len;
+	char *cmd;
+	int cmd_arg;
+	uint32_t file_size;
+	uint32_t total_lines;
+	HANDLE file;
+	char *monoedit_buffer;
+	/* capacity of buffer, in lines (80 bytes per line) */
+	uint32_t monoedit_buffer_cap_lines;
+	uint32_t current_line;
+	/* number of lines displayed */
+	uint32_t nrows;
+	WNDPROC monoedit_wndproc;
+	/* invariant: cursor_pos = (current_line + cursor_y) * 16 + cursor_x */
+	/* current position in file */
+	uint32_t cursor_pos;
+	uint32_t cursor_x;
+	uint32_t cursor_y;
+	char *last_search_pattern;
+	uint32_t last_search_pattern_len;
+	int charwidth;
+	int charheight;
+	HFONT mono_font;
+	struct cache_entry cache[N_CACHE_BLOCK];
+};
+
+typedef const char *(*cmdproc_t)(struct mainwindow *, char *);
+
+bool mainwindow_cache_valid(struct mainwindow *w, int block)
+{
+	return w->cache[block].tag != -1;
+};
+
+int mainwindow_find_cache(struct mainwindow *w, uint32_t address)
 {
 	static int next_cache = 0;
 
-	for (int i=0; i<N_CACHE; i++) {
-		if (cache_valid(i) && address - g_cache[i].tag <= 0x1000) return i;
+	for (int i=0; i<N_CACHE_BLOCK; i++) {
+		if (mainwindow_cache_valid(w, i) && address - w->cache[i].tag <= 0x1000) return i;
 	}
 
 	uint32_t tag = address & ~0xfff;
-	SetFilePointer(g_file, tag, 0, FILE_BEGIN);
+	SetFilePointer(w->file, tag, 0, FILE_BEGIN);
 	DWORD nread;
 	int ret = next_cache;
-	ReadFile(g_file, g_cache[ret].data, 0x1000, &nread, 0);
-	g_cache[ret].tag = tag;
+	ReadFile(w->file, w->cache[ret].data, 0x1000, &nread, 0);
+	w->cache[ret].tag = tag;
 	next_cache = ret+1&15;
 
-	printf("loaded %08x into cache %d\n", tag, ret);
+	printf("loaded %08x into cache block %d\n", tag, ret);
 
 	return ret;
 }
 
-uint8_t getbyte(uint32_t address)
+uint8_t mainwindow_getbyte(struct mainwindow *w, uint32_t address)
 {
-	int cache = find_cache(address);
-	return g_cache[cache].data[address & 0xfff];
+	int block = mainwindow_find_cache(w, address);
+	return w->cache[block].data[address & 0xfff];
 }
 
 void kmp_table(uint32_t *T, const uint8_t *pat, uint32_t len)
@@ -102,7 +103,7 @@ void kmp_table(uint32_t *T, const uint8_t *pat, uint32_t len)
 	}
 }
 
-uint32_t kmp_search(const uint8_t *pat, uint32_t len, uint32_t start)
+uint32_t mainwindow_kmp_search(struct mainwindow *w, const uint8_t *pat, uint32_t len, uint32_t start)
 {
 	assert(len);
 	uint32_t T[len];
@@ -110,8 +111,8 @@ uint32_t kmp_search(const uint8_t *pat, uint32_t len, uint32_t start)
 	kmp_table(T, pat, len);
 	uint32_t m = start;
 	uint32_t i = 0;
-	while (m+i < g_file_size) {
-		if (pat[i] == getbyte(m+i)) {
+	while (m+i < w->file_size) {
+		if (pat[i] == mainwindow_getbyte(w, m+i)) {
 			if (i == len-1) return m;
 			i++;
 		} else {
@@ -125,7 +126,7 @@ uint32_t kmp_search(const uint8_t *pat, uint32_t len, uint32_t start)
 		}
 	}
 	/* no match */
-	return g_file_size;
+	return w->file_size;
 }
 
 /*
@@ -133,7 +134,7 @@ uint32_t kmp_search(const uint8_t *pat, uint32_t len, uint32_t start)
  * position of first mark = start
  * number of bytes after the second mark = N-(start+len-1)
  */
-uint32_t kmp_search_backward(const uint8_t *pat, uint32_t len, uint32_t start)
+uint32_t mainwindow_kmp_search_backward(struct mainwindow *w, const uint8_t *pat, uint32_t len, uint32_t start)
 {
 	assert(len);
 	uint32_t T[len];
@@ -146,9 +147,9 @@ uint32_t kmp_search_backward(const uint8_t *pat, uint32_t len, uint32_t start)
 	kmp_table(T, pat, len);
 	uint32_t m = start;
 	uint32_t i = 0;
-	while (m+i < g_file_size) {
-		if (pat[i] == getbyte(g_file_size-1-(m+i))) {
-			if (i == len-1) return g_file_size-(m+len);
+	while (m+i < w->file_size) {
+		if (pat[i] == mainwindow_getbyte(w, w->file_size-1-(m+i))) {
+			if (i == len-1) return w->file_size-(m+len);
 			i++;
 		} else {
 			if (i) {
@@ -161,32 +162,32 @@ uint32_t kmp_search_backward(const uint8_t *pat, uint32_t len, uint32_t start)
 		}
 	}
 	/* no match */
-	return g_file_size;
+	return w->file_size;
 }
 
-void update_monoedit_buffer(uint32_t buffer_line, uint32_t num_lines)
+void mainwindow_update_monoedit_buffer(struct mainwindow *w, uint32_t buffer_line, uint32_t num_lines)
 {
-	uint32_t absolute_line = g_current_line + buffer_line;
+	uint32_t absolute_line = w->current_line + buffer_line;
 	uint32_t absolute_line_end = absolute_line + num_lines;
 	while (absolute_line < absolute_line_end) {
-		char *p = &g_monoedit_buffer[buffer_line*80];
+		char *p = &w->monoedit_buffer[buffer_line*80];
 		uint32_t address = absolute_line << 4;
-		if (absolute_line >= g_total_lines) {
+		if (absolute_line >= w->total_lines) {
 			memset(p, ' ', 80);
 		} else {
-			int cache = find_cache(address);
+			int cache = mainwindow_find_cache(w, address);
 			int base = address & 0xfff;
 			sprintf(p, "%08x: ", address);
 			p += 10;
 			int end = 0;
-		       	if (absolute_line+1 >= g_total_lines) {
-				end = g_file_size&15;
+		       	if (absolute_line+1 >= w->total_lines) {
+				end = w->file_size&15;
 			}
 			if (!end) {
 				end = 16;
 			}
 			for (int j=0; j<end; j++) {
-				sprintf(p, "%02x ", g_cache[cache].data[base|j]);
+				sprintf(p, "%02x ", w->cache[cache].data[base|j]);
 				p += 3;
 			}
 			for (int j=end; j<16; j++) {
@@ -196,7 +197,7 @@ void update_monoedit_buffer(uint32_t buffer_line, uint32_t num_lines)
 			sprintf(p, "  ");
 			p += 2;
 			for (int j=0; j<end; j++) {
-				uint8_t b = g_cache[cache].data[base|j];
+				uint8_t b = w->cache[cache].data[base|j];
 				p[j] = b < 0x20 || b > 0x7e ? '.' : b;
 			}
 			for (int j=end; j<16; j++) {
@@ -213,55 +214,6 @@ bool iswordchar(char c)
 	return isalnum(c) || c == '_';
 }
 
-void goto_line(uint32_t line)
-{
-	assert(line <= g_total_lines);
-	g_current_line = line;
-	update_monoedit_buffer(0, g_nrows);
-	InvalidateRect(g_state->monoedit, 0, FALSE);
-}
-
-void update_cursor_pos(void)
-{
-	SendMessage(g_state->monoedit,
-		    MONOEDIT_WM_SET_CURSOR_POS,
-		    10+g_cursor_x*3,
-		    g_cursor_y);
-}
-
-void goto_address(uint32_t address)
-{
-	uint32_t line = address >> 4;
-	uint32_t col = address & 15;
-	uint32_t line1;
-	assert(address <= g_file_size);
-	if (line >= g_nrows >> 1) {
-		line1 = line - (g_nrows >> 1);
-	} else {
-		line1 = 0;
-	}
-	goto_line(line1);
-	SendMessage(g_state->monoedit, MONOEDIT_WM_SET_CURSOR_POS, 10+col*3, 0);
-	g_cursor_pos = address;
-	g_cursor_x = col;
-	g_cursor_y = line - line1;
-	update_cursor_pos();
-}
-
-const char *cmd_goto(char *arg)
-{
-	const char *p = arg;
-	uint32_t address;
-	if (sscanf(arg, "%x", &address) == 1) {
-		if (address > g_file_size) {
-			return "address out of range";
-		}
-		goto_address(address);
-		return 0;
-	}
-	return "invalid argument";
-}
-
 uint8_t hexval(char c)
 {
 	return c > '9' ? 10+(c|32)-'a' : c-'0';
@@ -272,7 +224,56 @@ uint8_t hextobyte(const uint8_t *p)
 	return hexval(p[0]) << 4 | hexval(p[1]);
 }
 
-char *find_binary_or_text(char *arg, bool istext)
+void mainwindow_goto_line(struct mainwindow *w, uint32_t line)
+{
+	assert(line <= w->total_lines);
+	w->current_line = line;
+	mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+	InvalidateRect(w->monoedit, 0, FALSE);
+}
+
+void mainwindow_update_cursor_pos(struct mainwindow *w)
+{
+	SendMessage(w->monoedit,
+		    MONOEDIT_WM_SET_CURSOR_POS,
+		    10+w->cursor_x*3,
+		    w->cursor_y);
+}
+
+void mainwindow_goto_address(struct mainwindow *w, uint32_t address)
+{
+	uint32_t line = address >> 4;
+	uint32_t col = address & 15;
+	uint32_t line1;
+	assert(address <= w->file_size);
+	if (line >= w->nrows >> 1) {
+		line1 = line - (w->nrows >> 1);
+	} else {
+		line1 = 0;
+	}
+	mainwindow_goto_line(w, line1);
+	SendMessage(w->monoedit, MONOEDIT_WM_SET_CURSOR_POS, 10+col*3, 0);
+	w->cursor_pos = address;
+	w->cursor_x = col;
+	w->cursor_y = line - line1;
+	mainwindow_update_cursor_pos(w);
+}
+
+const char *mainwindow_cmd_goto(struct mainwindow *w, char *arg)
+{
+	const char *p = arg;
+	uint32_t address;
+	if (sscanf(arg, "%x", &address) == 1) {
+		if (address > w->file_size) {
+			return "address out of range";
+		}
+		mainwindow_goto_address(w, address);
+		return 0;
+	}
+	return "invalid argument";
+}
+
+char *mainwindow_find_binary_or_text(struct mainwindow *w, char *arg, bool istext)
 {
 	uint32_t patlen;
 	uint8_t *pat;
@@ -307,283 +308,283 @@ char *find_binary_or_text(char *arg, bool istext)
 			p += 2;
 		}
 	}
-	if (g_last_search_pattern) {
-		free(g_last_search_pattern);
+	if (w->last_search_pattern) {
+		free(w->last_search_pattern);
 	}
-	g_last_search_pattern = malloc(patlen);
-	memcpy(g_last_search_pattern, pat, patlen);
-	g_last_search_pattern_len = patlen;
-	uint32_t matchpos = kmp_search(pat, patlen, g_cursor_pos);
+	w->last_search_pattern = malloc(patlen);
+	memcpy(w->last_search_pattern, pat, patlen);
+	w->last_search_pattern_len = patlen;
+	uint32_t matchpos = mainwindow_kmp_search(w, pat, patlen, w->cursor_pos);
 	if (!istext) {
 		free(pat);
 	}
-	if (matchpos == g_file_size) {
+	if (matchpos == w->file_size) {
 		return "pattern not found";
 	}
-	goto_address(matchpos);
+	mainwindow_goto_address(w, matchpos);
 	return 0;
 }
 
-const char *cmd_find(char *arg)
+const char *mainwindow_cmd_find(struct mainwindow *w, char *arg)
 {
-	return find_binary_or_text(arg, false);
+	return mainwindow_find_binary_or_text(w, arg, false);
 }
 
-const char *cmd_findtext(char *arg)
+const char *mainwindow_cmd_findtext(struct mainwindow *w, char *arg)
 {
-	return find_binary_or_text(arg, true);
+	return mainwindow_find_binary_or_text(w, arg, true);
 }
 
-char *repeat_search(bool reverse)
+char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 {
-	if (!g_last_search_pattern) {
+	if (!w->last_search_pattern) {
 		return "no previous pattern";
 	}
-	uint32_t (*search_func)(const uint8_t *pat, uint32_t patlen, uint32_t start);
+	uint32_t (*search_func)(struct mainwindow *w, const uint8_t *pat, uint32_t patlen, uint32_t start);
 	uint32_t start;
 	if (reverse) {
-		uint32_t tmp = g_cursor_pos + g_last_search_pattern_len - 1;
-		if (g_file_size >= tmp) {
-			start = g_file_size - tmp;
+		uint32_t tmp = w->cursor_pos + w->last_search_pattern_len - 1;
+		if (w->file_size >= tmp) {
+			start = w->file_size - tmp;
 		} else {
 			return "pattern not found";
-			//start = g_file_size;
 		}
-		search_func = kmp_search_backward;
+		search_func = mainwindow_kmp_search_backward;
 	} else {
-		if (g_cursor_pos+1 < g_file_size) {
-			start = g_cursor_pos+1;
+		if (w->cursor_pos+1 < w->file_size) {
+			start = w->cursor_pos+1;
 		} else {
 			return "pattern not found";
 			//start = 0;
 		}
-		search_func = kmp_search;
+		search_func = mainwindow_kmp_search;
 	}
-	uint32_t matchpos = search_func(g_last_search_pattern, 
-					g_last_search_pattern_len,
+	uint32_t matchpos = search_func(w, w->last_search_pattern, 
+					w->last_search_pattern_len,
 					start);
-	if (matchpos == g_file_size) {
+	if (matchpos == w->file_size) {
 		return "pattern not found";
 	}
-	goto_address(matchpos);
+	mainwindow_goto_address(w, matchpos);
 	return 0;
 }
 
 /* arg unused */
-const char *cmd_findnext(char *arg)
+const char *mainwindow_cmd_findnext(struct mainwindow *w, char *arg)
 {
-	return repeat_search(false);
+	return mainwindow_repeat_search(w, false);
 }
 
 /* arg unused */
-const char *cmd_findprev(char *arg)
+const char *mainwindow_cmd_findprev(struct mainwindow *w, char *arg)
 {
-	return repeat_search(true);
+	return mainwindow_repeat_search(w, true);
 }
 
-const char *execute_command(char *cmd)
+const char *mainwindow_execute_command(struct mainwindow *w, char *cmd)
 {
-	printf("execute cmd {%s}\n", cmd);
+	printf("execute command {%s}\n", cmd);
 	char *p = cmd;
 	while (*p == ' ') p++;
 	char *start = p;
 	while (iswordchar(*p)) p++;
 	char *end = p;
-	const char *(*cmdproc)(char *) = 0;
+	cmdproc_t cmdproc = 0;
 	switch (end-start) {
 	case 4:
 		if (!memcmp(start, "goto", 4)) {
-			cmdproc = cmd_goto;
+			cmdproc = mainwindow_cmd_goto;
 		} else if (!memcmp(start, "find", 4)) {
-			cmdproc = cmd_find;
+			cmdproc = mainwindow_cmd_find;
 		}
 		break;
 	case 8:
 		if (!memcmp(start, "findnext", 8)) {
-			cmdproc = cmd_findnext;
+			cmdproc = mainwindow_cmd_findnext;
 		} else if (!memcmp(start, "findprev", 8)) {
-			cmdproc = cmd_findprev;
+			cmdproc = mainwindow_cmd_findprev;
 		} else if (!memcmp(start, "findtext", 8)) {
-			cmdproc = cmd_findtext;
+			cmdproc = mainwindow_cmd_findtext;
 		}
 		break;
 	}
 	if (cmdproc) {
-		return cmdproc(end);
+		return cmdproc(w, end);
 	}
 	return "invalid command";
 }
 
-void execute_command_directly(const char *(*cmdproc)(char *), char *arg)
+void mainwindow_execute_command_directly(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
 {
-	const char *errmsg = cmdproc(arg);
+	const char *errmsg = cmdproc(w, arg);
 	if (errmsg) {
-		MessageBox(g_state->self, errmsg, "Error", MB_ICONERROR);
+		MessageBox(w->hwnd, errmsg, "Error", MB_ICONERROR);
 	}
 }
 
-void scroll_up_line(void)
+void mainwindow_scroll_up_line(struct mainwindow *w)
 {
-	if (g_current_line) {
-		g_current_line--;
-		SendMessage(g_state->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
-		memmove(g_monoedit_buffer+80, g_monoedit_buffer, 80*(g_nrows-1));
-		update_monoedit_buffer(0, 1);
+	if (w->current_line) {
+		w->current_line--;
+		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
+		memmove(w->monoedit_buffer+80, w->monoedit_buffer, 80*(w->nrows-1));
+		mainwindow_update_monoedit_buffer(w, 0, 1);
 	}
 }
 
-void scroll_down_line(void)
+void mainwindow_scroll_down_line(struct mainwindow *w)
 {
-	if (g_current_line < g_total_lines) {
-		g_current_line++;
-		SendMessage(g_state->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
-		memmove(g_monoedit_buffer, g_monoedit_buffer+80, 80*(g_nrows-1));
-		update_monoedit_buffer(g_nrows-1, 1);
+	if (w->current_line < w->total_lines) {
+		w->current_line++;
+		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
+		memmove(w->monoedit_buffer, w->monoedit_buffer+80, 80*(w->nrows-1));
+		mainwindow_update_monoedit_buffer(w, w->nrows-1, 1);
 	}
 }
 
-void move_up(void)
+void mainwindow_move_up(struct mainwindow *w)
 {
-	if (g_cursor_pos >= 16) {
-		g_cursor_pos -= 16;
-		if (g_cursor_y) {
-			g_cursor_y--;
-			update_cursor_pos();
+	if (w->cursor_pos >= 16) {
+		w->cursor_pos -= 16;
+		if (w->cursor_y) {
+			w->cursor_y--;
+			mainwindow_update_cursor_pos(w);
 		} else {
-			scroll_up_line();
+			mainwindow_scroll_up_line(w);
 		}
 	}
 }
 
-void move_down(void)
+void mainwindow_move_down(struct mainwindow *w)
 {
-	if (g_file_size >= 16 && g_cursor_pos < g_file_size - 16) {
-		g_cursor_pos += 16;
-		if (g_cursor_y < g_nrows-1) {
-			g_cursor_y++;
-			update_cursor_pos();
+	if (w->file_size >= 16 && w->cursor_pos < w->file_size - 16) {
+		w->cursor_pos += 16;
+		if (w->cursor_y < w->nrows-1) {
+			w->cursor_y++;
+			mainwindow_update_cursor_pos(w);
 		} else {
-			scroll_down_line();
+			mainwindow_scroll_down_line(w);
 		}
 	}
 }
 
-void move_left(void)
+void mainwindow_move_left(struct mainwindow *w)
 {
-	if (g_cursor_x) {
-		g_cursor_x--;
-		g_cursor_pos--;
-		update_cursor_pos();
+	if (w->cursor_x) {
+		w->cursor_x--;
+		w->cursor_pos--;
+		mainwindow_update_cursor_pos(w);
 	}
 }
 
-void move_right(void)
+void mainwindow_move_right(struct mainwindow *w)
 {
-	if (g_cursor_x < 15 && g_cursor_pos+1 < g_file_size) {
-		g_cursor_x++;
-		g_cursor_pos++;
-		update_cursor_pos();
+	if (w->cursor_x < 15 && w->cursor_pos+1 < w->file_size) {
+		w->cursor_x++;
+		w->cursor_pos++;
+		mainwindow_update_cursor_pos(w);
 	}
 }
 
-void scroll_up_page(void)
+void mainwindow_scroll_up_page(struct mainwindow *w)
 {
-	if (g_current_line >= g_nrows) {
-		g_current_line -= g_nrows;
-		InvalidateRect(g_state->monoedit, 0, FALSE);
-		update_monoedit_buffer(0, g_nrows);
+	if (w->current_line >= w->nrows) {
+		w->current_line -= w->nrows;
+		InvalidateRect(w->monoedit, 0, FALSE);
+		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
 	} else {
-		uint32_t delta = g_current_line;
-		g_current_line = 0;
-		SendMessage(g_state->monoedit, MONOEDIT_WM_SCROLL, 0, -delta);
-		memmove(g_monoedit_buffer+80*delta, g_monoedit_buffer, 80*(g_nrows-delta));
-		update_monoedit_buffer(0, delta);
+		uint32_t delta = w->current_line;
+		w->current_line = 0;
+		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -delta);
+		memmove(w->monoedit_buffer+80*delta, w->monoedit_buffer, 80*(w->nrows-delta));
+		mainwindow_update_monoedit_buffer(w, 0, delta);
 	}
 }
 
-void scroll_down_page(void)
+void mainwindow_scroll_down_page(struct mainwindow *w)
 {
-	if (g_current_line + g_nrows <= g_total_lines) {
-		g_current_line += g_nrows;
-		InvalidateRect(g_state->monoedit, 0, FALSE);
-		update_monoedit_buffer(0, g_nrows);
+	if (w->current_line + w->nrows <= w->total_lines) {
+		w->current_line += w->nrows;
+		InvalidateRect(w->monoedit, 0, FALSE);
+		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
 	} else {
-		uint32_t delta = g_total_lines - g_current_line;
-		g_current_line = g_total_lines;
-		SendMessage(g_state->monoedit, MONOEDIT_WM_SCROLL, 0, delta);
-		memmove(g_monoedit_buffer, g_monoedit_buffer+80*delta, 80*(g_nrows-delta));
-		update_monoedit_buffer(g_nrows-delta, delta);
+		uint32_t delta = w->total_lines - w->current_line;
+		w->current_line = w->total_lines;
+		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, delta);
+		memmove(w->monoedit_buffer, w->monoedit_buffer+80*delta, 80*(w->nrows-delta));
+		mainwindow_update_monoedit_buffer(w, w->nrows-delta, delta);
 	}
 }
 
-void move_up_page(void)
+void mainwindow_move_up_page(struct mainwindow *w)
 {
-	if (g_cursor_pos >= 16*g_nrows) {
-		g_cursor_pos -= 16*g_nrows;
-		scroll_up_page();
+	if (w->cursor_pos >= 16*w->nrows) {
+		w->cursor_pos -= 16*w->nrows;
+		mainwindow_scroll_up_page(w);
 	}
 }
 
-void move_down_page(void)
+void mainwindow_move_down_page(struct mainwindow *w)
 {
-	if (g_file_size >= 16*g_nrows && g_cursor_pos < g_file_size - 16*g_nrows) {
-		g_cursor_pos += 16*g_nrows;
-		scroll_down_page();
+	if (w->file_size >= 16*w->nrows && w->cursor_pos < w->file_size - 16*w->nrows) {
+		w->cursor_pos += 16*w->nrows;
+		mainwindow_scroll_down_page(w);
 	}
 }
 
-int char_handler_normal(int c);
+int mainwindow_char_handler_normal(struct mainwindow *w, int c);
 
-int char_handler_command(int c)
+int mainwindow_char_handler_command(struct mainwindow *w, int c)
 {
 	switch (c) {
 	case '\r':
-		switch (g_state->cmd[0]) {
+		switch (w->cmd[0]) {
 		case '/':
-			execute_command_directly(cmd_find, g_state->cmd+1);
+			mainwindow_execute_command_directly(w, mainwindow_cmd_find, w->cmd+1);
 			break;
 		case ':':
-			execute_command(g_state->cmd+1);
+			mainwindow_execute_command(w, w->cmd+1);
 			break;
 		case 'g':
-			execute_command_directly(cmd_goto, g_state->cmd+1);
+			mainwindow_execute_command_directly(w, mainwindow_cmd_goto, w->cmd+1);
 			break;
 		}
 		/* fallthrough */
 	case 27: // escape
-		g_state->char_handler = char_handler_normal;
+		w->char_handler = mainwindow_char_handler_normal;
 		return 1;
 	}
 	return 0;
 }
 
-void add_char_to_command(char c)
+void mainwindow_add_char_to_command(struct mainwindow *w, char c)
 {
-	HWND status_edit = g_state->status_edit;
-	int len = g_state->cmd_len;
+	HWND status_edit = w->status_edit;
+	int len = w->cmd_len;
 	if (c == 8) {
+		// backspace
 		if (len > 0) {
 			SendMessage(status_edit, EM_SETSEL, len-1, len);
 			SendMessage(status_edit, EM_REPLACESEL, TRUE, (LPARAM) "");
-			g_state->cmd[--g_state->cmd_len] = 0;
+			w->cmd[--w->cmd_len] = 0;
 		}
 	} else {
 		char str[2] = {c};
-		if (len < g_state->cmd_cap) {
+		if (len < w->cmd_cap) {
 			SendMessage(status_edit, EM_SETSEL, len, len);
 			SendMessage(status_edit, EM_REPLACESEL, TRUE, (LPARAM) str);
-			g_state->cmd[g_state->cmd_len++] = c;
+			w->cmd[w->cmd_len++] = c;
 		}
 	}
 }
 
-int char_handler_normal(int c)
+int mainwindow_char_handler_normal(struct mainwindow *w, int c)
 {
 	switch (c) {
 	case '/':
 	case ':':
 	case 'g':
-		g_state->char_handler = char_handler_command;
+		w->char_handler = mainwindow_char_handler_command;
 		return 0;
 	case '1':
 	case '2':
@@ -594,25 +595,25 @@ int char_handler_normal(int c)
 	case '7':
 	case '8':
 	case '9':
-		g_state->cmd_arg = g_state->cmd_arg*10 + (c-'0');
+		w->cmd_arg = w->cmd_arg*10 + (c-'0');
 		return 0;
 	case 'N':
-		execute_command_directly(cmd_findprev, 0);
+		mainwindow_execute_command_directly(w, mainwindow_cmd_findprev, 0);
 		return 1;
 	case 'h':
-		move_left();
+		mainwindow_move_left(w);
 		return 1;
 	case 'j':
-		move_down();
+		mainwindow_move_down(w);
 		return 1;
 	case 'k':
-		move_up();
+		mainwindow_move_up(w);
 		return 1;
 	case 'l':
-		move_right();
+		mainwindow_move_right(w);
 		return 1;
 	case 'n':
-		execute_command_directly(cmd_findnext, 0);
+		mainwindow_execute_command_directly(w, mainwindow_cmd_findnext, 0);
 		return 1;
 	}
 	return 1;
@@ -624,22 +625,24 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
+	struct mainwindow *w = GetWindowLong(hwnd, GWL_USERDATA);
+
 	switch (message) {
 	case WM_LBUTTONDOWN:
 		{
 			int x = LOWORD(lparam);
 			int y = HIWORD(lparam);
 			SetFocus(hwnd);
-			int cx = x / g_charwidth;
-			int cy = y / g_charheight;
+			int cx = x / w->charwidth;
+			int cy = y / w->charheight;
 			if (cx >= 10 && cx < 58) {
 				cx = (cx-10)/3;
-				uint32_t pos = (g_current_line + cy << 4) + cx;
-				if (pos < g_file_size) {
-					g_cursor_pos = pos;
-					g_cursor_x = cx;
-					g_cursor_y = cy;
-					update_cursor_pos();
+				uint32_t pos = (w->current_line + cy << 4) + cx;
+				if (pos < w->file_size) {
+					w->cursor_pos = pos;
+					w->cursor_x = cx;
+					w->cursor_y = cy;
+					mainwindow_update_cursor_pos(w);
 				}
 			}
 		}
@@ -647,53 +650,57 @@ monoedit_wndproc(HWND hwnd,
 	case WM_KEYDOWN:
 		switch (wparam) {
 		case VK_UP:
-			move_up();
+			mainwindow_move_up(w);
 			break;
 		case VK_DOWN:
-			move_down();
+			mainwindow_move_down(w);
 			break;
 		case VK_LEFT:
-			move_left();
+			mainwindow_move_left(w);
 			break;
 		case VK_RIGHT:
-			move_right();
+			mainwindow_move_right(w);
 			break;
 		case VK_PRIOR:
-			move_up_page();
+			mainwindow_move_up_page(w);
 			break;
 		case VK_NEXT:
-			move_down_page();
+			mainwindow_move_down_page(w);
 			break;
 		case VK_HOME:
-			goto_address(0);
+			mainwindow_goto_address(w, 0);
 			break;
 		case VK_END:
-			if (g_file_size) {
-				goto_address(g_file_size-1);
+			if (w->file_size) {
+				mainwindow_goto_address(w, w->file_size-1);
 			}
 			break;
 		}
 		return 0;
 	}
-	return CallWindowProc(g_monoedit_wndproc, hwnd, message, wparam, lparam);
+	return CallWindowProc(w->monoedit_wndproc, hwnd, message, wparam, lparam);
 }
 
-void init_font(void)
+void mainwindow_init_font(struct mainwindow *w)
 {
-	g_mono_font = GetStockObject(OEM_FIXED_FONT);
-	HDC dc = GetDC(0);
-	printf("dc=%x\n", dc);
-	SelectObject(dc, g_mono_font);
+	HDC dc;
 	TEXTMETRIC tm;
+	HFONT mono_font;
+
+	mono_font = GetStockObject(OEM_FIXED_FONT);
+	dc = GetDC(0);
+	//printf("dc=%x\n", dc);
+	SelectObject(dc, mono_font);
 	GetTextMetrics(dc, &tm);
-	g_charwidth = tm.tmAveCharWidth;
-	g_charheight = tm.tmHeight;
+	w->mono_font = mono_font;
+	w->charwidth = tm.tmAveCharWidth;
+	w->charheight = tm.tmHeight;
 	ReleaseDC(0, dc);
 }
 
-void handle_wm_create(struct mainwindow_state *st, LPCREATESTRUCT create)
+void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 {
-	HWND hwnd = st->self;
+	HWND hwnd = w->hwnd;
 	HWND monoedit;
 	HWND status_edit;
 
@@ -710,18 +717,20 @@ void handle_wm_create(struct mainwindow_state *st, LPCREATESTRUCT create)
 				  0,
 				  instance,
 				  0);
-	st->monoedit = monoedit;
-	g_nrows = INITIAL_N_ROW;
-	g_monoedit_buffer = malloc(80*INITIAL_N_ROW);
-	g_monoedit_buffer_cap_lines = INITIAL_N_ROW;
-	memset(g_monoedit_buffer, ' ', 80*INITIAL_N_ROW);
+	w->monoedit = monoedit;
+	w->nrows = INITIAL_N_ROW;
+	w->monoedit_buffer = malloc(80*INITIAL_N_ROW);
+	w->monoedit_buffer_cap_lines = INITIAL_N_ROW;
+	memset(w->monoedit_buffer, ' ', 80*INITIAL_N_ROW);
 	SendMessage(monoedit, MONOEDIT_WM_SET_CSIZE, 80, INITIAL_N_ROW);
-	SendMessage(monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) g_monoedit_buffer);
-	SendMessage(monoedit, WM_SETFONT, (WPARAM) g_mono_font, 0);
-	update_monoedit_buffer(0, INITIAL_N_ROW);
-	g_monoedit_wndproc = (WNDPROC) SetWindowLong(monoedit, GWL_WNDPROC, (LONG) monoedit_wndproc);
+	SendMessage(monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
+	SendMessage(monoedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
+	mainwindow_update_monoedit_buffer(w, 0, INITIAL_N_ROW);
+	/* subclass monoedit window */
+	SetWindowLong(monoedit, GWL_USERDATA, (LONG) w);
+	w->monoedit_wndproc = (WNDPROC) SetWindowLong(monoedit, GWL_WNDPROC, (LONG) monoedit_wndproc);
 	SetFocus(monoedit);
-	update_cursor_pos();
+	mainwindow_update_cursor_pos(w);
 	/* create command area */
 	status_edit = CreateWindow("EDIT",
 				   "",
@@ -734,24 +743,24 @@ void handle_wm_create(struct mainwindow_state *st, LPCREATESTRUCT create)
 				   0,
 				   instance,
 				   0);
-	st->status_edit = status_edit;
-	SendMessage(status_edit, WM_SETFONT, (WPARAM) g_mono_font, 0);
+	w->status_edit = status_edit;
+	SendMessage(status_edit, WM_SETFONT, (WPARAM) w->mono_font, 0);
 }
 
-void resize_monoedit(uint32_t width, uint32_t height)
+void mainwindow_resize_monoedit(struct mainwindow *w, uint32_t width, uint32_t height)
 {
-	uint32_t new_nrows = height/g_charheight;
-	if (new_nrows > g_nrows) {
-		if (new_nrows > g_monoedit_buffer_cap_lines) {
-			g_monoedit_buffer = realloc(g_monoedit_buffer, 80*new_nrows);
-			g_monoedit_buffer_cap_lines = new_nrows;
-			SendMessage(g_state->monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) g_monoedit_buffer);
+	uint32_t new_nrows = height/w->charheight;
+	if (new_nrows > w->nrows) {
+		if (new_nrows > w->monoedit_buffer_cap_lines) {
+			w->monoedit_buffer = realloc(w->monoedit_buffer, 80*new_nrows);
+			w->monoedit_buffer_cap_lines = new_nrows;
+			SendMessage(w->monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
 		}
-		update_monoedit_buffer(g_nrows, new_nrows - g_nrows);
-		g_nrows = new_nrows;
+		mainwindow_update_monoedit_buffer(w, w->nrows, new_nrows - w->nrows);
+		w->nrows = new_nrows;
 	}
-	SendMessage(g_state->monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/g_charheight);
-	SetWindowPos(g_state->monoedit,
+	SendMessage(w->monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/w->charheight);
+	SetWindowPos(w->monoedit,
 		     0,
 		     0,
 		     0,
@@ -766,28 +775,23 @@ wndproc(HWND hwnd,
 	WPARAM wparam,
 	LPARAM lparam)
 {
-	struct mainwindow_state *st = (void *) GetWindowLong(hwnd, 0);
+	struct mainwindow *w = (void *) GetWindowLong(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
-		st = calloc(1, sizeof *st);
-		printf("st=%p\n", st);
-		if (!st) {
-			return FALSE;
-		}
-		g_state = st;
-		st->self = hwnd;
-		st->char_handler = char_handler_normal;
-		st->cmd_cap = 64;
-		st->cmd = calloc(1, st->cmd_cap);
-		SetWindowLong(hwnd, 0, (LONG) st);
+		w = ((LPCREATESTRUCT)lparam)->lpCreateParams;
+		w->hwnd = hwnd;
+		w->char_handler = mainwindow_char_handler_normal;
+		w->cmd_cap = 64;
+		w->cmd = calloc(1, w->cmd_cap);
+		SetWindowLong(hwnd, 0, (LONG) w);
 		return TRUE;
 	case WM_NCDESTROY:
-		if (st) {
-			free(st);
+		if (w) {
+			free(w);
 		}
 		return 0;
 	case WM_CREATE:
-		handle_wm_create(st, (LPCREATESTRUCT) lparam);
+		mainwindow_handle_wm_create(w, (LPCREATESTRUCT) lparam);
 		return 0;
 	case WM_DESTROY:
 		PostQuitMessage(0);
@@ -797,31 +801,31 @@ wndproc(HWND hwnd,
 			uint32_t width  = LOWORD(lparam);
 			uint32_t height = HIWORD(lparam);
 			uint32_t cmd_y, cmd_height;
-			if (height >= g_charheight) {
-				cmd_y = height - g_charheight;
-				cmd_height = g_charheight;
+			if (height >= w->charheight) {
+				cmd_y = height - w->charheight;
+				cmd_height = w->charheight;
 			} else {
 				cmd_y = 0;
 				cmd_height = height;
 			}
-			resize_monoedit(width, cmd_y);
-			SetWindowPos(st->status_edit,
+			mainwindow_resize_monoedit(w, width, cmd_y);
+			SetWindowPos(w->status_edit,
 				     0,
 				     0,
 				     cmd_y,
 				     width,
-				     g_charheight,
+				     w->charheight,
 				     SWP_NOZORDER);
 		}
 		return 0;
 	case WM_CHAR:
-		if (st->char_handler(wparam)) {
-			memset(g_state->cmd, 0, g_state->cmd_len);
-			g_state->cmd_len = 0;
-			g_state->cmd_arg = 0;
-			SetWindowText(g_state->status_edit, "");
+		if (w->char_handler(w, wparam)) {
+			memset(w->cmd, 0, w->cmd_len);
+			w->cmd_len = 0;
+			w->cmd_arg = 0;
+			SetWindowText(w->status_edit, "");
 		} else {
-			add_char_to_command(wparam);
+			mainwindow_add_char_to_command(w, wparam);
 		}
 		return 0;
 	}
@@ -831,6 +835,7 @@ wndproc(HWND hwnd,
 ATOM register_wndclass(void)
 {
 	WNDCLASS wndclass = {0};
+
 	wndclass.lpfnWndProc = wndproc;
 	wndclass.cbWndExtra = sizeof(long);
 	wndclass.hInstance = GetModuleHandle(0);
@@ -864,27 +869,27 @@ void format_error_code(char *buf, size_t buflen, DWORD error_code)
 		      0);
 }
 
-int open_file(const char *path) 
+int mainwindow_open_file(struct mainwindow *w, const char *path) 
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
 	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
 	char errtext[512];
 
-	g_file = CreateFile(path,
+	w->file = CreateFile(path,
 			    GENERIC_READ,
 			    FILE_SHARE_READ,
 			    0, // lpSecurityAttributes
 			    OPEN_EXISTING,
 			    0,
 			    0);
-	if (g_file == INVALID_HANDLE_VALUE) {
+	if (w->file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, sizeof errtext, GetLastError());
 		fprintf(stderr, errfmt_open, path, errtext);
 		return -1;
 	}
 	DWORD file_size_high;
-	g_file_size = GetFileSize(g_file, &file_size_high);
-	if (g_file_size == 0xffffffff) {
+	w->file_size = GetFileSize(w->file, &file_size_high);
+	if (w->file_size == 0xffffffff) {
 		DWORD error_code = GetLastError();
 		if (error_code) {
 			format_error_code(errtext, sizeof errtext, GetLastError());
@@ -896,23 +901,23 @@ int open_file(const char *path)
 		fprintf(stderr, errfmt_open, path, "file is too large");
 		return -1;
 	}
-	printf("file size: %u (0x%x)\n", g_file_size, g_file_size);
-	g_total_lines = g_file_size >> 4;
-	if (g_file_size&15) {
-		g_total_lines += 1;
+	printf("file size: %u (0x%x)\n", w->file_size, w->file_size);
+	w->total_lines = w->file_size >> 4;
+	if (w->file_size&15) {
+		w->total_lines += 1;
 	}
 	return 0;
 }
 
-int init_cache(void)
+int mainwindow_init_cache(struct mainwindow *w)
 {
-	uint8_t *cache_data = malloc(N_CACHE*0x1000);
+	uint8_t *cache_data = malloc(N_CACHE_BLOCK*0x1000);
 	if (!cache_data) {
 		return -1;
 	}
-	for (int i=0; i<N_CACHE; i++) {
-		g_cache[i].tag = -1;
-		g_cache[i].data = cache_data + i*0x1000;
+	for (int i=0; i<N_CACHE_BLOCK; i++) {
+		w->cache[i].tag = -1;
+		w->cache[i].data = cache_data + i*0x1000;
 	}
 	return 0;
 }
@@ -935,27 +940,31 @@ WinMain(HINSTANCE instance,
 	LPSTR cmdline,
 	int show)
 {
+	char filepath[512];
+	struct mainwindow *w;
+
 	if (!monoedit_register_class()) {
 		return 1;
 	}
 	if (!register_wndclass()) {
 		return 1;
 	}
-	char filepath[512];
 	if (!cmdline[0]) {
+		// no command line argument
 		if (file_chooser_dialog(filepath, sizeof filepath) < 0) {
 			return 1;
 		}
 		cmdline = filepath;
 	}
-	if (open_file(cmdline) < 0) {
+	w = calloc(1, sizeof *w);
+	if (mainwindow_open_file(w, cmdline) < 0) {
 		return 1;
 	}
-	if (init_cache() < 0) {
+	if (mainwindow_init_cache(w) < 0) {
 		return 1;
 	}
-	init_font();
-	RECT rect = { 0, 0, g_charwidth*80, g_charheight*(INITIAL_N_ROW+1) };
+	mainwindow_init_font(w);
+	RECT rect = { 0, 0, w->charwidth*80, w->charheight*(INITIAL_N_ROW+1) };
 	AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hwnd = CreateWindow("MonoEditDemo", // class name
 				 "Whex", // window title
@@ -967,14 +976,14 @@ WinMain(HINSTANCE instance,
 				 0,
 				 0,
 				 instance,
-				 0);
+				 w); // window-creation data
 	ShowWindow(hwnd, show);
 	MSG msg;
 	while (GetMessage(&msg, 0, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
-	CloseHandle(g_file);
+	CloseHandle(w->file);
 	monoedit_unregister_class();
 	return msg.wParam;
 }

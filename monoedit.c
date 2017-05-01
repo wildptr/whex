@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct monoedit_state {
+struct monoedit {
 	/* in characters */
 	int ncols;
 	int nrows;
@@ -15,22 +15,22 @@ struct monoedit_state {
 	int charheight;
 };
 
-static void monoedit_paint(struct monoedit_state *s, HWND hwnd)
+static void monoedit_paint(struct monoedit *w, HWND hwnd)
 {
 	PAINTSTRUCT paint;
 	HDC hdc = BeginPaint(hwnd, &paint);
 
-	if (s->buffer) {
+	if (w->buffer) {
 		HGDIOBJ old_font;
-		if (s->font) {
-			old_font = SelectObject(hdc, s->font);
+		if (w->font) {
+			old_font = SelectObject(hdc, w->font);
 		}
-		const char *bufp = s->buffer;
-		for (int i=0; i<s->nrows; i++) {
-			TextOut(hdc, 0, s->charheight*i, bufp, s->ncols);
-			bufp += s->ncols;
+		const char *bufp = w->buffer;
+		for (int i=0; i<w->nrows; i++) {
+			TextOut(hdc, 0, w->charheight*i, bufp, w->ncols);
+			bufp += w->ncols;
 		}
-		if (s->font) {
+		if (w->font) {
 			SelectObject(hdc, old_font);
 		}
 	}
@@ -44,7 +44,7 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct monoedit_state *st = (void *) GetWindowLong(hwnd, 0);
+	struct monoedit *st = (void *) GetWindowLong(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
 		st = calloc(1, sizeof *st);

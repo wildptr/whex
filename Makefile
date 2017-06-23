@@ -3,7 +3,7 @@
 CC := gcc
 LUA_DIR := C:/Git/usr/local
 
-CFLAGS := -std=c99 -Wall -I$(LUA_DIR)/include
+CFLAGS := -std=c99 -Wall -I$(LUA_DIR)/include -DDEBUG
 
 whex.exe: monoedit.o lua_api.o main.o
 	$(CC) -o $@ $^ -lgdi32 -lcomdlg32 -L$(LUA_DIR)/lib -llua

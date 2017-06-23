@@ -179,8 +179,11 @@ void mainwindow_goto_line(struct mainwindow *w, uint32_t line)
 {
 	assert(line <= w->total_lines);
 	w->current_line = line;
-	mainwindow_update_monoedit_buffer(w, 0, w->nrows);
-	InvalidateRect(w->monoedit, 0, FALSE);
+	if (w->interactive) {
+		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+		mainwindow_update_monoedit_tags(w);
+		InvalidateRect(w->monoedit, 0, FALSE);
+	}
 }
 
 void mainwindow_update_cursor_pos(struct mainwindow *w)
@@ -310,7 +313,10 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 		w->current_line--;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
 		memmove(w->monoedit_buffer+80, w->monoedit_buffer, 80*(w->nrows-1));
-		mainwindow_update_monoedit_buffer(w, 0, 1);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, 0, 1);
+			mainwindow_update_monoedit_tags(w);
+		}
 	}
 }
 
@@ -320,7 +326,10 @@ void mainwindow_scroll_down_line(struct mainwindow *w)
 		w->current_line++;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
 		memmove(w->monoedit_buffer, w->monoedit_buffer+80, 80*(w->nrows-1));
-		mainwindow_update_monoedit_buffer(w, w->nrows-1, 1);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, w->nrows-1, 1);
+			mainwindow_update_monoedit_tags(w);
+		}
 	}
 }
 
@@ -372,14 +381,20 @@ void mainwindow_scroll_up_page(struct mainwindow *w)
 {
 	if (w->current_line >= w->nrows) {
 		w->current_line -= w->nrows;
-		InvalidateRect(w->monoedit, 0, FALSE);
-		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+			mainwindow_update_monoedit_tags(w);
+			InvalidateRect(w->monoedit, 0, FALSE);
+		}
 	} else {
 		uint32_t delta = w->current_line;
 		w->current_line = 0;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -delta);
 		memmove(w->monoedit_buffer+80*delta, w->monoedit_buffer, 80*(w->nrows-delta));
-		mainwindow_update_monoedit_buffer(w, 0, delta);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, 0, delta);
+			mainwindow_update_monoedit_tags(w);
+		}
 	}
 }
 
@@ -387,14 +402,20 @@ void mainwindow_scroll_down_page(struct mainwindow *w)
 {
 	if (w->current_line + w->nrows <= w->total_lines) {
 		w->current_line += w->nrows;
-		InvalidateRect(w->monoedit, 0, FALSE);
-		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+			mainwindow_update_monoedit_tags(w);
+			InvalidateRect(w->monoedit, 0, FALSE);
+		}
 	} else {
 		uint32_t delta = w->total_lines - w->current_line;
 		w->current_line = w->total_lines;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, delta);
 		memmove(w->monoedit_buffer, w->monoedit_buffer+80*delta, 80*(w->nrows-delta));
-		mainwindow_update_monoedit_buffer(w, w->nrows-delta, delta);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, w->nrows-delta, delta);
+			mainwindow_update_monoedit_tags(w);
+		}
 	}
 }
 
@@ -652,7 +673,10 @@ void mainwindow_resize_monoedit(struct mainwindow *w, uint32_t width, uint32_t h
 			w->monoedit_buffer_cap_lines = new_nrows;
 			SendMessage(w->monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
 		}
-		mainwindow_update_monoedit_buffer(w, w->nrows, new_nrows - w->nrows);
+		if (w->interactive) {
+			mainwindow_update_monoedit_buffer(w, w->nrows, new_nrows - w->nrows);
+			mainwindow_update_monoedit_tags(w);
+		}
 		w->nrows = new_nrows;
 	}
 	SendMessage(w->monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/w->charheight);
@@ -850,7 +874,9 @@ WinMain(HINSTANCE instance,
 		}
 		cmdline = filepath;
 	}
+	// initialize mainwindow struct
 	w = calloc(1, sizeof *w);
+	w->interactive = true;
 	if (mainwindow_open_file(w, cmdline) < 0) {
 		return 1;
 	}
@@ -928,8 +954,21 @@ const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
 	error = luaL_loadbuffer(L, arg, strlen(arg), "line") ||
 		lua_pcall(L, 0, 0, 0);
 	if (error) {
-		lua_pop(L, 1);
-		return "Lua error";
+		const char *err = lua_tostring(L, -1);
+		return err;
+	}
+	return 0;
+}
+
+const char *mainwindow_cmd_hl(struct mainwindow *w, char *arg)
+{
+	uint32_t start = 0, len = 0;
+	sscanf(arg, "%u%u", &start, &len);
+	w->hl_start = start;
+	w->hl_len = len;
+	if (w->interactive) {
+		mainwindow_update_monoedit_tags(w);
+		InvalidateRect(w->monoedit, 0, FALSE);
 	}
 	return 0;
 }
@@ -944,6 +983,10 @@ const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd
 	char *end = p;
 	cmdproc_t cmdproc = 0;
 	switch (end-start) {
+	case 2:
+		if (!memcmp(start, "hl", 2)) {
+			cmdproc = mainwindow_cmd_hl;
+		}
 	case 3:
 		if (!memcmp(start, "lua", 3)) {
 			cmdproc = mainwindow_cmd_lua;
@@ -986,4 +1029,51 @@ void mainwindow_init_lua(struct mainwindow *w)
 	lua_pushcfunction(L, lapi_getbyte);
 	lua_setglobal(L, "getbyte");
 	w->lua_state = L;
+}
+
+static uint32_t clamp(uint32_t x, uint32_t min, uint32_t max)
+{
+	if (x < min) return min;
+	if (x > max) return max;
+	return x;
+}
+
+void mainwindow_update_monoedit_tags(struct mainwindow *w)
+{
+	uint32_t start = w->hl_start;
+	uint32_t len = w->hl_len;
+	uint32_t view_start = w->current_line * 16;
+	uint32_t view_end = (w->current_line + w->monoedit_buffer_cap_lines) * 16;
+	uint32_t start_clamp = clamp(start, view_start, view_end) - view_start;
+	uint32_t end_clamp = clamp(start + len, view_start, view_end) - view_start;
+	HWND w1 = w->monoedit;
+	SendMessage(w1, MONOEDIT_WM_CLEAR_TAGS, 0, 0);
+	if (end_clamp > start_clamp) {
+		struct tag tag;
+		tag.attr = 1;
+		int tag_first_line = start_clamp/16;
+		int tag_last_line = (end_clamp-1)/16; // inclusive
+		if (tag_last_line > tag_first_line) {
+			tag.line = tag_first_line;
+			tag.start = 10 + start_clamp % 16 * 3;
+			tag.len = 47 - start_clamp % 16 * 3;
+			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+			for (int i=tag_first_line+1; i<tag_last_line; i++) {
+				tag.line = i;
+				tag.start = 10;
+				tag.len = 47;
+				SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+			}
+			tag.line = tag_last_line;
+			tag.start = 10;
+			tag.len = (end_clamp % 16 ? end_clamp % 16 : 16) * 3 - 1;
+			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+		} else {
+			// single line
+			tag.line = tag_first_line;
+			tag.start = 10 + start_clamp % 16 * 3;
+			tag.len = ((end_clamp % 16 ? end_clamp % 16 : 16) - start_clamp % 16) * 3 - 1;
+			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+		}
+	}
 }

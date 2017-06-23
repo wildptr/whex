@@ -8,8 +8,6 @@
 #include <stdint.h>
 #include <windows.h>
 
-#define DEBUG
-
 #ifdef DEBUG
 #define DEBUG_PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__);
 #else
@@ -57,6 +55,9 @@ struct mainwindow {
 	HFONT mono_font;
 	struct cache_entry cache[N_CACHE_BLOCK];
 	lua_State *lua_state;
+	uint32_t hl_start;
+	uint32_t hl_len;
+	bool interactive;
 };
 
 typedef const char *(*cmdproc_t)(struct mainwindow *, char *);
@@ -93,6 +94,7 @@ int mainwindow_open_file(struct mainwindow *w, const char *path);
 int mainwindow_init_cache(struct mainwindow *w);
 const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd);
 void mainwindow_init_lua(struct mainwindow *w);
+void mainwindow_update_monoedit_tags(struct mainwindow *w);
 
 #define DECLARE_CMD(x) const char *x(struct mainwindow *, char *)
 

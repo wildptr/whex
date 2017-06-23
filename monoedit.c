@@ -13,6 +13,9 @@ struct monoedit {
 	int cursory;
 	int charwidth;
 	int charheight;
+	struct tag *tags;
+	int tag_len;
+	int tag_cap;
 };
 
 static void monoedit_paint(struct monoedit *w, HWND hwnd)
@@ -22,14 +25,56 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 
 	if (w->buffer) {
 		HGDIOBJ old_font;
+		COLORREF old_bkcolor;
 		if (w->font) {
 			old_font = SelectObject(hdc, w->font);
 		}
-		const char *bufp = w->buffer;
-		for (int i=0; i<w->nrows; i++) {
-			TextOut(hdc, 0, w->charheight*i, bufp, w->ncols);
-			bufp += w->ncols;
+		struct tag *segments = malloc((w->nrows + 2*w->tag_len) * sizeof *segments);
+		int n_seg = 0;
+		int next_tag_i = 0;
+		int line = 0;
+		int col = 0;
+		while (line < w->nrows) {
+			segments[n_seg].line = line;
+			segments[n_seg].start = col;
+			segments[n_seg].attr = 0;
+			if (next_tag_i < w->tag_len && w->tags[next_tag_i].line == line) {
+				struct tag *next_tag = &w->tags[next_tag_i];
+				// untagged segment
+				segments[n_seg++].len = next_tag->start - col;
+				// tagged segment
+				segments[n_seg++] = *next_tag;
+				next_tag_i++;
+				col = next_tag->start + next_tag->len;
+			} else {
+				segments[n_seg++].len = w->ncols - col;
+				col = w->ncols;
+			}
+			if (col == w->ncols) {
+				line++;
+				col = 0;
+			}
 		}
+		const char *pbuf = w->buffer;
+		for (int i=0; i<n_seg; i++) {
+			struct tag *seg = &segments[i];
+#if 0
+			printf("seg[%d].line = %d\n", i, seg->line);
+			printf("seg[%d].start = %d\n", i, seg->start);
+			printf("seg[%d].len = %d\n", i, seg->len);
+			printf("seg[%d].attr = %u\n", i, seg->attr);
+#endif
+			if (seg->attr) {
+				old_bkcolor = SetBkColor(hdc, RGB(192, 192, 192));
+			}
+			TextOut(hdc, seg->start * w->charwidth, seg->line * w->charheight,
+				pbuf, seg->len);
+			pbuf += seg->len;
+			if (seg->attr) {
+				SetBkColor(hdc, old_bkcolor);
+			}
+		}
+		free(segments);
 		if (w->font) {
 			SelectObject(hdc, old_font);
 		}
@@ -38,31 +83,54 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 	EndPaint(hwnd, &paint);
 }
 
+void monoedit_clear_tags(struct monoedit *w)
+{
+	w->tag_len = 0;
+}
+
+void monoedit_add_tag(struct monoedit *w, struct tag *tag)
+{
+#if 0
+	printf("monoedit_add_tag() line=%d start=%d len=%d attr=%u\n",
+	       tag->line, tag->start, tag->len, tag->attr);
+#endif
+	if (w->tag_len == w->tag_cap) {
+		if (w->tags) {
+			w->tag_cap *= 2;
+			w->tags = realloc(w->tags, w->tag_cap * sizeof *w->tags);
+		} else {
+			w->tag_cap = 4;
+			w->tags = malloc(w->tag_cap * sizeof *w->tags);
+		}
+	}
+	w->tags[w->tag_len++] = *tag;
+}
+
 static LRESULT CALLBACK
 monoedit_wndproc(HWND hwnd,
 		 UINT message,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct monoedit *st = (void *) GetWindowLong(hwnd, 0);
+	struct monoedit *w = (void *) GetWindowLong(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
-		st = calloc(1, sizeof *st);
-		if (!st) {
+		w = calloc(1, sizeof *w);
+		if (!w) {
 			return FALSE;
 		}
-		SetWindowLong(hwnd, 0, (LONG) st);
+		SetWindowLong(hwnd, 0, (LONG) w);
 		return TRUE;
 	case WM_NCDESTROY:
-		if (st) {
+		if (w) {
 			/* This check is necessary, since we reach here even
 			 * when WM_NCCREATE returns FALSE (which means we
-			 * failed to allocate st). */
-			free(st);
+			 * failed to allocate w). */
+			free(w);
 		}
 		return 0;
 	case WM_PAINT:
-		monoedit_paint(st, hwnd);
+		monoedit_paint(w, hwnd);
 		return 0;
 	case MONOEDIT_WM_SCROLL:
 		{
@@ -70,42 +138,48 @@ monoedit_wndproc(HWND hwnd,
 			RECT scroll_rect = {
 			       	0,
 				0,
-				st->charwidth * st->ncols,
-				st->charheight * st->nrows
+				w->charwidth * w->ncols,
+				w->charheight * w->nrows
 			};
-			ScrollWindow(hwnd, 0, -delta*st->charheight, &scroll_rect, &scroll_rect);
+			ScrollWindow(hwnd, 0, -delta*w->charheight, &scroll_rect, &scroll_rect);
 		}
 		return 0;
 	case MONOEDIT_WM_SET_BUFFER:
-		st->buffer = (void *) lparam;
+		w->buffer = (void *) lparam;
 		return 0;
 	case MONOEDIT_WM_SET_CSIZE:
 		{
 			int ncols  = (int) wparam;
 			int nrows = (int) lparam;
 			if (ncols >= 0) {
-				st->ncols = ncols;
+				w->ncols = ncols;
 			}
 			if (nrows >= 0) {
-				st->nrows = nrows;
+				w->nrows = nrows;
 			}
 		}
+		return 0;
+	case MONOEDIT_WM_CLEAR_TAGS:
+		monoedit_clear_tags(w);
+		return 0;
+	case MONOEDIT_WM_ADD_TAG:
+		monoedit_add_tag(w, (struct tag *) lparam);
 		return 0;
 	case WM_SETFONT:
 		{
-			st->font = (HFONT) wparam;
+			w->font = (HFONT) wparam;
 			HDC dc = GetDC(hwnd);
-			SelectObject(dc, st->font);
+			SelectObject(dc, w->font);
 			TEXTMETRIC tm;
 			GetTextMetrics(dc, &tm);
 			ReleaseDC(hwnd, dc);
-			st->charwidth = tm.tmAveCharWidth;
-			st->charheight = tm.tmHeight;
+			w->charwidth = tm.tmAveCharWidth;
+			w->charheight = tm.tmHeight;
 		}
 		return 0;
 	case WM_SETFOCUS:
-		CreateCaret(hwnd, 0, st->charwidth, st->charheight);
-		SetCaretPos(st->cursorx*st->charwidth, st->cursory*st->charheight);
+		CreateCaret(hwnd, 0, w->charwidth, w->charheight);
+		SetCaretPos(w->cursorx*w->charwidth, w->cursory*w->charheight);
 		ShowCaret(hwnd);
 		return 0;
 	case WM_KILLFOCUS:
@@ -116,9 +190,9 @@ monoedit_wndproc(HWND hwnd,
 		{
 			int cursorx = (int) wparam;
 			int cursory = (int) lparam;
-			st->cursorx = cursorx;
-			st->cursory = cursory;
-			SetCaretPos(cursorx*st->charwidth, cursory*st->charheight);
+			w->cursorx = cursorx;
+			w->cursory = cursory;
+			SetCaretPos(cursorx*w->charwidth, cursory*w->charheight);
 		}
 		return 0;
 	case WM_CHAR:

@@ -8,6 +8,14 @@
 #include <stdint.h>
 #include <windows.h>
 
+#define DEBUG
+
+#ifdef DEBUG
+#define DEBUG_PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__);
+#else
+#define DEBUG_PRINTF(...) ((void)0)
+#endif
+
 #define N_CACHE_BLOCK 16
 
 /* each cache block holds 0x1000 bytes */
@@ -95,5 +103,9 @@ DECLARE_CMD(mainwindow_cmd_findprev);
 DECLARE_CMD(mainwindow_cmd_findnext);
 
 #undef DECLARE_CMD
+
+// Lua API
+
+int lapi_getbyte(lua_State *L);
 
 #endif

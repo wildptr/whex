@@ -8,14 +8,6 @@
 
 #define INITIAL_N_ROW 32
 
-#define DEBUG
-
-#ifdef DEBUG
-#define DEBUG_PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__);
-#else
-#define DEBUG_PRINTF(...) ((void)0)
-#endif
-
 static bool iswordchar(char c)
 {
 	return isalnum(c) || c == '_';
@@ -986,5 +978,12 @@ void mainwindow_init_lua(struct mainwindow *w)
 	assert(!w->lua_state);
 	lua_State *L = luaL_newstate();
 	luaL_openlibs(L);
+	// store `w` at REGISTRY[0]
+	lua_pushinteger(L, 0);
+	lua_pushlightuserdata(L, w);
+	lua_settable(L, LUA_REGISTRYINDEX);
+	// register C functions
+	lua_pushcfunction(L, lapi_getbyte);
+	lua_setglobal(L, "getbyte");
 	w->lua_state = L;
 }

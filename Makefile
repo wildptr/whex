@@ -5,7 +5,8 @@ LUA_DIR := C:/Git/usr/local
 
 CFLAGS := -std=c99 -Wall -I$(LUA_DIR)/include
 
-whex.exe: monoedit.o main.o
+whex.exe: monoedit.o lua_api.o main.o
 	$(CC) -o $@ $^ -lgdi32 -lcomdlg32 -L$(LUA_DIR)/lib -llua
 
 main.o: main.c mainwindow.h
+lua_api.o: lua_api.c mainwindow.h

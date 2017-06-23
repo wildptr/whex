@@ -143,8 +143,3 @@ ATOM monoedit_register_class(void)
 	wndclass.lpszClassName = "MonoEdit";
 	return RegisterClass(&wndclass);
 }
-
-BOOL monoedit_unregister_class(void)
-{
-	return UnregisterClass("MonoEdit", 0);
-}

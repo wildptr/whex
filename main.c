@@ -1,56 +1,25 @@
 #include <assert.h>
 #include <ctype.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "mainwindow.h"
 #include "monoedit.h"
 
-#define N_CACHE_BLOCK 16
 #define INITIAL_N_ROW 32
 
-/* each cache block holds 0x1000 bytes */
-struct cache_entry {
-	uint32_t tag;
-	uint8_t *data;
-};
+#define DEBUG
 
-struct mainwindow {
-	HWND hwnd;
-	HWND monoedit;
-	HWND status_edit;
-	/* returns 1 if a full command has been recognized or the character is
-	 * not recognized, 0 otherwise */
-	int (*char_handler)(struct mainwindow *w, int c);
-	int cmd_cap;
-	int cmd_len;
-	char *cmd;
-	int cmd_arg;
-	uint32_t file_size;
-	uint32_t total_lines;
-	HANDLE file;
-	char *monoedit_buffer;
-	/* capacity of buffer, in lines (80 bytes per line) */
-	uint32_t monoedit_buffer_cap_lines;
-	uint32_t current_line;
-	/* number of lines displayed */
-	uint32_t nrows;
-	WNDPROC monoedit_wndproc;
-	/* invariant: cursor_pos = (current_line + cursor_y) * 16 + cursor_x */
-	/* current position in file */
-	uint32_t cursor_pos;
-	uint32_t cursor_x;
-	uint32_t cursor_y;
-	char *last_search_pattern;
-	uint32_t last_search_pattern_len;
-	int charwidth;
-	int charheight;
-	HFONT mono_font;
-	struct cache_entry cache[N_CACHE_BLOCK];
-};
+#ifdef DEBUG
+#define DEBUG_PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__);
+#else
+#define DEBUG_PRINTF(...) ((void)0)
+#endif
 
-typedef const char *(*cmdproc_t)(struct mainwindow *, char *);
+static bool iswordchar(char c)
+{
+	return isalnum(c) || c == '_';
+}
 
 bool mainwindow_cache_valid(struct mainwindow *w, int block)
 {
@@ -71,9 +40,9 @@ int mainwindow_find_cache(struct mainwindow *w, uint32_t address)
 	int ret = next_cache;
 	ReadFile(w->file, w->cache[ret].data, 0x1000, &nread, 0);
 	w->cache[ret].tag = tag;
-	next_cache = ret+1&15;
+	next_cache = (ret+1)&15;
 
-	printf("loaded %08x into cache block %d\n", tag, ret);
+	DEBUG_PRINTF("loaded %08x into cache block %d\n", tag, ret);
 
 	return ret;
 }
@@ -84,21 +53,27 @@ uint8_t mainwindow_getbyte(struct mainwindow *w, uint32_t address)
 	return w->cache[block].data[address & 0xfff];
 }
 
-void kmp_table(uint32_t *T, const uint8_t *pat, uint32_t len)
+static void kmp_table(int *T, const uint8_t *pat, uint32_t len)
 {
 	uint32_t pos = 2;
-	uint32_t cnd = 0;
+	int cnd = 0;
+	// forall i:nat, 0 < i < len ->
+	// T[i] < i /\ ...
+	// pat[i-T[i]:i] = pat[0:T[i]] /\ ...
+	// forall j:nat, T[i] < j < len -> pat[i-j:i] <> pat[0:j]
+	T[0] = -1; // so i-T[i] = 1 when i = 0
 	T[1] = 0;
 	while (pos < len) {
 		if (pat[pos-1] == pat[cnd]) {
-			T[pos] = cnd+1;
+			T[pos++] = cnd+1;
 			cnd++;
-			pos++;
-		} else if (cnd > 0) {
-			cnd = T[cnd];
 		} else {
-			T[pos] = 0;
-			pos++;
+			// pat[pos-1] != pat[cnd]
+			if (cnd > 0) {
+				cnd = T[cnd];
+			} else {
+				T[pos++] = 0;
+			}
 		}
 	}
 }
@@ -106,23 +81,18 @@ void kmp_table(uint32_t *T, const uint8_t *pat, uint32_t len)
 uint32_t mainwindow_kmp_search(struct mainwindow *w, const uint8_t *pat, uint32_t len, uint32_t start)
 {
 	assert(len);
-	uint32_t T[len];
-	/* T[0] is left undefined */
+	int T[len];
 	kmp_table(T, pat, len);
-	uint32_t m = start;
+	uint32_t m = start; // start of potential match
 	uint32_t i = 0;
 	while (m+i < w->file_size) {
 		if (pat[i] == mainwindow_getbyte(w, m+i)) {
-			if (i == len-1) return m;
+			if (i == len-1) return m; // match found
 			i++;
 		} else {
-			if (i) {
-				m += i-T[i];
-				i = T[i];
-			} else {
-				m++;
-				i = 0;
-			}
+			// current character does not match
+			m += i-T[i];
+			i = T[i];
 		}
 	}
 	/* no match */
@@ -137,13 +107,12 @@ uint32_t mainwindow_kmp_search(struct mainwindow *w, const uint8_t *pat, uint32_
 uint32_t mainwindow_kmp_search_backward(struct mainwindow *w, const uint8_t *pat, uint32_t len, uint32_t start)
 {
 	assert(len);
-	uint32_t T[len];
+	int T[len];
 	uint8_t revpat[len];
 	for (uint32_t i=0; i<len; i++) {
 		revpat[i] = pat[len-1-i];
 	}
 	pat = revpat;
-	/* T[0] is left undefined */
 	kmp_table(T, pat, len);
 	uint32_t m = start;
 	uint32_t i = 0;
@@ -152,13 +121,8 @@ uint32_t mainwindow_kmp_search_backward(struct mainwindow *w, const uint8_t *pat
 			if (i == len-1) return w->file_size-(m+len);
 			i++;
 		} else {
-			if (i) {
-				m += i-T[i];
-				i = T[i];
-			} else {
-				m++;
-				i = 0;
-			}
+			m += i-T[i];
+			i = T[i];
 		}
 	}
 	/* no match */
@@ -209,17 +173,12 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, uint32_t buffer_lin
 	}
 }
 
-bool iswordchar(char c)
-{
-	return isalnum(c) || c == '_';
-}
-
-uint8_t hexval(char c)
+static uint8_t hexval(char c)
 {
 	return c > '9' ? 10+(c|32)-'a' : c-'0';
 }
 
-uint8_t hextobyte(const uint8_t *p)
+static uint8_t hextobyte(const uint8_t *p)
 {
 	return hexval(p[0]) << 4 | hexval(p[1]);
 }
@@ -259,32 +218,18 @@ void mainwindow_goto_address(struct mainwindow *w, uint32_t address)
 	mainwindow_update_cursor_pos(w);
 }
 
-const char *mainwindow_cmd_goto(struct mainwindow *w, char *arg)
-{
-	const char *p = arg;
-	uint32_t address;
-	if (sscanf(arg, "%x", &address) == 1) {
-		if (address > w->file_size) {
-			return "address out of range";
-		}
-		mainwindow_goto_address(w, address);
-		return 0;
-	}
-	return "invalid argument";
-}
-
 char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 {
 	uint32_t patlen;
 	uint8_t *pat;
-	char *p = arg;
+	uint8_t *p = (uint8_t *) arg;
 	while (*p == ' ') p++;
 	if (istext) {
 		if (*p == '"') {
 			/* TODO */
 			return "TODO";
 		} else {
-			char *start = p;
+			uint8_t *start = p;
 			while (iswordchar(*p)) p++;
 			if (*p) {
 				/* trailing character(s) found */
@@ -294,7 +239,7 @@ char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 			pat = start;
 		}
 	} else {
-		uint32_t slen = strlen(p);
+		uint32_t slen = strlen((char*)p);
 		if (slen&1 || !slen) {
 			return "invalid argument";
 		}
@@ -325,16 +270,6 @@ char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 	return 0;
 }
 
-const char *mainwindow_cmd_find_hex(struct mainwindow *w, char *arg)
-{
-	return mainwindow_find(w, arg, false);
-}
-
-const char *mainwindow_cmd_find_text(struct mainwindow *w, char *arg)
-{
-	return mainwindow_find(w, arg, true);
-}
-
 char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 {
 	if (!w->last_search_pattern) {
@@ -359,7 +294,7 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 		}
 		search_func = mainwindow_kmp_search;
 	}
-	uint32_t matchpos = search_func(w, w->last_search_pattern, 
+	uint32_t matchpos = search_func(w, w->last_search_pattern,
 					w->last_search_pattern_len,
 					start);
 	if (matchpos == w->file_size) {
@@ -367,51 +302,6 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 	}
 	mainwindow_goto_address(w, matchpos);
 	return 0;
-}
-
-/* arg unused */
-const char *mainwindow_cmd_findnext(struct mainwindow *w, char *arg)
-{
-	return mainwindow_repeat_search(w, false);
-}
-
-/* arg unused */
-const char *mainwindow_cmd_findprev(struct mainwindow *w, char *arg)
-{
-	return mainwindow_repeat_search(w, true);
-}
-
-const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd)
-{
-	printf("execute command {%s}\n", cmd);
-	char *p = cmd;
-	while (*p == ' ') p++;
-	char *start = p;
-	while (iswordchar(*p)) p++;
-	char *end = p;
-	cmdproc_t cmdproc = 0;
-	switch (end-start) {
-	case 4:
-		if (!memcmp(start, "goto", 4)) {
-			cmdproc = mainwindow_cmd_goto;
-		} else if (!memcmp(start, "find", 4)) {
-			cmdproc = mainwindow_cmd_find_hex;
-		}
-		break;
-	case 8:
-		if (!memcmp(start, "findnext", 8)) {
-			cmdproc = mainwindow_cmd_findnext;
-		} else if (!memcmp(start, "findprev", 8)) {
-			cmdproc = mainwindow_cmd_findprev;
-		} else if (!memcmp(start, "findtext", 8)) {
-			cmdproc = mainwindow_cmd_find_text;
-		}
-		break;
-	}
-	if (cmdproc) {
-		return cmdproc(w, end);
-	}
-	return "invalid command";
 }
 
 void mainwindow_execute_command(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
@@ -532,8 +422,6 @@ void mainwindow_move_down_page(struct mainwindow *w)
 	}
 }
 
-int mainwindow_char_handler_normal(struct mainwindow *w, int c);
-
 int mainwindow_char_handler_command(struct mainwindow *w, int c)
 {
 	const char *errmsg = 0;
@@ -647,7 +535,7 @@ monoedit_wndproc(HWND hwnd,
 			int cy = y / w->charheight;
 			if (cx >= 10 && cx < 58) {
 				cx = (cx-10)/3;
-				uint32_t pos = (w->current_line + cy << 4) + cx;
+				uint32_t pos = ((w->current_line + cy) << 4) + cx;
 				if (pos < w->file_size) {
 					w->cursor_pos = pos;
 					w->cursor_x = cx;
@@ -816,13 +704,11 @@ wndproc(HWND hwnd,
 		{
 			uint32_t width  = LOWORD(lparam);
 			uint32_t height = HIWORD(lparam);
-			uint32_t cmd_y, cmd_height;
+			uint32_t cmd_y;
 			if (height >= w->charheight) {
 				cmd_y = height - w->charheight;
-				cmd_height = w->charheight;
 			} else {
 				cmd_y = 0;
-				cmd_height = height;
 			}
 			mainwindow_resize_monoedit(w, width, cmd_y);
 			SetWindowPos(w->status_edit,
@@ -862,20 +748,19 @@ ATOM register_wndclass(void)
 	return RegisterClass(&wndclass);
 }
 
-void format_error_code(char *buf, size_t buflen, DWORD error_code)
+static void format_error_code(char *buf, size_t buflen, DWORD error_code)
 {
 #if 0
    DWORD FormatMessage(
-    DWORD dwFlags,	// source and processing options 
-    LPCVOID lpSource,	// pointer to  message source 
-    DWORD dwMessageId,	// requested message identifier 
-    DWORD dwLanguageId,	// language identifier for requested message 
-    LPTSTR lpBuffer,	// pointer to message buffer 
-    DWORD nSize,	// maximum size of message buffer 
-    va_list *Arguments 	// address of array of message inserts 
+    DWORD dwFlags,	// source and processing options
+    LPCVOID lpSource,	// pointer to  message source
+    DWORD dwMessageId,	// requested message identifier
+    DWORD dwLanguageId,	// language identifier for requested message
+    LPTSTR lpBuffer,	// pointer to message buffer
+    DWORD nSize,	// maximum size of message buffer
+    va_list *Arguments 	// address of array of message inserts
    );
 #endif
-	DWORD lasterr = GetLastError();
 	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
 		      0,
 		      error_code,
@@ -885,7 +770,7 @@ void format_error_code(char *buf, size_t buflen, DWORD error_code)
 		      0);
 }
 
-int mainwindow_open_file(struct mainwindow *w, const char *path) 
+int mainwindow_open_file(struct mainwindow *w, const char *path)
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
 	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
@@ -917,13 +802,14 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 		fprintf(stderr, errfmt_open, path, "file is too large");
 		return -1;
 	}
-	printf("file size: %u (0x%x)\n", w->file_size, w->file_size);
+	DEBUG_PRINTF("file size: %u (0x%x)\n", w->file_size, w->file_size);
 	w->total_lines = w->file_size >> 4;
 	if (w->file_size&15) {
 		w->total_lines += 1;
 	}
 	return 0;
 }
+
 
 int mainwindow_init_cache(struct mainwindow *w)
 {
@@ -938,7 +824,7 @@ int mainwindow_init_cache(struct mainwindow *w)
 	return 0;
 }
 
-int file_chooser_dialog(char *buf, int buflen)
+static int file_chooser_dialog(char *buf, int buflen)
 {
 	buf[0] = 0;
 	OPENFILENAME ofn = {0};
@@ -980,6 +866,7 @@ WinMain(HINSTANCE instance,
 		return 1;
 	}
 	mainwindow_init_font(w);
+	mainwindow_init_lua(w);
 	RECT rect = { 0, 0, w->charwidth*80, w->charheight*(INITIAL_N_ROW+1) };
 	AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hwnd = CreateWindow("MonoEditDemo", // class name
@@ -999,7 +886,105 @@ WinMain(HINSTANCE instance,
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
+	// window closed now
 	CloseHandle(w->file);
-	monoedit_unregister_class();
 	return msg.wParam;
+}
+
+// commands
+
+const char *mainwindow_cmd_goto(struct mainwindow *w, char *arg)
+{
+	uint32_t address;
+	if (sscanf(arg, "%x", &address) == 1) {
+		if (address > w->file_size) {
+			return "address out of range";
+		}
+		mainwindow_goto_address(w, address);
+		return 0;
+	}
+	return "invalid argument";
+}
+
+const char *mainwindow_cmd_find_hex(struct mainwindow *w, char *arg)
+{
+	return mainwindow_find(w, arg, false);
+}
+
+const char *mainwindow_cmd_find_text(struct mainwindow *w, char *arg)
+{
+	return mainwindow_find(w, arg, true);
+}
+
+/* arg unused */
+const char *mainwindow_cmd_findnext(struct mainwindow *w, char *arg)
+{
+	return mainwindow_repeat_search(w, false);
+}
+
+/* arg unused */
+const char *mainwindow_cmd_findprev(struct mainwindow *w, char *arg)
+{
+	return mainwindow_repeat_search(w, true);
+}
+
+const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
+{
+	int error;
+	lua_State *L = w->lua_state;
+
+	error = luaL_loadbuffer(L, arg, strlen(arg), "line") ||
+		lua_pcall(L, 0, 0, 0);
+	if (error) {
+		lua_pop(L, 1);
+		return "Lua error";
+	}
+	return 0;
+}
+
+const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd)
+{
+	DEBUG_PRINTF("execute command {%s}\n", cmd);
+	char *p = cmd;
+	while (*p == ' ') p++;
+	char *start = p;
+	while (iswordchar(*p)) p++;
+	char *end = p;
+	cmdproc_t cmdproc = 0;
+	switch (end-start) {
+	case 3:
+		if (!memcmp(start, "lua", 3)) {
+			cmdproc = mainwindow_cmd_lua;
+		}
+		break;
+	case 4:
+		if (!memcmp(start, "goto", 4)) {
+			cmdproc = mainwindow_cmd_goto;
+		} else if (!memcmp(start, "find", 4)) {
+			cmdproc = mainwindow_cmd_find_hex;
+		}
+		break;
+	case 8:
+		if (!memcmp(start, "findnext", 8)) {
+			cmdproc = mainwindow_cmd_findnext;
+		} else if (!memcmp(start, "findprev", 8)) {
+			cmdproc = mainwindow_cmd_findprev;
+		} else if (!memcmp(start, "findtext", 8)) {
+			cmdproc = mainwindow_cmd_find_text;
+		}
+		break;
+	}
+	if (cmdproc) {
+		return cmdproc(w, end);
+	}
+	return "invalid command";
+}
+
+void mainwindow_init_lua(struct mainwindow *w)
+{
+	// try not to initialize twice
+	assert(!w->lua_state);
+	lua_State *L = luaL_newstate();
+	luaL_openlibs(L);
+	w->lua_state = L;
 }

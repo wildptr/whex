@@ -1,5 +1,5 @@
-#ifndef MONOEDIT_H_
-#define MONOEDIT_H_
+#ifndef _MONOEDIT_H_
+#define _MONOEDIT_H_
 
 #include <windows.h>
 

@@ -206,6 +206,11 @@ void mainwindow_update_cursor_pos(struct mainwindow *w)
 		    w->cursor_y);
 }
 
+long long mainwindow_cursor_pos(struct mainwindow *w)
+{
+	return ((w->current_line + w->cursor_y) << LOG2_N_COL) + w->cursor_x;
+}
+
 void mainwindow_goto_address(struct mainwindow *w, long long address)
 {
 	long long line = address >> LOG2_N_COL;
@@ -219,7 +224,6 @@ void mainwindow_goto_address(struct mainwindow *w, long long address)
 	}
 	mainwindow_goto_line(w, line1);
 	SendMessage(w->monoedit, MONOEDIT_WM_SET_CURSOR_POS, 10+col*3, 0);
-	w->cursor_pos = address;
 	w->cursor_x = col;
 	w->cursor_y = line - line1;
 	mainwindow_update_cursor_pos(w);
@@ -266,7 +270,7 @@ char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 	w->last_search_pattern = malloc(patlen);
 	memcpy(w->last_search_pattern, pat, patlen);
 	w->last_search_pattern_len = patlen;
-	long long matchpos = mainwindow_kmp_search(w, pat, patlen, w->cursor_pos);
+	long long matchpos = mainwindow_kmp_search(w, pat, patlen, mainwindow_cursor_pos(w));
 	if (!istext) {
 		free(pat);
 	}
@@ -285,7 +289,7 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 	long long (*search_func)(struct mainwindow *w, const uint8_t *pat, int patlen, long long start);
 	long long start;
 	if (reverse) {
-		long long tmp = w->cursor_pos + w->last_search_pattern_len - 1;
+		long long tmp = mainwindow_cursor_pos(w) + w->last_search_pattern_len - 1;
 		if (w->file_size >= tmp) {
 			start = w->file_size - tmp;
 		} else {
@@ -293,8 +297,9 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 		}
 		search_func = mainwindow_kmp_search_backward;
 	} else {
-		if (w->cursor_pos+1 < w->file_size) {
-			start = w->cursor_pos+1;
+		long long cursor_pos = mainwindow_cursor_pos(w);
+		if (cursor_pos+1 < w->file_size) {
+			start = cursor_pos+1;
 		} else {
 			return "pattern not found";
 			//start = 0;
@@ -323,7 +328,6 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 {
 	if (w->current_line) {
 		w->current_line--;
-		w->cursor_pos -= N_COL;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
 		memmove(w->monoedit_buffer+N_COL_CHAR, w->monoedit_buffer, N_COL_CHAR*(w->nrows-1));
 		if (w->interactive) {
@@ -335,9 +339,8 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 
 void mainwindow_scroll_down_line(struct mainwindow *w)
 {
-	if (w->cursor_pos + N_COL < w->file_size) {
+	if (mainwindow_cursor_pos(w) + N_COL < w->file_size) {
 		w->current_line++;
-		w->cursor_pos += N_COL;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
 		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR, N_COL_CHAR*(w->nrows-1));
 		if (w->interactive) {
@@ -349,8 +352,7 @@ void mainwindow_scroll_down_line(struct mainwindow *w)
 
 void mainwindow_move_up(struct mainwindow *w)
 {
-	if (w->cursor_pos >= N_COL) {
-		w->cursor_pos -= N_COL;
+	if (mainwindow_cursor_pos(w) >= N_COL) {
 		if (w->cursor_y) {
 			w->cursor_y--;
 			mainwindow_update_cursor_pos(w);
@@ -362,8 +364,7 @@ void mainwindow_move_up(struct mainwindow *w)
 
 void mainwindow_move_down(struct mainwindow *w)
 {
-	if (w->file_size >= N_COL && w->cursor_pos < w->file_size - N_COL) {
-		w->cursor_pos += N_COL;
+	if (w->file_size >= N_COL && mainwindow_cursor_pos(w) < w->file_size - N_COL) {
 		if (w->cursor_y < w->nrows-1) {
 			w->cursor_y++;
 			mainwindow_update_cursor_pos(w);
@@ -377,16 +378,14 @@ void mainwindow_move_left(struct mainwindow *w)
 {
 	if (w->cursor_x) {
 		w->cursor_x--;
-		w->cursor_pos--;
 		mainwindow_update_cursor_pos(w);
 	}
 }
 
 void mainwindow_move_right(struct mainwindow *w)
 {
-	if (w->cursor_x < (N_COL-1) && w->cursor_pos+1 < w->file_size) {
+	if (w->cursor_x < (N_COL-1) && mainwindow_cursor_pos(w)+1 < w->file_size) {
 		w->cursor_x++;
-		w->cursor_pos++;
 		mainwindow_update_cursor_pos(w);
 	}
 }
@@ -435,16 +434,14 @@ void mainwindow_scroll_down_page(struct mainwindow *w)
 
 void mainwindow_move_up_page(struct mainwindow *w)
 {
-	if (w->cursor_pos >= N_COL*w->nrows) {
-		w->cursor_pos -= N_COL*w->nrows;
+	if (mainwindow_cursor_pos(w) >= N_COL*w->nrows) {
 		mainwindow_scroll_up_page(w);
 	}
 }
 
 void mainwindow_move_down_page(struct mainwindow *w)
 {
-	if (w->file_size >= N_COL*w->nrows && w->cursor_pos < w->file_size - N_COL*w->nrows) {
-		w->cursor_pos += N_COL*w->nrows;
+	if (w->file_size >= N_COL*w->nrows && mainwindow_cursor_pos(w) < w->file_size - N_COL*w->nrows) {
 		mainwindow_scroll_down_page(w);
 	}
 }
@@ -529,7 +526,6 @@ monoedit_wndproc(HWND hwnd,
 				cx = (cx-10)/3;
 				long long pos = ((w->current_line + cy) << LOG2_N_COL) + cx;
 				if (pos < w->file_size) {
-					w->cursor_pos = pos;
 					w->cursor_x = cx;
 					w->cursor_y = cy;
 					mainwindow_update_cursor_pos(w);

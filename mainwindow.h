@@ -39,9 +39,7 @@ struct mainwindow {
 	int nrows;
 	WNDPROC monoedit_wndproc;
 	WNDPROC cmdedit_wndproc;
-	/* invariant: cursor_pos = (current_line + cursor_y) * N_COL + cursor_x */
 	/* current position in file */
-	long long cursor_pos;
 	int cursor_x;
 	int cursor_y;
 	uint8_t *last_search_pattern;
@@ -66,6 +64,7 @@ long long mainwindow_kmp_search_backward(struct mainwindow *w, const uint8_t *pa
 void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, int num_lines);
 void mainwindow_goto_line(struct mainwindow *w, long long line);
 void mainwindow_update_cursor_pos(struct mainwindow *w);
+long long mainwindow_cursor_pos(struct mainwindow *w);
 void mainwindow_goto_address(struct mainwindow *w, long long address);
 char *mainwindow_find(struct mainwindow *w, char *arg, bool istext);
 char *mainwindow_repeat_search(struct mainwindow *w, bool reverse);

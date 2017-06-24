@@ -65,7 +65,7 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 			printf("seg[%d].attr = %u\n", i, seg->attr);
 #endif
 			if (seg->attr) {
-				old_bkcolor = SetBkColor(hdc, RGB(192, 192, 192));
+				old_bkcolor = SetBkColor(hdc, RGB(204, 204, 204));
 			}
 			TextOut(hdc, seg->start * w->charwidth, seg->line * w->charheight,
 				pbuf, seg->len);

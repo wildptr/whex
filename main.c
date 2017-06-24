@@ -7,7 +7,7 @@
 #include "monoedit.h"
 
 #define INITIAL_N_ROW 32
-#define LOG2_N_COL 4
+#define LOG2_N_COL 5
 #define N_COL (1<<LOG2_N_COL)
 #define N_COL_CHAR (16+4*N_COL)
 
@@ -26,18 +26,20 @@ int mainwindow_find_cache(struct mainwindow *w, long long address)
 	static int next_cache = 0;
 
 	for (int i=0; i<N_CACHE_BLOCK; i++) {
-		if (mainwindow_cache_valid(w, i) && (address & ~0xfffll) == (w->cache[i].tag & ~0xfffll)) return i;
+		long long tag = w->cache[i].tag;
+		if ((tag & 1) && address >> 12 == tag >> 12) return i;
 	}
 
-	long long tag = (address & ~0xfffll) | 1;
-	SetFilePointer(w->file, tag, 0, FILE_BEGIN);
+	long long base = address & -0x1000;
+	long long tag = base|1;
+	SetFilePointer(w->file, base, 0, FILE_BEGIN);
 	DWORD nread;
 	int ret = next_cache;
 	ReadFile(w->file, w->cache[ret].data, 0x1000, &nread, 0);
 	w->cache[ret].tag = tag;
 	next_cache = (ret+1)&(N_CACHE_BLOCK-1);
 
-	DEBUG_PRINTF("loaded %I64x into cache block %d\n", (tag & ~0xfffll), ret);
+	DEBUG_PRINTF("loaded %I64x into cache block %d\n", base, ret);
 
 	return ret;
 }
@@ -141,7 +143,7 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 		if (abs_line >= w->total_lines) {
 			memset(p, ' ', N_COL_CHAR);
 		} else {
-			int cache = mainwindow_find_cache(w, address);
+			int block = mainwindow_find_cache(w, address);
 			int base = address & 0xfff;
 			sprintf(p, "%08x: ", address);
 			p += 10;
@@ -153,7 +155,7 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 				end = N_COL;
 			}
 			for (int j=0; j<end; j++) {
-				sprintf(p, "%02x ", w->cache[cache].data[base|j]);
+				sprintf(p, "%02x ", w->cache[block].data[base|j]);
 				p += 3;
 			}
 			for (int j=end; j<N_COL; j++) {
@@ -163,7 +165,7 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 			sprintf(p, "  ");
 			p += 2;
 			for (int j=0; j<end; j++) {
-				uint8_t b = w->cache[cache].data[base|j];
+				uint8_t b = w->cache[block].data[base|j];
 				p[j] = b < 0x20 || b > 0x7e ? '.' : b;
 			}
 			for (int j=end; j<N_COL; j++) {
@@ -206,7 +208,7 @@ void mainwindow_update_cursor_pos(struct mainwindow *w)
 
 void mainwindow_goto_address(struct mainwindow *w, long long address)
 {
-	long long line = address >> 4;
+	long long line = address >> LOG2_N_COL;
 	int col = address & (N_COL-1);
 	long long line1;
 	assert(address <= w->file_size);
@@ -829,7 +831,7 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 		return -1;
 	}
 	DEBUG_PRINTF("file size: %u (0x%x)\n", w->file_size, w->file_size);
-	w->total_lines = w->file_size >> 4;
+	w->total_lines = w->file_size >> LOG2_N_COL;
 	if (w->file_size&(N_COL-1)) {
 		w->total_lines += 1;
 	}
@@ -1071,12 +1073,12 @@ void mainwindow_update_monoedit_tags(struct mainwindow *w)
 		if (tag_last_line > tag_first_line) {
 			tag.line = tag_first_line;
 			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
-			tag.len = 47 - (start_clamp & (N_COL-1)) * 3;
+			tag.len = (N_COL - (start_clamp & (N_COL-1))) * 3 - 1;
 			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
 			for (int i=tag_first_line+1; i<tag_last_line; i++) {
 				tag.line = i;
 				tag.start = 10;
-				tag.len = 47;
+				tag.len = N_COL*3-1;
 				SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
 			}
 			tag.line = tag_last_line;

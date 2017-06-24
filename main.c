@@ -5,11 +5,14 @@
 
 #include "mainwindow.h"
 #include "monoedit.h"
+#include "tree.h"
 
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 5
 #define N_COL (1<<LOG2_N_COL)
 #define N_COL_CHAR (16+4*N_COL)
+
+void register_lua_functions(lua_State *L);
 
 static bool iswordchar(char c)
 {
@@ -204,6 +207,17 @@ void mainwindow_update_cursor_pos(struct mainwindow *w)
 		    MONOEDIT_WM_SET_CURSOR_POS,
 		    10+w->cursor_x*3,
 		    w->cursor_y);
+	if (w->tree) {
+		struct tree *leaf = tree_lookup(w->tree, mainwindow_cursor_pos(w));
+		if (leaf) {
+			w->hl_start = leaf->start;
+			w->hl_len = leaf->len;
+			if (w->interactive) {
+				mainwindow_update_monoedit_tags(w);
+				InvalidateRect(w->monoedit, 0, FALSE);
+			}
+		}
+	}
 }
 
 long long mainwindow_cursor_pos(struct mainwindow *w)
@@ -983,7 +997,7 @@ const char *mainwindow_cmd_findprev(struct mainwindow *w, char *arg)
 const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
 {
 	int error;
-	lua_State *L = w->lua_state;
+	lua_State *L = w->lua;
 
 	error = luaL_loadbuffer(L, arg, strlen(arg), "line") ||
 		lua_pcall(L, 0, 0, 0);
@@ -994,11 +1008,31 @@ const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
 	return 0;
 }
 
+const char *mainwindow_cmd_luafile(struct mainwindow *w, char *arg)
+{
+	while (*arg == ' ') arg++;
+	char *start = arg;
+	while (*arg && *arg != ' ') arg++;
+	if (*arg) {
+		return "trailing character";
+	}
+
+	int error;
+	lua_State *L = w->lua;
+
+	error = luaL_loadfile(L, start) || lua_pcall(L, 0, 0, 0);
+	if (error) {
+		const char *err = lua_tostring(L, -1);
+		return err;
+	}
+	return 0;
+}
+
 const char *mainwindow_cmd_hl(struct mainwindow *w, char *arg)
 {
 	long long start = 0;
-	int len = 0;
-	sscanf(arg, "%I64d%d", &start, &len);
+	long long len = 0;
+	sscanf(arg, "%I64d%I64d", &start, &len);
 	w->hl_start = start;
 	w->hl_len = len;
 	if (w->interactive) {
@@ -1027,20 +1061,9 @@ const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd
 			cmdproc = mainwindow_cmd_lua;
 		}
 		break;
-	case 4:
-		if (!memcmp(start, "goto", 4)) {
-			cmdproc = mainwindow_cmd_goto;
-		} else if (!memcmp(start, "find", 4)) {
-			cmdproc = mainwindow_cmd_find_hex;
-		}
-		break;
-	case 8:
-		if (!memcmp(start, "findnext", 8)) {
-			cmdproc = mainwindow_cmd_findnext;
-		} else if (!memcmp(start, "findprev", 8)) {
-			cmdproc = mainwindow_cmd_findprev;
-		} else if (!memcmp(start, "findtext", 8)) {
-			cmdproc = mainwindow_cmd_find_text;
+	case 7:
+		if (!memcmp(start, "luafile", 7)) {
+			cmdproc = mainwindow_cmd_luafile;
 		}
 		break;
 	}
@@ -1053,7 +1076,7 @@ const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd
 void mainwindow_init_lua(struct mainwindow *w)
 {
 	// try not to initialize twice
-	assert(!w->lua_state);
+	assert(!w->lua);
 	lua_State *L = luaL_newstate();
 	luaL_openlibs(L);
 	// store `w` at REGISTRY[0]
@@ -1061,9 +1084,8 @@ void mainwindow_init_lua(struct mainwindow *w)
 	lua_pushlightuserdata(L, w);
 	lua_settable(L, LUA_REGISTRYINDEX);
 	// register C functions
-	lua_pushcfunction(L, lapi_getbyte);
-	lua_setglobal(L, "getbyte");
-	w->lua_state = L;
+	register_lua_functions(L);
+	w->lua = L;
 }
 
 static long long clamp(long long x, long long min, long long max)
@@ -1076,7 +1098,7 @@ static long long clamp(long long x, long long min, long long max)
 void mainwindow_update_monoedit_tags(struct mainwindow *w)
 {
 	long long start = w->hl_start;
-	int len = w->hl_len;
+	long long len = w->hl_len;
 	long long view_start = w->current_line * N_COL;
 	long long view_end = (w->current_line + w->nrows) * N_COL;
 	long long start_clamp = clamp(start, view_start, view_end) - view_start;
@@ -1115,4 +1137,12 @@ void mainwindow_update_monoedit_tags(struct mainwindow *w)
 			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
 		}
 	}
+}
+
+void mainwindow_set_tree(struct mainwindow *w, struct tree *tree)
+{
+	if (w->tree) {
+		tree_free(w->tree);
+	}
+	w->tree = tree;
 }

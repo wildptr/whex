@@ -22,6 +22,8 @@ struct cache_entry {
 	uint8_t *data;
 };
 
+struct tree;
+
 struct mainwindow {
 	HWND hwnd;
 	HWND monoedit;
@@ -48,10 +50,11 @@ struct mainwindow {
 	int charheight;
 	HFONT mono_font;
 	struct cache_entry cache[N_CACHE_BLOCK];
-	lua_State *lua_state;
+	lua_State *lua;
 	long long hl_start;
-	int hl_len;
+	long long hl_len;
 	bool interactive;
+	struct tree *tree;
 };
 
 typedef const char *(*cmdproc_t)(struct mainwindow *, char *);
@@ -88,19 +91,19 @@ int mainwindow_init_cache(struct mainwindow *w);
 const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd);
 void mainwindow_init_lua(struct mainwindow *w);
 void mainwindow_update_monoedit_tags(struct mainwindow *w);
+void mainwindow_set_tree(struct mainwindow *w, struct tree *tree);
 
 #define DECLARE_CMD(x) const char *x(struct mainwindow *, char *)
 
-DECLARE_CMD(mainwindow_cmd_find_text);
 DECLARE_CMD(mainwindow_cmd_find_hex);
-DECLARE_CMD(mainwindow_cmd_goto);
-DECLARE_CMD(mainwindow_cmd_findprev);
+DECLARE_CMD(mainwindow_cmd_find_text);
 DECLARE_CMD(mainwindow_cmd_findnext);
+DECLARE_CMD(mainwindow_cmd_findprev);
+DECLARE_CMD(mainwindow_cmd_goto);
+DECLARE_CMD(mainwindow_cmd_hl);
+DECLARE_CMD(mainwindow_cmd_lua);
+DECLARE_CMD(mainwindow_cmd_luafile);
 
 #undef DECLARE_CMD
-
-// Lua API
-
-int lapi_getbyte(lua_State *L);
 
 #endif

@@ -10,7 +10,7 @@ static struct mainwindow *get_mainwindow(lua_State *L)
 	return lua_touserdata(L, -1);
 }
 
-int lapi_getbyte(lua_State *L)
+int lapi_peek(lua_State *L)
 {
 	lua_Integer l_address = luaL_checkinteger(L, 1);
 	if (l_address < 0) {
@@ -79,10 +79,21 @@ int lapi_set_tree(lua_State *L)
 	return 0;
 }
 
-void register_lua_functions(lua_State *L)
+int lapi_filepath(lua_State *L)
 {
-	lua_pushcfunction(L, lapi_getbyte);
-	lua_setglobal(L, "getbyte");
+	struct mainwindow *w = get_mainwindow(L);
+	lua_pushstring(L, w->filepath);
+	return 1;
+}
+
+void register_lua_globals(lua_State *L)
+{
+	lua_newtable(L);
+	lua_pushcfunction(L, lapi_peek);
+	lua_setfield(L, -2, "peek");
+	lua_pushcfunction(L, lapi_filepath);
+	lua_setfield(L, -2, "filepath");
 	lua_pushcfunction(L, lapi_set_tree);
-	lua_setglobal(L, "set_tree");
+	lua_setfield(L, -2, "set_tree");
+	lua_setglobal(L, "whex");
 }

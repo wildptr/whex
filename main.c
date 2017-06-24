@@ -18,7 +18,8 @@ enum {
 	CONTROL_STATUS_BAR = 0x100
 };
 
-void register_lua_functions(lua_State *L);
+char *strdup(const char *);
+void register_lua_globals(lua_State *L);
 
 static bool iswordchar(char c)
 {
@@ -147,7 +148,8 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 	long long abs_line = w->current_line + buffer_line;
 	long long abs_line_end = abs_line + num_lines;
 	while (abs_line < abs_line_end) {
-		char *p = &w->monoedit_buffer[buffer_line*N_COL_CHAR];
+		char *line = &w->monoedit_buffer[buffer_line*N_COL_CHAR];
+		char *p = line;
 		long long address = abs_line << LOG2_N_COL;
 		if (abs_line >= w->total_lines) {
 			memset(p, ' ', N_COL_CHAR);
@@ -175,10 +177,11 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 			p += 2;
 			for (int j=0; j<end; j++) {
 				uint8_t b = w->cache[block].data[base|j];
-				p[j] = b < 0x20 || b > 0x7e ? '.' : b;
+				*p++ = b < 0x20 || b > 0x7e ? '.' : b;
 			}
-			for (int j=end; j<N_COL; j++) {
-				p[j] = ' ';
+			// fill the rest of the line with spaces
+			for (int j = p-line; j < N_COL_CHAR; j++) {
+				line[j] = ' ';
 			}
 		}
 		buffer_line++;
@@ -213,76 +216,78 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf, cons
 	const char *type_name = "unknown";
 	char value_buf[80];
 	value_buf[0] = 0;
-	switch (leaf->type) {
-		char *p;
-	case F_RAW:
-		type_name = "raw";
-		break;
-	case F_UINT:
-		switch (leaf->len) {
-			int ival;
-			int ival_hi;
-			long llval;
-		case 1:
-			type_name = "uint8";
-			ival = mainwindow_getbyte(w, leaf->start);
-			sprintf(value_buf, "%u (%02x)", ival, ival);
+	if (leaf) {
+		switch (leaf->type) {
+			char *p;
+		case F_RAW:
+			type_name = "raw";
 			break;
-		case 2:
-			type_name = "uint16";
-			ival = mainwindow_getbyte(w, leaf->start) |
-				mainwindow_getbyte(w, leaf->start + 1) << 8;
-			sprintf(value_buf, "%u (%04x)", ival, ival);
-			break;
-		case 4:
-			type_name = "uint32";
-			ival = mainwindow_getbyte(w, leaf->start)
-				| mainwindow_getbyte(w, leaf->start + 1) << 8
-				| mainwindow_getbyte(w, leaf->start + 2) << 16
-				| mainwindow_getbyte(w, leaf->start + 3) << 24;
-			sprintf(value_buf, "%u (%08x)", ival, ival);
-			break;
-		case 8:
-			type_name = "uint64";
-			ival = mainwindow_getbyte(w, leaf->start)
-				| mainwindow_getbyte(w, leaf->start + 1) << 8
-				| mainwindow_getbyte(w, leaf->start + 2) << 16
-				| mainwindow_getbyte(w, leaf->start + 3) << 24;
-			ival_hi = mainwindow_getbyte(w, leaf->start + 4)
-				| mainwindow_getbyte(w, leaf->start + 5) << 8
-				| mainwindow_getbyte(w, leaf->start + 6) << 16
-				| mainwindow_getbyte(w, leaf->start + 7) << 24;
-			llval = ((long long) ival_hi) << 32 | ival;
-			sprintf(value_buf, "%u (%016I64x)", llval, llval);
-			break;
-		default:
-			type_name = "uint";
-		}
-		break;
-	case F_INT:
-		// TODO
-		type_name = "int";
-		break;
-	case F_ASCII:
-		type_name = "ascii";
-		p = value_buf;
-		int n = leaf->len;
-		if (n > 16) n = 16;
-		*p++ = '"';
-		for (int i=0; i<n; i++) {
-			uint8_t b = mainwindow_getbyte(w, leaf->start + i);
-			if (b >= 0x20 && b < 0x7f) {
-				*p++ = b;
-			} else {
-				sprintf(p, "\\x%02x", b);
-				p += 4;
+		case F_UINT:
+			switch (leaf->len) {
+				int ival;
+				int ival_hi;
+				long llval;
+			case 1:
+				type_name = "uint8";
+				ival = mainwindow_getbyte(w, leaf->start);
+				sprintf(value_buf, "%u (%02x)", ival, ival);
+				break;
+			case 2:
+				type_name = "uint16";
+				ival = mainwindow_getbyte(w, leaf->start) |
+					mainwindow_getbyte(w, leaf->start + 1) << 8;
+				sprintf(value_buf, "%u (%04x)", ival, ival);
+				break;
+			case 4:
+				type_name = "uint32";
+				ival = mainwindow_getbyte(w, leaf->start)
+					| mainwindow_getbyte(w, leaf->start + 1) << 8
+					| mainwindow_getbyte(w, leaf->start + 2) << 16
+					| mainwindow_getbyte(w, leaf->start + 3) << 24;
+				sprintf(value_buf, "%u (%08x)", ival, ival);
+				break;
+			case 8:
+				type_name = "uint64";
+				ival = mainwindow_getbyte(w, leaf->start)
+					| mainwindow_getbyte(w, leaf->start + 1) << 8
+					| mainwindow_getbyte(w, leaf->start + 2) << 16
+					| mainwindow_getbyte(w, leaf->start + 3) << 24;
+				ival_hi = mainwindow_getbyte(w, leaf->start + 4)
+					| mainwindow_getbyte(w, leaf->start + 5) << 8
+					| mainwindow_getbyte(w, leaf->start + 6) << 16
+					| mainwindow_getbyte(w, leaf->start + 7) << 24;
+				llval = ((long long) ival_hi) << 32 | ival;
+				sprintf(value_buf, "%u (%016I64x)", llval, llval);
+				break;
+			default:
+				type_name = "uint";
 			}
+			break;
+		case F_INT:
+			// TODO
+			type_name = "int";
+			break;
+		case F_ASCII:
+			type_name = "ascii";
+			p = value_buf;
+			int n = leaf->len;
+			if (n > 16) n = 16;
+			*p++ = '"';
+			for (int i=0; i<n; i++) {
+				uint8_t b = mainwindow_getbyte(w, leaf->start + i);
+				if (b >= 0x20 && b < 0x7f) {
+					*p++ = b;
+				} else {
+					sprintf(p, "\\x%02x", b);
+					p += 4;
+				}
+			}
+			*p++ = '"';
+			if (n < leaf->len) {
+				sprintf(p, "...");
+			}
+			break;
 		}
-		*p++ = '"';
-		if (n < leaf->len) {
-			sprintf(p, "...");
-		}
-		break;
 	}
 	SendMessage(w->status_bar, SB_SETTEXT, 0, (LPARAM) type_name);
 	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) value_buf);
@@ -298,11 +303,15 @@ void mainwindow_update_field_info(struct mainwindow *w)
 		if (leaf) {
 			w->hl_start = leaf->start;
 			w->hl_len = leaf->len;
-			if (w->interactive) {
-				mainwindow_update_monoedit_tags(w);
-				InvalidateRect(w->monoedit, 0, FALSE);
-				mainwindow_update_status_text(w, leaf, path);
-			}
+		} else {
+			w->hl_start = 0;
+			w->hl_len = 0;
+			path[0] = 0;
+		}
+		if (w->interactive) {
+			mainwindow_update_monoedit_tags(w);
+			InvalidateRect(w->monoedit, 0, FALSE);
+			mainwindow_update_status_text(w, leaf, path);
 		}
 	}
 }
@@ -621,7 +630,7 @@ monoedit_wndproc(HWND hwnd,
 			SetFocus(hwnd);
 			int cx = x / w->charwidth;
 			int cy = y / w->charheight;
-			if (cx >= 10 && cx < 10+N_COL*3) {
+			if (cx >= 10 && cx < 10+N_COL*3 && cy < w->nrows) {
 				cx = (cx-10)/3;
 				long long pos = ((w->current_line + cy) << LOG2_N_COL) + cx;
 				if (pos < w->file_size) {
@@ -808,7 +817,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 
 	// create status bar
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
-					"status bar",
+					NULL,
 					hwnd,
 					CONTROL_STATUS_BAR);
 	int parts[] = { 64, 192, -1 };
@@ -829,8 +838,8 @@ void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
 			mainwindow_update_monoedit_buffer(w, w->nrows, new_nrows - w->nrows);
 			mainwindow_update_monoedit_tags(w);
 		}
-		w->nrows = new_nrows;
 	}
+	w->nrows = new_nrows;
 	SendMessage(w->monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/w->charheight);
 	SetWindowPos(w->monoedit,
 		     0,
@@ -838,7 +847,10 @@ void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
 		     0,
 		     width,
 		     height,
-		     SWP_NOMOVE | SWP_NOZORDER);
+		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
+	if (w->interactive) {
+		InvalidateRect(w->monoedit, 0, FALSE);
+	}
 }
 
 LRESULT CALLBACK
@@ -937,6 +949,9 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
 	char errtext[512];
 
+	if (w->file != INVALID_HANDLE_VALUE) {
+		CloseHandle(w->file);
+	}
 	w->file = CreateFile(path,
 			    GENERIC_READ,
 			    FILE_SHARE_READ,
@@ -949,6 +964,10 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 		fprintf(stderr, errfmt_open, path, errtext);
 		return -1;
 	}
+	if (w->filepath) {
+		free(w->filepath);
+	}
+	w->filepath = strdup(path);
 	DWORD file_size_high;
 	w->file_size = GetFileSize(w->file, &file_size_high);
 	if (w->file_size == 0xffffffff) {
@@ -968,9 +987,12 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 	if (w->file_size&(N_COL-1)) {
 		w->total_lines += 1;
 	}
+	// invalidate cache
+	for (int i=0; i<N_CACHE_BLOCK; i++) {
+		w->cache[i].tag = 0;
+	}
 	return 0;
 }
-
 
 int mainwindow_init_cache(struct mainwindow *w)
 {
@@ -1023,6 +1045,7 @@ WinMain(HINSTANCE instance,
 	}
 	// initialize mainwindow struct
 	w = calloc(1, sizeof *w);
+	w->file = INVALID_HANDLE_VALUE;
 	w->interactive = true;
 	if (mainwindow_open_file(w, cmdline) < 0) {
 		return 1;
@@ -1098,11 +1121,17 @@ const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
 	int error;
 	lua_State *L = w->lua;
 
+	bool saved_interactive = w->interactive;
+	w->interactive = false;
 	error = luaL_loadbuffer(L, arg, strlen(arg), "line") ||
 		lua_pcall(L, 0, 0, 0);
+	w->interactive = saved_interactive;
 	if (error) {
 		const char *err = lua_tostring(L, -1);
 		return err;
+	}
+	if (w->interactive) {
+		mainwindow_update_ui(w);
 	}
 	return 0;
 }
@@ -1119,10 +1148,16 @@ const char *mainwindow_cmd_luafile(struct mainwindow *w, char *arg)
 	int error;
 	lua_State *L = w->lua;
 
+	bool saved_interactive = w->interactive;
+	w->interactive = false;
 	error = luaL_loadfile(L, start) || lua_pcall(L, 0, 0, 0);
+	w->interactive = saved_interactive;
 	if (error) {
 		const char *err = lua_tostring(L, -1);
 		return err;
+	}
+	if (w->interactive) {
+		mainwindow_update_ui(w);
 	}
 	return 0;
 }
@@ -1151,10 +1186,16 @@ const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd
 	char *end = p;
 	cmdproc_t cmdproc = 0;
 	switch (end-start) {
+	case 1:
+		if (!memcmp(start, "e", 1)) {
+			cmdproc = mainwindow_cmd_edit;
+		}
+		break;
 	case 2:
 		if (!memcmp(start, "hl", 2)) {
 			cmdproc = mainwindow_cmd_hl;
 		}
+		break;
 	case 3:
 		if (!memcmp(start, "lua", 3)) {
 			cmdproc = mainwindow_cmd_lua;
@@ -1183,7 +1224,7 @@ void mainwindow_init_lua(struct mainwindow *w)
 	lua_pushlightuserdata(L, w);
 	lua_settable(L, LUA_REGISTRYINDEX);
 	// register C functions
-	register_lua_functions(L);
+	register_lua_globals(L);
 	w->lua = L;
 }
 
@@ -1244,4 +1285,33 @@ void mainwindow_set_tree(struct mainwindow *w, struct tree *tree)
 		tree_free(w->tree);
 	}
 	w->tree = tree;
+}
+
+void mainwindow_update_ui(struct mainwindow *w)
+{
+	mainwindow_update_monoedit_buffer(w, 0, w->nrows);
+	mainwindow_update_monoedit_tags(w);
+	mainwindow_update_cursor_pos(w);
+	InvalidateRect(w->monoedit, 0, FALSE);
+}
+
+const char *mainwindow_cmd_edit(struct mainwindow *w, char *arg)
+{
+	while (*arg == ' ') arg++;
+	char *start = arg;
+	while (*arg && *arg != ' ') arg++;
+	if (*arg) {
+		return "trailing character";
+	}
+
+	if (mainwindow_open_file(w, start)) {
+		return "failed to open file";
+	}
+	w->current_line = 0;
+	w->cursor_y = 0;
+	w->cursor_x = 0;
+	if (w->interactive) {
+		mainwindow_update_ui(w);
+	}
+	return 0;
 }

@@ -202,6 +202,10 @@ monoedit_wndproc(HWND hwnd,
 			SendMessage(parent, WM_CHAR, wparam, lparam);
 			return 0;
 		}
+	case WM_ERASEBKGND:
+		// pretend that the background has been erased in order to
+		// prevent flickering
+		return TRUE;
 	}
 	return DefWindowProc(hwnd, message, wparam, lparam);
 }

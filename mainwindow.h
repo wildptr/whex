@@ -33,6 +33,7 @@ struct mainwindow {
 	long long file_size;
 	long long total_lines;
 	HANDLE file;
+	char *filepath;
 	char *monoedit_buffer;
 	/* capacity of buffer, in lines (80 bytes per line) */
 	int monoedit_buffer_cap_lines;
@@ -93,9 +94,11 @@ const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd
 void mainwindow_init_lua(struct mainwindow *w);
 void mainwindow_update_monoedit_tags(struct mainwindow *w);
 void mainwindow_set_tree(struct mainwindow *w, struct tree *tree);
+void mainwindow_update_ui(struct mainwindow *w);
 
 #define DECLARE_CMD(x) const char *x(struct mainwindow *, char *)
 
+DECLARE_CMD(mainwindow_cmd_edit);
 DECLARE_CMD(mainwindow_cmd_find_hex);
 DECLARE_CMD(mainwindow_cmd_find_text);
 DECLARE_CMD(mainwindow_cmd_findnext);

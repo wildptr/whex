@@ -1,4 +1,4 @@
 parser = require 'pe'
-file = io.open('whex.exe', 'rb')
+file = io.open(whex.filepath(), 'rb')
 tree = parser.parse(file)
-set_tree(tree)
+whex.set_tree(tree)

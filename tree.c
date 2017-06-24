@@ -39,18 +39,21 @@ void tree_print(struct tree *tree)
 	print_rec(tree, 0);
 }
 
-struct tree *tree_lookup(struct tree *tree, long long addr)
+struct tree *tree_lookup(struct tree *tree, long long addr, char *path, int path_len)
 {
 	if (addr < tree->start || addr >= tree->start + tree->len) {
 		// out of bounds
 		return 0;
 	}
 	if (tree->n_child <= 0) {
+		snprintf(path, path_len, "%s", tree->name);
 		// leaf node reached
 		return tree;
 	}
 	for (int i=0; i<tree->n_child; i++) {
-		struct tree *result = tree_lookup(tree->children[i], addr);
+		int nc;
+		snprintf(path, path_len, "%s.%n", tree->name, &nc);
+		struct tree *result = tree_lookup(tree->children[i], addr, path+nc, path_len-nc);
 		if (result) return result;
 	}
 	// `addr` falls within gap

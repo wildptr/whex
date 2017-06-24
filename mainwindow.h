@@ -55,6 +55,7 @@ struct mainwindow {
 	long long hl_len;
 	bool interactive;
 	struct tree *tree;
+	HWND status_bar;
 };
 
 typedef const char *(*cmdproc_t)(struct mainwindow *, char *);

@@ -7,10 +7,16 @@
 #include "monoedit.h"
 #include "tree.h"
 
+#include <commctrl.h>
+
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 5
 #define N_COL (1<<LOG2_N_COL)
 #define N_COL_CHAR (16+4*N_COL)
+
+enum {
+	CONTROL_STATUS_BAR = 0x100
+};
 
 void register_lua_functions(lua_State *L);
 
@@ -197,7 +203,107 @@ void mainwindow_goto_line(struct mainwindow *w, long long line)
 	if (w->interactive) {
 		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
 		mainwindow_update_monoedit_tags(w);
+		mainwindow_update_cursor_pos(w);
 		InvalidateRect(w->monoedit, 0, FALSE);
+	}
+}
+
+void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf, const char *path)
+{
+	const char *type_name = "unknown";
+	char value_buf[80];
+	value_buf[0] = 0;
+	switch (leaf->type) {
+		char *p;
+	case F_RAW:
+		type_name = "raw";
+		break;
+	case F_UINT:
+		switch (leaf->len) {
+			int ival;
+			int ival_hi;
+			long llval;
+		case 1:
+			type_name = "uint8";
+			ival = mainwindow_getbyte(w, leaf->start);
+			sprintf(value_buf, "%u (%02x)", ival, ival);
+			break;
+		case 2:
+			type_name = "uint16";
+			ival = mainwindow_getbyte(w, leaf->start) |
+				mainwindow_getbyte(w, leaf->start + 1) << 8;
+			sprintf(value_buf, "%u (%04x)", ival, ival);
+			break;
+		case 4:
+			type_name = "uint32";
+			ival = mainwindow_getbyte(w, leaf->start)
+				| mainwindow_getbyte(w, leaf->start + 1) << 8
+				| mainwindow_getbyte(w, leaf->start + 2) << 16
+				| mainwindow_getbyte(w, leaf->start + 3) << 24;
+			sprintf(value_buf, "%u (%08x)", ival, ival);
+			break;
+		case 8:
+			type_name = "uint64";
+			ival = mainwindow_getbyte(w, leaf->start)
+				| mainwindow_getbyte(w, leaf->start + 1) << 8
+				| mainwindow_getbyte(w, leaf->start + 2) << 16
+				| mainwindow_getbyte(w, leaf->start + 3) << 24;
+			ival_hi = mainwindow_getbyte(w, leaf->start + 4)
+				| mainwindow_getbyte(w, leaf->start + 5) << 8
+				| mainwindow_getbyte(w, leaf->start + 6) << 16
+				| mainwindow_getbyte(w, leaf->start + 7) << 24;
+			llval = ((long long) ival_hi) << 32 | ival;
+			sprintf(value_buf, "%u (%016I64x)", llval, llval);
+			break;
+		default:
+			type_name = "uint";
+		}
+		break;
+	case F_INT:
+		// TODO
+		type_name = "int";
+		break;
+	case F_ASCII:
+		type_name = "ascii";
+		p = value_buf;
+		int n = leaf->len;
+		if (n > 16) n = 16;
+		*p++ = '"';
+		for (int i=0; i<n; i++) {
+			uint8_t b = mainwindow_getbyte(w, leaf->start + i);
+			if (b >= 0x20 && b < 0x7f) {
+				*p++ = b;
+			} else {
+				sprintf(p, "\\x%02x", b);
+				p += 4;
+			}
+		}
+		*p++ = '"';
+		if (n < leaf->len) {
+			sprintf(p, "...");
+		}
+		break;
+	}
+	SendMessage(w->status_bar, SB_SETTEXT, 0, (LPARAM) type_name);
+	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) value_buf);
+	SendMessage(w->status_bar, SB_SETTEXT, 2, (LPARAM) path);
+}
+
+// should be invoked when cursor_pos is changed in interactive mode
+void mainwindow_update_field_info(struct mainwindow *w)
+{
+	char path[512];
+	if (w->tree) {
+		struct tree *leaf = tree_lookup(w->tree, mainwindow_cursor_pos(w), path, sizeof path);
+		if (leaf) {
+			w->hl_start = leaf->start;
+			w->hl_len = leaf->len;
+			if (w->interactive) {
+				mainwindow_update_monoedit_tags(w);
+				InvalidateRect(w->monoedit, 0, FALSE);
+				mainwindow_update_status_text(w, leaf, path);
+			}
+		}
 	}
 }
 
@@ -207,17 +313,7 @@ void mainwindow_update_cursor_pos(struct mainwindow *w)
 		    MONOEDIT_WM_SET_CURSOR_POS,
 		    10+w->cursor_x*3,
 		    w->cursor_y);
-	if (w->tree) {
-		struct tree *leaf = tree_lookup(w->tree, mainwindow_cursor_pos(w));
-		if (leaf) {
-			w->hl_start = leaf->start;
-			w->hl_len = leaf->len;
-			if (w->interactive) {
-				mainwindow_update_monoedit_tags(w);
-				InvalidateRect(w->monoedit, 0, FALSE);
-			}
-		}
-	}
+	mainwindow_update_field_info(w);
 }
 
 long long mainwindow_cursor_pos(struct mainwindow *w)
@@ -261,10 +357,16 @@ char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 				return "invalid argument";
 			}
 			patlen = p - start;
+			if (patlen == 0) {
+				return "empty pattern";
+			}
 			pat = start;
 		}
 	} else {
 		int slen = strlen((char*)p);
+		if (slen == 0) {
+			return "empty pattern";
+		}
 		if (slen&1 || !slen) {
 			return "invalid argument";
 		}
@@ -347,6 +449,7 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, 0, 1);
 			mainwindow_update_monoedit_tags(w);
+			mainwindow_update_cursor_pos(w);
 		}
 	}
 }
@@ -360,6 +463,7 @@ void mainwindow_scroll_down_line(struct mainwindow *w)
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, w->nrows-1, 1);
 			mainwindow_update_monoedit_tags(w);
+			mainwindow_update_cursor_pos(w);
 		}
 	}
 }
@@ -411,6 +515,7 @@ void mainwindow_scroll_up_page(struct mainwindow *w)
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, 0, w->nrows);
 			mainwindow_update_monoedit_tags(w);
+			mainwindow_update_cursor_pos(w);
 			InvalidateRect(w->monoedit, 0, FALSE);
 		}
 	} else {
@@ -421,6 +526,7 @@ void mainwindow_scroll_up_page(struct mainwindow *w)
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, 0, delta);
 			mainwindow_update_monoedit_tags(w);
+			mainwindow_update_cursor_pos(w);
 		}
 	}
 }
@@ -432,6 +538,7 @@ void mainwindow_scroll_down_page(struct mainwindow *w)
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, 0, w->nrows);
 			mainwindow_update_monoedit_tags(w);
+			mainwindow_update_cursor_pos(w);
 			InvalidateRect(w->monoedit, 0, FALSE);
 		}
 	} else {
@@ -442,6 +549,7 @@ void mainwindow_scroll_down_page(struct mainwindow *w)
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, w->nrows-delta, delta);
 			mainwindow_update_monoedit_tags(w);
+			mainwindow_update_cursor_pos(w);
 		}
 	}
 }
@@ -459,29 +567,6 @@ void mainwindow_move_down_page(struct mainwindow *w)
 		mainwindow_scroll_down_page(w);
 	}
 }
-
-#if 0
-void mainwindow_add_char_to_command(struct mainwindow *w, char c)
-{
-	HWND cmdedit = w->cmdedit;
-	int len = w->cmd_len;
-	if (c == 8) {
-		// backspace
-		if (len > 0) {
-			SendMessage(cmdedit, EM_SETSEL, len-1, len);
-			SendMessage(cmdedit, EM_REPLACESEL, TRUE, (LPARAM) "");
-			w->cmd[--w->cmd_len] = 0;
-		}
-	} else {
-		char str[2] = {c};
-		if (len < w->cmd_cap) {
-			SendMessage(cmdedit, EM_SETSEL, len, len);
-			SendMessage(cmdedit, EM_REPLACESEL, TRUE, (LPARAM) str);
-			w->cmd[w->cmd_len++] = c;
-		}
-	}
-}
-#endif
 
 int mainwindow_handle_char(struct mainwindow *w, int c)
 {
@@ -673,6 +758,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	HWND hwnd = w->hwnd;
 	HWND monoedit;
 	HWND cmdedit;
+	HWND status_bar;
 
 	HINSTANCE instance = create->hInstance;
 	/* create and initialize MonoEdit */
@@ -701,6 +787,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	w->monoedit_wndproc = (WNDPROC) SetWindowLong(monoedit, GWL_WNDPROC, (LONG) monoedit_wndproc);
 	SetFocus(monoedit);
 	mainwindow_update_cursor_pos(w);
+
 	/* create command area */
 	cmdedit = CreateWindow("EDIT",
 				   "",
@@ -718,6 +805,15 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	// subclass command window
 	SetWindowLong(cmdedit, GWL_USERDATA, (LONG) w);
 	w->cmdedit_wndproc = (WNDPROC) SetWindowLong(cmdedit, GWL_WNDPROC, (LONG) cmdedit_wndproc);
+
+	// create status bar
+	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
+					"status bar",
+					hwnd,
+					CONTROL_STATUS_BAR);
+	int parts[] = { 64, 192, -1 };
+	SendMessage(status_bar, SB_SETPARTS, 3, (LPARAM) parts);
+	w->status_bar = status_bar;
 }
 
 void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
@@ -771,14 +867,15 @@ wndproc(HWND hwnd,
 		return 0;
 	case WM_SIZE:
 		{
+			// adjust status bar geometry automatically
+			SendMessage(w->status_bar, WM_SIZE, 0, 0);
+			RECT status_bar_rect;
+			GetWindowRect(w->status_bar, &status_bar_rect);
+			// translate top-left from screen to client
+			ScreenToClient(w->hwnd, (LPPOINT) &status_bar_rect);
 			int width  = LOWORD(lparam);
-			int height = HIWORD(lparam);
-			int cmd_y;
-			if (height >= w->charheight) {
-				cmd_y = height - w->charheight;
-			} else {
-				cmd_y = 0;
-			}
+			//int height = HIWORD(lparam);
+			int cmd_y = status_bar_rect.top - w->charheight;
 			mainwindow_resize_monoedit(w, width, cmd_y);
 			SetWindowPos(w->cmdedit,
 				     0,
@@ -909,6 +1006,7 @@ WinMain(HINSTANCE instance,
 	char filepath[512];
 	struct mainwindow *w;
 
+	InitCommonControls();
 	if (!monoedit_register_class()) {
 		return 1;
 	}
@@ -917,6 +1015,7 @@ WinMain(HINSTANCE instance,
 	}
 	if (!cmdline[0]) {
 		// no command line argument
+
 		if (file_chooser_dialog(filepath, sizeof filepath) < 0) {
 			return 1;
 		}
@@ -933,15 +1032,15 @@ WinMain(HINSTANCE instance,
 	}
 	mainwindow_init_font(w);
 	mainwindow_init_lua(w);
-	RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
-	AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+	//RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
+	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hwnd = CreateWindow("MonoEditDemo", // class name
 				 "Whex", // window title
 				 WS_OVERLAPPEDWINDOW, // window style
 				 CW_USEDEFAULT, // initial x position
 				 CW_USEDEFAULT, // initial y position
-				 rect.right - rect.left, // initial width
-				 rect.bottom - rect.top, // initial height
+				 CW_USEDEFAULT, // initial width
+				 CW_USEDEFAULT, // initial height
 				 0,
 				 0,
 				 instance,

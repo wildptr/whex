@@ -39,6 +39,19 @@ static struct tree *convert_tree(lua_State *L)
 	tree->name = strdup(luaL_checkstring(L, -1));
 	lua_pop(L, 1);
 
+	lua_getfield(L, -1, "value");
+	switch (lua_type(L, -1)) {
+	case LUA_TNUMBER:
+		tree->type = F_UINT;
+		break;
+	case LUA_TSTRING:
+		tree->type = F_ASCII;
+		break;
+	default:
+		tree->type = F_RAW;
+	}
+	lua_pop(L, 1);
+
 	lua_getfield(L, -1, "children");
 	// top of stack is array of children
 	int n = lua_rawlen(L, -1); // get number of children

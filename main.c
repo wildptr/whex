@@ -33,6 +33,8 @@ bool mainwindow_cache_valid(struct mainwindow *w, int block)
 
 int mainwindow_find_cache(struct mainwindow *w, long long address)
 {
+	assert(address >= 0 && address < w->file_size);
+
 	static int next_cache = 0;
 
 	for (int i=0; i<N_CACHE_BLOCK; i++) {
@@ -924,6 +926,7 @@ wndproc(HWND hwnd,
 			int width  = LOWORD(lparam);
 			//int height = HIWORD(lparam);
 			int cmd_y = status_bar_rect.top - w->charheight;
+			if (cmd_y < 0) cmd_y = 0;
 			mainwindow_resize_monoedit(w, width, cmd_y);
 			SetWindowPos(w->cmdedit,
 				     0,
@@ -979,6 +982,7 @@ static void format_error_code(char *buf, size_t buflen, DWORD error_code)
 		      0);
 }
 
+// usually you want to update UI after this
 int mainwindow_open_file(struct mainwindow *w, const char *path)
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
@@ -1105,6 +1109,7 @@ WinMain(HINSTANCE instance,
 				 instance,
 				 w); // window-creation data
 	ShowWindow(hwnd, show);
+	mainwindow_update_ui(w);
 	MSG msg;
 	while (GetMessage(&msg, 0, 0, 0)) {
 		TranslateMessage(&msg);

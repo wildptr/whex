@@ -323,6 +323,7 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 {
 	if (w->current_line) {
 		w->current_line--;
+		w->cursor_pos -= N_COL;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
 		memmove(w->monoedit_buffer+N_COL_CHAR, w->monoedit_buffer, N_COL_CHAR*(w->nrows-1));
 		if (w->interactive) {
@@ -334,8 +335,9 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 
 void mainwindow_scroll_down_line(struct mainwindow *w)
 {
-	if (w->current_line < w->total_lines) {
+	if (w->cursor_pos + N_COL < w->file_size) {
 		w->current_line++;
+		w->cursor_pos += N_COL;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
 		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR, N_COL_CHAR*(w->nrows-1));
 		if (w->interactive) {
@@ -447,79 +449,44 @@ void mainwindow_move_down_page(struct mainwindow *w)
 	}
 }
 
-int mainwindow_char_handler_command(struct mainwindow *w, int c)
-{
-	const char *errmsg = 0;
-
-	switch (c) {
-	case '\r':
-		switch (w->cmd[0]) {
-		case '/':
-			mainwindow_execute_command(w, mainwindow_cmd_find_text, w->cmd+1);
-			break;
-		case ':':
-			errmsg = mainwindow_parse_and_execute_command(w, w->cmd+1);
-			break;
-		case '\\':
-			mainwindow_execute_command(w, mainwindow_cmd_find_hex, w->cmd+1);
-			break;
-		case 'g':
-			mainwindow_execute_command(w, mainwindow_cmd_goto, w->cmd+1);
-			break;
-		}
-		if (errmsg) {
-			puts(errmsg);
-		}
-		/* fallthrough */
-	case 27: // escape
-		w->char_handler = mainwindow_char_handler_normal;
-		return 1;
-	default:
-		return 0;
-	}
-}
-
+#if 0
 void mainwindow_add_char_to_command(struct mainwindow *w, char c)
 {
-	HWND status_edit = w->status_edit;
+	HWND cmdedit = w->cmdedit;
 	int len = w->cmd_len;
 	if (c == 8) {
 		// backspace
 		if (len > 0) {
-			SendMessage(status_edit, EM_SETSEL, len-1, len);
-			SendMessage(status_edit, EM_REPLACESEL, TRUE, (LPARAM) "");
+			SendMessage(cmdedit, EM_SETSEL, len-1, len);
+			SendMessage(cmdedit, EM_REPLACESEL, TRUE, (LPARAM) "");
 			w->cmd[--w->cmd_len] = 0;
 		}
 	} else {
 		char str[2] = {c};
 		if (len < w->cmd_cap) {
-			SendMessage(status_edit, EM_SETSEL, len, len);
-			SendMessage(status_edit, EM_REPLACESEL, TRUE, (LPARAM) str);
+			SendMessage(cmdedit, EM_SETSEL, len, len);
+			SendMessage(cmdedit, EM_REPLACESEL, TRUE, (LPARAM) str);
 			w->cmd[w->cmd_len++] = c;
 		}
 	}
 }
+#endif
 
-int mainwindow_char_handler_normal(struct mainwindow *w, int c)
+int mainwindow_handle_char(struct mainwindow *w, int c)
 {
 	switch (c) {
+		char buf[2];
 	case '/':
 	case ':':
 	case '\\':
 	case 'g':
-		w->char_handler = mainwindow_char_handler_command;
-		return 0;
-	case '1':
-	case '2':
-	case '3':
-	case '4':
-	case '5':
-	case '6':
-	case '7':
-	case '8':
-	case '9':
-		w->cmd_arg = w->cmd_arg*10 + (c-'0');
-		return 0;
+		buf[0] = c;
+		buf[1] = 0;
+		SetWindowText(w->cmdedit, buf);
+		SetFocus(w->cmdedit);
+		// place caret at end of text
+		SendMessage(w->cmdedit, EM_SETSEL, 1, 1);
+		return 1;
 	case 'N':
 		mainwindow_execute_command(w, mainwindow_cmd_findprev, 0);
 		return 1;
@@ -558,7 +525,7 @@ monoedit_wndproc(HWND hwnd,
 			SetFocus(hwnd);
 			int cx = x / w->charwidth;
 			int cy = y / w->charheight;
-			if (cx >= 10 && cx < 58) {
+			if (cx >= 10 && cx < 10+N_COL*3) {
 				cx = (cx-10)/3;
 				long long pos = ((w->current_line + cy) << LOG2_N_COL) + cx;
 				if (pos < w->file_size) {
@@ -600,8 +567,72 @@ monoedit_wndproc(HWND hwnd,
 			break;
 		}
 		return 0;
+	case WM_MOUSEWHEEL:
+		{
+			int delta = (short) HIWORD(wparam);
+			if (delta > 0) {
+				int n = delta / WHEEL_DELTA;
+				while (n--) {
+					mainwindow_scroll_up_line(w);
+				}
+			} else {
+				int n = (-delta) / WHEEL_DELTA;
+				while (n--) {
+					mainwindow_scroll_down_line(w);
+				}
+			}
+		}
+		return 0;
 	}
 	return CallWindowProc(w->monoedit_wndproc, hwnd, message, wparam, lparam);
+}
+
+LRESULT CALLBACK
+cmdedit_wndproc(HWND hwnd,
+		 UINT message,
+		 WPARAM wparam,
+		 LPARAM lparam)
+{
+	struct mainwindow *w = GetWindowLong(hwnd, GWL_USERDATA);
+
+	switch (message) {
+	case WM_CHAR:
+		switch (wparam) {
+			char *cmd;
+			int buf_len;
+			const char *errmsg;
+		case '\r':
+			buf_len = GetWindowTextLength(hwnd)+1;
+			cmd = malloc(buf_len);
+			GetWindowText(hwnd, cmd, buf_len);
+			errmsg = 0;
+			switch (cmd[0]) {
+			case '/':
+				mainwindow_execute_command(w, mainwindow_cmd_find_text, cmd+1);
+				break;
+			case ':':
+				errmsg = mainwindow_parse_and_execute_command(w, cmd+1);
+				break;
+			case '\\':
+				mainwindow_execute_command(w, mainwindow_cmd_find_hex, cmd+1);
+				break;
+			case 'g':
+				mainwindow_execute_command(w, mainwindow_cmd_goto, cmd+1);
+				break;
+			}
+			free(cmd);
+			if (errmsg) {
+				MessageBox(w->hwnd, errmsg, "Error", MB_ICONERROR);
+			}
+			// fallthrough
+		case 27: // escape
+			SetWindowText(hwnd, "");
+			SetFocus(w->monoedit);
+			return 0;
+		}
+	}
+
+	return CallWindowProc(w->cmdedit_wndproc, hwnd, message, wparam, lparam);
 }
 
 void mainwindow_init_font(struct mainwindow *w)
@@ -631,7 +662,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 {
 	HWND hwnd = w->hwnd;
 	HWND monoedit;
-	HWND status_edit;
+	HWND cmdedit;
 
 	HINSTANCE instance = create->hInstance;
 	/* create and initialize MonoEdit */
@@ -661,7 +692,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	SetFocus(monoedit);
 	mainwindow_update_cursor_pos(w);
 	/* create command area */
-	status_edit = CreateWindow("EDIT",
+	cmdedit = CreateWindow("EDIT",
 				   "",
 				   WS_CHILD | WS_VISIBLE,
 				   CW_USEDEFAULT,
@@ -672,8 +703,11 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 				   0,
 				   instance,
 				   0);
-	w->status_edit = status_edit;
-	SendMessage(status_edit, WM_SETFONT, (WPARAM) w->mono_font, 0);
+	SendMessage(cmdedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
+	w->cmdedit = cmdedit;
+	// subclass command window
+	SetWindowLong(cmdedit, GWL_USERDATA, (LONG) w);
+	w->cmdedit_wndproc = (WNDPROC) SetWindowLong(cmdedit, GWL_WNDPROC, (LONG) cmdedit_wndproc);
 }
 
 void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
@@ -712,9 +746,6 @@ wndproc(HWND hwnd,
 	case WM_NCCREATE:
 		w = ((LPCREATESTRUCT)lparam)->lpCreateParams;
 		w->hwnd = hwnd;
-		w->char_handler = mainwindow_char_handler_normal;
-		w->cmd_cap = 64;
-		w->cmd = calloc(1, w->cmd_cap);
 		SetWindowLong(hwnd, 0, (LONG) w);
 		return TRUE;
 	case WM_NCDESTROY:
@@ -739,7 +770,7 @@ wndproc(HWND hwnd,
 				cmd_y = 0;
 			}
 			mainwindow_resize_monoedit(w, width, cmd_y);
-			SetWindowPos(w->status_edit,
+			SetWindowPos(w->cmdedit,
 				     0,
 				     0,
 				     cmd_y,
@@ -749,13 +780,8 @@ wndproc(HWND hwnd,
 		}
 		return 0;
 	case WM_CHAR:
-		if (w->char_handler(w, wparam)) {
-			memset(w->cmd, 0, w->cmd_len);
-			w->cmd_len = 0;
-			w->cmd_arg = 0;
-			SetWindowText(w->status_edit, "");
+		if (mainwindow_handle_char(w, wparam)) {
 		} else {
-			mainwindow_add_char_to_command(w, wparam);
 		}
 		return 0;
 	}

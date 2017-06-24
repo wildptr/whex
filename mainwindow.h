@@ -25,14 +25,9 @@ struct cache_entry {
 struct mainwindow {
 	HWND hwnd;
 	HWND monoedit;
-	HWND status_edit;
+	HWND cmdedit;
 	/* returns 1 if a full command has been recognized or the character is
 	 * not recognized, 0 otherwise */
-	int (*char_handler)(struct mainwindow *w, int c);
-	int cmd_cap;
-	int cmd_len;
-	char *cmd;
-	int cmd_arg;
 	long long file_size;
 	long long total_lines;
 	HANDLE file;
@@ -43,7 +38,8 @@ struct mainwindow {
 	/* number of lines displayed */
 	int nrows;
 	WNDPROC monoedit_wndproc;
-	/* invariant: cursor_pos = (current_line + cursor_y) * 16 + cursor_x */
+	WNDPROC cmdedit_wndproc;
+	/* invariant: cursor_pos = (current_line + cursor_y) * N_COL + cursor_x */
 	/* current position in file */
 	long long cursor_pos;
 	int cursor_x;
@@ -84,8 +80,6 @@ void mainwindow_scroll_up_page(struct mainwindow *w);
 void mainwindow_scroll_down_page(struct mainwindow *w);
 void mainwindow_move_up_page(struct mainwindow *w);
 void mainwindow_move_down_page(struct mainwindow *w);
-int mainwindow_char_handler_normal(struct mainwindow *w, int c);
-int mainwindow_char_handler_command(struct mainwindow *w, int c);
 void mainwindow_add_char_to_command(struct mainwindow *w, char c);
 void mainwindow_init_font(struct mainwindow *w);
 void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create);

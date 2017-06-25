@@ -597,9 +597,6 @@ int mainwindow_handle_char(struct mainwindow *w, int c)
 	case '/':
 	case ':':
 	case '\\':
-	case 'b':
-		mainwindow_move_prev_field(w);
-		return 1;
 	case 'g':
 		buf[0] = c;
 		buf[1] = 0;
@@ -610,6 +607,9 @@ int mainwindow_handle_char(struct mainwindow *w, int c)
 		return 1;
 	case 'N':
 		mainwindow_execute_command(w, mainwindow_cmd_findprev, 0);
+		return 1;
+	case 'b':
+		mainwindow_move_prev_field(w);
 		return 1;
 	case 'h':
 		mainwindow_move_left(w);
@@ -1111,7 +1111,6 @@ WinMain(HINSTANCE instance,
 		DispatchMessage(&msg);
 	}
 	// window closed now
-	CloseHandle(w->file);
 	return msg.wParam;
 }
 
@@ -1179,6 +1178,15 @@ const char *mainwindow_cmd_luafile(struct mainwindow *w, char *arg)
 	while (*arg && *arg != ' ') arg++;
 	if (*arg) {
 		return "trailing character";
+	}
+
+	// if in interactive mode and argument is empty, pop up file chooser dialog
+	char path[512];
+	if (!*start && w->interactive) {
+		if (file_chooser_dialog(path, sizeof path) < 0) {
+			return 0;
+		}
+		start = path;
 	}
 
 	int error;

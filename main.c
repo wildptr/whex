@@ -156,7 +156,7 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 		} else {
 			int block = mainwindow_find_cache(w, address);
 			int base = address & 0xfff;
-			sprintf(p, "%08x: ", address);
+			sprintf(p, "%08I64x: ", address);
 			p += 10;
 			int end = 0;
 		       	if (abs_line+1 >= w->total_lines) {
@@ -257,7 +257,7 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf, cons
 					| mainwindow_getbyte(w, leaf->start + 6) << 16
 					| mainwindow_getbyte(w, leaf->start + 7) << 24;
 				llval = ((long long) ival_hi) << 32 | ival;
-				sprintf(value_buf, "%u (%016I64x)", llval, llval);
+				sprintf(value_buf, "%I64u (%016I64x)", llval, llval);
 				break;
 			default:
 				type_name = "uint";
@@ -620,7 +620,7 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct mainwindow *w = GetWindowLong(hwnd, GWL_USERDATA);
+	struct mainwindow *w = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (message) {
 	case WM_LBUTTONDOWN:
@@ -697,7 +697,7 @@ cmdedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct mainwindow *w = GetWindowLong(hwnd, GWL_USERDATA);
+	struct mainwindow *w = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (message) {
 	case WM_CHAR:
@@ -792,12 +792,12 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	SendMessage(monoedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
 	mainwindow_update_monoedit_buffer(w, 0, INITIAL_N_ROW);
 	/* subclass monoedit window */
-	SetWindowLong(monoedit, GWL_USERDATA, (LONG) w);
-	w->monoedit_wndproc = (WNDPROC) SetWindowLong(monoedit, GWL_WNDPROC, (LONG) monoedit_wndproc);
+	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) w);
+	w->monoedit_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) monoedit_wndproc);
 	SetFocus(monoedit);
 	mainwindow_update_cursor_pos(w);
 
-	/* create command area */
+	/* create command window */
 	cmdedit = CreateWindow("EDIT",
 				   "",
 				   WS_CHILD | WS_VISIBLE,
@@ -812,8 +812,8 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	SendMessage(cmdedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
 	w->cmdedit = cmdedit;
 	// subclass command window
-	SetWindowLong(cmdedit, GWL_USERDATA, (LONG) w);
-	w->cmdedit_wndproc = (WNDPROC) SetWindowLong(cmdedit, GWL_WNDPROC, (LONG) cmdedit_wndproc);
+	SetWindowLongPtr(cmdedit, GWLP_USERDATA, (LONG_PTR) w);
+	w->cmdedit_wndproc = (WNDPROC) SetWindowLongPtr(cmdedit, GWLP_WNDPROC, (LONG_PTR) cmdedit_wndproc);
 
 	// create status bar
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
@@ -859,12 +859,12 @@ wndproc(HWND hwnd,
 	WPARAM wparam,
 	LPARAM lparam)
 {
-	struct mainwindow *w = (void *) GetWindowLong(hwnd, 0);
+	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
 		w = ((LPCREATESTRUCT)lparam)->lpCreateParams;
 		w->hwnd = hwnd;
-		SetWindowLong(hwnd, 0, (LONG) w);
+		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		return TRUE;
 	case WM_NCDESTROY:
 		if (w) {
@@ -912,12 +912,12 @@ ATOM register_wndclass(void)
 	WNDCLASS wndclass = {0};
 
 	wndclass.lpfnWndProc = wndproc;
-	wndclass.cbWndExtra = sizeof(long);
+	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hInstance = GetModuleHandle(0);
 	wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
-	wndclass.lpszClassName = "MonoEditDemo";
+	wndclass.lpszClassName = "WHEX";
 	return RegisterClass(&wndclass);
 }
 
@@ -982,7 +982,7 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 		fprintf(stderr, errfmt_open, path, "file is too large");
 		return -1;
 	}
-	DEBUG_PRINTF("file size: %u (0x%x)\n", w->file_size, w->file_size);
+	DEBUG_PRINTF("file size: %I64u (0x%I64x)\n", w->file_size, w->file_size);
 	w->total_lines = w->file_size >> LOG2_N_COL;
 	if (w->file_size&(N_COL-1)) {
 		w->total_lines += 1;
@@ -1057,8 +1057,8 @@ WinMain(HINSTANCE instance,
 	mainwindow_init_lua(w);
 	//RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
 	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-	HWND hwnd = CreateWindow("MonoEditDemo", // class name
-				 "Whex", // window title
+	HWND hwnd = CreateWindow("WHEX", // class name
+				 "WHEX", // window title
 				 WS_OVERLAPPEDWINDOW, // window style
 				 CW_USEDEFAULT, // initial x position
 				 CW_USEDEFAULT, // initial y position

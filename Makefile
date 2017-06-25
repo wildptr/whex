@@ -1,7 +1,5 @@
 # configuration variables
-# works for TDM-GCC + Git Bash on Windows XP
-CC := gcc
-LUA_DIR := C:/Git/usr/local
+include config.mk
 
 CFLAGS := -std=c99 -Wall -I$(LUA_DIR)/include -DDEBUG
 

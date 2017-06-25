@@ -15,10 +15,12 @@ struct tree {
 	int n_child;
 	struct tree **children;
 	enum field_type type;
+	struct tree *parent;
 };
 
 void tree_free(struct tree *);
 void tree_print(struct tree *);
-struct tree *tree_lookup(struct tree *tree, long long addr, char *path, int path_len);
+struct tree *tree_lookup(struct tree *tree, long long addr);
+char *tree_path(struct tree *tree);
 
 #endif // _TREE_H_

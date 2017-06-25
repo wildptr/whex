@@ -211,11 +211,12 @@ void mainwindow_goto_line(struct mainwindow *w, long long line)
 	}
 }
 
-void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf, const char *path)
+void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 {
 	const char *type_name = "unknown";
 	char value_buf[80];
 	value_buf[0] = 0;
+	char *path = 0;
 	if (leaf) {
 		switch (leaf->type) {
 			char *p;
@@ -226,7 +227,7 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf, cons
 			switch (leaf->len) {
 				int ival;
 				int ival_hi;
-				long llval;
+				long long llval;
 			case 1:
 				type_name = "uint8";
 				ival = mainwindow_getbyte(w, leaf->start);
@@ -288,31 +289,36 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf, cons
 			}
 			break;
 		}
+		path = tree_path(leaf);
 	}
-	SendMessage(w->status_bar, SB_SETTEXT, 0, (LPARAM) type_name);
-	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) value_buf);
-	SendMessage(w->status_bar, SB_SETTEXT, 2, (LPARAM) path);
+	char cursor_pos_buf[17];
+	sprintf(cursor_pos_buf, "%I64x", mainwindow_cursor_pos(w));
+	SendMessage(w->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
+	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
+	SendMessage(w->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
+	SendMessage(w->status_bar, SB_SETTEXT, 3, (LPARAM) path);
+	free(path);
 }
 
 // should be invoked when cursor_pos is changed in interactive mode
 void mainwindow_update_field_info(struct mainwindow *w)
 {
-	char path[512];
 	if (w->tree) {
-		struct tree *leaf = tree_lookup(w->tree, mainwindow_cursor_pos(w), path, sizeof path);
+		struct tree *leaf = tree_lookup(w->tree, mainwindow_cursor_pos(w));
 		if (leaf) {
 			w->hl_start = leaf->start;
 			w->hl_len = leaf->len;
 		} else {
 			w->hl_start = 0;
 			w->hl_len = 0;
-			path[0] = 0;
 		}
 		if (w->interactive) {
 			mainwindow_update_monoedit_tags(w);
 			InvalidateRect(w->monoedit, 0, FALSE);
-			mainwindow_update_status_text(w, leaf, path);
+			mainwindow_update_status_text(w, leaf);
 		}
+	} else {
+		mainwindow_update_status_text(w, 0);
 	}
 }
 
@@ -346,6 +352,7 @@ void mainwindow_goto_address(struct mainwindow *w, long long address)
 	w->cursor_x = col;
 	w->cursor_y = line - line1;
 	mainwindow_update_cursor_pos(w);
+
 }
 
 char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
@@ -581,9 +588,18 @@ int mainwindow_handle_char(struct mainwindow *w, int c)
 {
 	switch (c) {
 		char buf[2];
+	case 8: // backspace
+		mainwindow_move_backward(w);
+		break;
+	case ' ':
+		mainwindow_move_forward(w);
+		break;
 	case '/':
 	case ':':
 	case '\\':
+	case 'b':
+		mainwindow_move_prev_field(w);
+		return 1;
 	case 'g':
 		buf[0] = c;
 		buf[1] = 0;
@@ -609,6 +625,9 @@ int mainwindow_handle_char(struct mainwindow *w, int c)
 		return 1;
 	case 'n':
 		mainwindow_execute_command(w, mainwindow_cmd_findnext, 0);
+		return 1;
+	case 'w':
+		mainwindow_move_next_field(w);
 		return 1;
 	}
 	return 1;
@@ -753,7 +772,6 @@ void mainwindow_init_font(struct mainwindow *w)
 	//mono_font = GetStockObject(OEM_FIXED_FONT);
 	mono_font = CreateFontIndirect(&logfont);
 	dc = GetDC(0);
-	//printf("dc=%x\n", dc);
 	SelectObject(dc, mono_font);
 	GetTextMetrics(dc, &tm);
 	w->mono_font = mono_font;
@@ -820,9 +838,27 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 					NULL,
 					hwnd,
 					CONTROL_STATUS_BAR);
-	int parts[] = { 64, 192, -1 };
-	SendMessage(status_bar, SB_SETPARTS, 3, (LPARAM) parts);
+	int parts[] = { 64, 128, 256, -1 };
+	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) parts);
 	w->status_bar = status_bar;
+
+	// get height of status bar
+	RECT rect;
+	GetWindowRect(status_bar, &rect);
+	int status_bar_height = rect.bottom - rect.top;
+
+	// adjust size of main window
+	GetWindowRect(hwnd, &rect);
+	rect.right = rect.left + w->charwidth * N_COL_CHAR;
+	rect.bottom = rect.top +
+		w->charheight * INITIAL_N_ROW + // MonoEdit
+		w->charheight + // command window
+		status_bar_height; // status bar
+	AdjustWindowRect(&rect, GetWindowLongPtr(hwnd, GWL_STYLE), FALSE);
+	SetWindowPos(hwnd, 0, 0, 0,
+		     rect.right - rect.left,
+		     rect.bottom - rect.top,
+		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
 }
 
 void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
@@ -1189,6 +1225,8 @@ const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd
 	case 1:
 		if (!memcmp(start, "e", 1)) {
 			cmdproc = mainwindow_cmd_edit;
+		} else if (!memcmp(start, "q", 1)) {
+			cmdproc = mainwindow_cmd_quit;
 		}
 		break;
 	case 2:
@@ -1314,4 +1352,59 @@ const char *mainwindow_cmd_edit(struct mainwindow *w, char *arg)
 		mainwindow_update_ui(w);
 	}
 	return 0;
+}
+
+const char *mainwindow_cmd_quit(struct mainwindow *w, char *arg)
+{
+	SendMessage(w->hwnd, WM_CLOSE, 0, 0);
+	return 0;
+}
+
+void mainwindow_move_forward(struct mainwindow *w)
+{
+	if (mainwindow_cursor_pos(w) < w->file_size) {
+		if (w->cursor_x < N_COL-1) {
+			mainwindow_move_right(w);
+		} else {
+			w->cursor_x = 0;
+			mainwindow_move_down(w);
+		}
+	}
+}
+
+void mainwindow_move_backward(struct mainwindow *w)
+{
+	if (mainwindow_cursor_pos(w) > 0) {
+		if (w->cursor_x > 0) {
+			mainwindow_move_left(w);
+		} else {
+			w->cursor_x = N_COL-1;
+			mainwindow_move_up(w);
+		}
+	}
+}
+
+void mainwindow_move_next_field(struct mainwindow *w)
+{
+	if (w->tree) {
+		long long cursor_pos = mainwindow_cursor_pos(w);
+		struct tree *leaf = tree_lookup(w->tree, cursor_pos);
+		if (leaf) {
+			mainwindow_goto_address(w, leaf->start + leaf->len);
+		}
+	}
+}
+
+void mainwindow_move_prev_field(struct mainwindow *w)
+{
+	if (w->tree) {
+		long long cursor_pos = mainwindow_cursor_pos(w);
+		struct tree *leaf = tree_lookup(w->tree, cursor_pos);
+		if (leaf) {
+			struct tree *prev_leaf = tree_lookup(w->tree, cursor_pos-1);
+			if (prev_leaf) {
+				mainwindow_goto_address(w, prev_leaf->start);
+			}
+		}
+	}
 }

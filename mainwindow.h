@@ -95,6 +95,10 @@ void mainwindow_init_lua(struct mainwindow *w);
 void mainwindow_update_monoedit_tags(struct mainwindow *w);
 void mainwindow_set_tree(struct mainwindow *w, struct tree *tree);
 void mainwindow_update_ui(struct mainwindow *w);
+void mainwindow_move_forward(struct mainwindow *w);
+void mainwindow_move_backward(struct mainwindow *w);
+void mainwindow_move_next_field(struct mainwindow *w);
+void mainwindow_move_prev_field(struct mainwindow *w);
 
 #define DECLARE_CMD(x) const char *x(struct mainwindow *, char *)
 
@@ -107,6 +111,7 @@ DECLARE_CMD(mainwindow_cmd_goto);
 DECLARE_CMD(mainwindow_cmd_hl);
 DECLARE_CMD(mainwindow_cmd_lua);
 DECLARE_CMD(mainwindow_cmd_luafile);
+DECLARE_CMD(mainwindow_cmd_quit);
 
 #undef DECLARE_CMD
 

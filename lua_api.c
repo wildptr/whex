@@ -26,6 +26,7 @@ int lapi_peek(lua_State *L)
 static struct tree *convert_tree(lua_State *L)
 {
 	struct tree *tree = malloc(sizeof *tree);
+	tree->parent = 0;
 
 	lua_getfield(L, -1, "start");
 	tree->start = luaL_checkinteger(L, -1);
@@ -62,6 +63,7 @@ static struct tree *convert_tree(lua_State *L)
 		// beware that indices start at 1 in Lua
 		lua_rawgeti(L, -1, 1+i); // push child
 		tree->children[i] = convert_tree(L);
+		tree->children[i]->parent = tree;
 		lua_pop(L, 1);
 	}
 

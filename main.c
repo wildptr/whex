@@ -861,6 +861,8 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 		     rect.right - rect.left,
 		     rect.bottom - rect.top,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
+
+	SetWindowText(hwnd, "WHEX");
 }
 
 void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
@@ -1098,7 +1100,7 @@ WinMain(HINSTANCE instance,
 	//RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
 	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hwnd = CreateWindow("WHEX", // class name
-				 "WHEX", // window title
+				 0, // window title
 				 WS_OVERLAPPEDWINDOW, // window style
 				 CW_USEDEFAULT, // initial x position
 				 CW_USEDEFAULT, // initial y position

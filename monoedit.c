@@ -7,7 +7,7 @@ struct monoedit {
 	/* in characters */
 	int ncols;
 	int nrows;
-	const char *buffer;
+	const TCHAR *buffer;
 	HFONT font;
 	int cursorx;
 	int cursory;
@@ -55,7 +55,7 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 				col = 0;
 			}
 		}
-		const char *pbuf = w->buffer;
+		const TCHAR *pbuf = w->buffer;
 		for (int i=0; i<n_seg; i++) {
 			struct tag *seg = &segments[i];
 #if 0
@@ -65,10 +65,14 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 			printf("seg[%d].attr = %u\n", i, seg->attr);
 #endif
 			if (seg->attr) {
-				old_bkcolor = SetBkColor(hdc, RGB(204, 204, 204));
+				old_bkcolor = SetBkColor
+					(hdc, RGB(204, 204, 204));
 			}
-			TextOut(hdc, seg->start * w->charwidth, seg->line * w->charheight,
-				pbuf, seg->len);
+			TextOut(hdc,
+				seg->start * w->charwidth,
+				seg->line * w->charheight,
+				pbuf,
+				seg->len);
 			pbuf += seg->len;
 			if (seg->attr) {
 				SetBkColor(hdc, old_bkcolor);
@@ -218,6 +222,6 @@ ATOM monoedit_register_class(void)
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
-	wndclass.lpszClassName = "MonoEdit";
+	wndclass.lpszClassName = TEXT("MonoEdit");
 	return RegisterClass(&wndclass);
 }

@@ -34,7 +34,7 @@ struct mainwindow {
 	long long total_lines;
 	HANDLE file;
 	char *filepath;
-	char *monoedit_buffer;
+	TCHAR *monoedit_buffer;
 	/* capacity of buffer, in lines (80 bytes per line) */
 	int monoedit_buffer_cap_lines;
 	long long current_line;

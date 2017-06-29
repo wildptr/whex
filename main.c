@@ -6,8 +6,19 @@
 #include "mainwindow.h"
 #include "monoedit.h"
 #include "tree.h"
+#include "unicode.h"
 
 #include <commctrl.h>
+
+#ifdef UNICODE
+#define TO_TSTR(x) utf8_to_utf16(x)
+#define FROM_TSTR(x) utf16_to_utf8(x)
+#define FREE_TSTR(x) free(x)
+#else
+#define TO_TSTR(x) (x)
+#define FROM_TSTR(x) (x)
+#define FREE_TSTR(x) ((void)0)
+#endif
 
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 5
@@ -150,15 +161,17 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 	long long abs_line = w->current_line + buffer_line;
 	long long abs_line_end = abs_line + num_lines;
 	while (abs_line < abs_line_end) {
-		char *line = &w->monoedit_buffer[buffer_line*N_COL_CHAR];
-		char *p = line;
+		TCHAR *line = &w->monoedit_buffer[buffer_line*N_COL_CHAR];
+		TCHAR *p = line;
 		long long address = abs_line << LOG2_N_COL;
 		if (abs_line >= w->total_lines) {
-			memset(p, ' ', N_COL_CHAR);
+			for (int i=0; i<N_COL_CHAR; i++) {
+				p[i] = ' ';
+			}
 		} else {
 			int block = mainwindow_find_cache(w, address);
 			int base = address & 0xfff;
-			sprintf(p, "%08I64x: ", address);
+			wsprintf(p, TEXT("%08I64x: "), address);
 			p += 10;
 			int end = 0;
 		       	if (abs_line+1 >= w->total_lines) {
@@ -168,14 +181,14 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 				end = N_COL;
 			}
 			for (int j=0; j<end; j++) {
-				sprintf(p, "%02x ", w->cache[block].data[base|j]);
+				wsprintf(p, TEXT("%02x "), w->cache[block].data[base|j]);
 				p += 3;
 			}
 			for (int j=end; j<N_COL; j++) {
-				sprintf(p, "   ");
+				wsprintf(p, TEXT("   "));
 				p += 3;
 			}
-			sprintf(p, "  ");
+			wsprintf(p, TEXT("  "));
 			p += 2;
 			for (int j=0; j<end; j++) {
 				uint8_t b = w->cache[block].data[base|j];
@@ -215,15 +228,16 @@ void mainwindow_goto_line(struct mainwindow *w, long long line)
 
 void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 {
-	const char *type_name = "unknown";
-	char value_buf[80];
+	const TCHAR *type_name = TEXT("unknown");
+	TCHAR value_buf[80];
 	value_buf[0] = 0;
 	char *path = 0;
+	TCHAR *path_tstr = 0;
 	if (leaf) {
 		switch (leaf->type) {
-			char *p;
+			TCHAR *p;
 		case F_RAW:
-			type_name = "raw";
+			type_name = TEXT("raw");
 			break;
 		case F_UINT:
 			switch (leaf->len) {
@@ -231,26 +245,26 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 				int ival_hi;
 				long long llval;
 			case 1:
-				type_name = "uint8";
+				type_name = TEXT("uint8");
 				ival = mainwindow_getbyte(w, leaf->start);
-				sprintf(value_buf, "%u (%02x)", ival, ival);
+				wsprintf(value_buf, TEXT("%u (%02x)"), ival, ival);
 				break;
 			case 2:
-				type_name = "uint16";
+				type_name = TEXT("uint16");
 				ival = mainwindow_getbyte(w, leaf->start) |
 					mainwindow_getbyte(w, leaf->start + 1) << 8;
-				sprintf(value_buf, "%u (%04x)", ival, ival);
+				wsprintf(value_buf, TEXT("%u (%04x)"), ival, ival);
 				break;
 			case 4:
-				type_name = "uint32";
+				type_name = TEXT("uint32");
 				ival = mainwindow_getbyte(w, leaf->start)
 					| mainwindow_getbyte(w, leaf->start + 1) << 8
 					| mainwindow_getbyte(w, leaf->start + 2) << 16
 					| mainwindow_getbyte(w, leaf->start + 3) << 24;
-				sprintf(value_buf, "%u (%08x)", ival, ival);
+				wsprintf(value_buf, TEXT("%u (%08x)"), ival, ival);
 				break;
 			case 8:
-				type_name = "uint64";
+				type_name = TEXT("uint64");
 				ival = mainwindow_getbyte(w, leaf->start)
 					| mainwindow_getbyte(w, leaf->start + 1) << 8
 					| mainwindow_getbyte(w, leaf->start + 2) << 16
@@ -260,18 +274,18 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 					| mainwindow_getbyte(w, leaf->start + 6) << 16
 					| mainwindow_getbyte(w, leaf->start + 7) << 24;
 				llval = ((long long) ival_hi) << 32 | ival;
-				sprintf(value_buf, "%I64u (%016I64x)", llval, llval);
+				wsprintf(value_buf, TEXT("%I64u (%016I64x)"), llval, llval);
 				break;
 			default:
-				type_name = "uint";
+				type_name = TEXT("uint");
 			}
 			break;
 		case F_INT:
 			// TODO
-			type_name = "int";
+			type_name = TEXT("int");
 			break;
 		case F_ASCII:
-			type_name = "ascii";
+			type_name = TEXT("ascii");
 			p = value_buf;
 			int n = leaf->len;
 			if (n > 16) n = 16;
@@ -281,24 +295,26 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 				if (b >= 0x20 && b < 0x7f) {
 					*p++ = b;
 				} else {
-					sprintf(p, "\\x%02x", b);
+					wsprintf(p, TEXT("\\x%02x"), b);
 					p += 4;
 				}
 			}
 			*p++ = '"';
 			if (n < leaf->len) {
-				sprintf(p, "...");
+				wsprintf(p, TEXT("..."));
 			}
 			break;
 		}
 		path = tree_path(leaf);
+		path_tstr = TO_TSTR(path);
 	}
-	char cursor_pos_buf[17];
-	sprintf(cursor_pos_buf, "%I64x", mainwindow_cursor_pos(w));
+	TCHAR cursor_pos_buf[17];
+	wsprintf(cursor_pos_buf, TEXT("%I64x"), mainwindow_cursor_pos(w));
 	SendMessage(w->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
 	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
 	SendMessage(w->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
-	SendMessage(w->status_bar, SB_SETTEXT, 3, (LPARAM) path);
+	SendMessage(w->status_bar, SB_SETTEXT, 3, (LPARAM) path_tstr);
+	FREE_TSTR(path_tstr);
 	free(path);
 }
 
@@ -450,11 +466,18 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 	return 0;
 }
 
+void mainwindow_error_prompt(struct mainwindow *w, const char *errmsg)
+{
+	TCHAR *errmsg_tstr = TO_TSTR(errmsg);
+	MessageBox(w->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
+	FREE_TSTR(errmsg_tstr);
+}
+
 void mainwindow_execute_command(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
 {
 	const char *errmsg = cmdproc(w, arg);
 	if (errmsg) {
-		MessageBox(w->hwnd, errmsg, "Error", MB_ICONERROR);
+		mainwindow_error_prompt(w, errmsg);
 	}
 }
 
@@ -463,7 +486,7 @@ void mainwindow_scroll_up_line(struct mainwindow *w)
 	if (w->current_line) {
 		w->current_line--;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
-		memmove(w->monoedit_buffer+N_COL_CHAR, w->monoedit_buffer, N_COL_CHAR*(w->nrows-1));
+		memmove(w->monoedit_buffer+N_COL_CHAR, w->monoedit_buffer, N_COL_CHAR*(w->nrows-1)*sizeof(TCHAR));
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, 0, 1);
 			mainwindow_update_monoedit_tags(w);
@@ -477,7 +500,7 @@ void mainwindow_scroll_down_line(struct mainwindow *w)
 	if (mainwindow_cursor_pos(w) + N_COL < w->file_size) {
 		w->current_line++;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
-		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR, N_COL_CHAR*(w->nrows-1));
+		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR, N_COL_CHAR*(w->nrows-1)*sizeof(TCHAR));
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, w->nrows-1, 1);
 			mainwindow_update_monoedit_tags(w);
@@ -540,7 +563,7 @@ void mainwindow_scroll_up_page(struct mainwindow *w)
 		long long delta = w->current_line;
 		w->current_line = 0;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -delta);
-		memmove(w->monoedit_buffer+N_COL_CHAR*delta, w->monoedit_buffer, N_COL_CHAR*(w->nrows-delta));
+		memmove(w->monoedit_buffer+N_COL_CHAR*delta, w->monoedit_buffer, N_COL_CHAR*(w->nrows-delta)*sizeof(TCHAR));
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, 0, delta);
 			mainwindow_update_monoedit_tags(w);
@@ -563,7 +586,7 @@ void mainwindow_scroll_down_page(struct mainwindow *w)
 		long long delta = w->total_lines - w->current_line;
 		w->current_line = w->total_lines;
 		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, delta);
-		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR*delta, N_COL_CHAR*(w->nrows-delta));
+		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR*delta, N_COL_CHAR*(w->nrows-delta)*sizeof(TCHAR));
 		if (w->interactive) {
 			mainwindow_update_monoedit_buffer(w, w->nrows-delta, delta);
 			mainwindow_update_monoedit_tags(w);
@@ -589,7 +612,7 @@ void mainwindow_move_down_page(struct mainwindow *w)
 int mainwindow_handle_char(struct mainwindow *w, int c)
 {
 	switch (c) {
-		char buf[2];
+		TCHAR buf[2];
 	case 8: // backspace
 		mainwindow_move_backward(w);
 		break;
@@ -724,12 +747,14 @@ cmdedit_wndproc(HWND hwnd,
 	case WM_CHAR:
 		switch (wparam) {
 			char *cmd;
+			TCHAR *raw_cmd;
 			int buf_len;
 			const char *errmsg;
 		case '\r':
 			buf_len = GetWindowTextLength(hwnd)+1;
-			cmd = malloc(buf_len);
-			GetWindowText(hwnd, cmd, buf_len);
+			raw_cmd = malloc(buf_len * sizeof *raw_cmd);
+			GetWindowText(hwnd, raw_cmd, buf_len);
+			cmd = FROM_TSTR(raw_cmd);
 			errmsg = 0;
 			switch (cmd[0]) {
 			case '/':
@@ -745,13 +770,14 @@ cmdedit_wndproc(HWND hwnd,
 				mainwindow_execute_command(w, mainwindow_cmd_goto, cmd+1);
 				break;
 			}
-			free(cmd);
+			free(raw_cmd);
+			FREE_TSTR(cmd);
 			if (errmsg) {
-				MessageBox(w->hwnd, errmsg, "Error", MB_ICONERROR);
+				mainwindow_error_prompt(w, errmsg);
 			}
 			// fallthrough
 		case 27: // escape
-			SetWindowText(hwnd, "");
+			SetWindowText(hwnd, TEXT(""));
 			SetFocus(w->monoedit);
 			return 0;
 		}
@@ -764,7 +790,7 @@ void mainwindow_init_font(struct mainwindow *w)
 {
 	static LOGFONT logfont = {
 		.lfHeight = 16,
-		.lfFaceName = "Courier New",
+		.lfFaceName = TEXT("Courier New"),
 	};
 
 	HDC dc;
@@ -791,22 +817,24 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 
 	HINSTANCE instance = create->hInstance;
 	/* create and initialize MonoEdit */
-	monoedit = CreateWindow("MonoEdit",
-				  "",
-				  WS_CHILD | WS_VISIBLE,
-				  CW_USEDEFAULT,
-				  CW_USEDEFAULT,
-				  CW_USEDEFAULT,
-				  CW_USEDEFAULT,
-				  hwnd,
-				  0,
-				  instance,
-				  0);
+	monoedit = CreateWindow(TEXT("MonoEdit"),
+				TEXT(""),
+				WS_CHILD | WS_VISIBLE,
+				CW_USEDEFAULT,
+				CW_USEDEFAULT,
+				CW_USEDEFAULT,
+				CW_USEDEFAULT,
+				hwnd,
+				0,
+				instance,
+				0);
 	w->monoedit = monoedit;
 	w->nrows = INITIAL_N_ROW;
-	w->monoedit_buffer = malloc(N_COL_CHAR*INITIAL_N_ROW);
+	w->monoedit_buffer = malloc(N_COL_CHAR*INITIAL_N_ROW*sizeof(TCHAR));
 	w->monoedit_buffer_cap_lines = INITIAL_N_ROW;
-	memset(w->monoedit_buffer, ' ', N_COL_CHAR*INITIAL_N_ROW);
+	for (int i=0; i<N_COL_CHAR*INITIAL_N_ROW; i++) {
+		w->monoedit_buffer[i] = ' ';
+	}
 	SendMessage(monoedit, MONOEDIT_WM_SET_CSIZE, N_COL_CHAR, INITIAL_N_ROW);
 	SendMessage(monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
 	SendMessage(monoedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
@@ -818,17 +846,17 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	mainwindow_update_cursor_pos(w);
 
 	/* create command window */
-	cmdedit = CreateWindow("EDIT",
-				   "",
-				   WS_CHILD | WS_VISIBLE,
-				   CW_USEDEFAULT,
-				   CW_USEDEFAULT,
-				   CW_USEDEFAULT,
-				   CW_USEDEFAULT,
-				   hwnd,
-				   0,
-				   instance,
-				   0);
+	cmdedit = CreateWindow(TEXT("EDIT"),
+			       TEXT(""),
+			       WS_CHILD | WS_VISIBLE,
+			       CW_USEDEFAULT,
+			       CW_USEDEFAULT,
+			       CW_USEDEFAULT,
+			       CW_USEDEFAULT,
+			       hwnd,
+			       0,
+			       instance,
+			       0);
 	SendMessage(cmdedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
 	w->cmdedit = cmdedit;
 	// subclass command window
@@ -862,7 +890,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 		     rect.bottom - rect.top,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
 
-	SetWindowText(hwnd, "WHEX");
+	SetWindowText(hwnd, TEXT("WHEX"));
 }
 
 void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
@@ -870,7 +898,7 @@ void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
 	int new_nrows = height/w->charheight;
 	if (new_nrows > w->nrows) {
 		if (new_nrows > w->monoedit_buffer_cap_lines) {
-			w->monoedit_buffer = realloc(w->monoedit_buffer, N_COL_CHAR*new_nrows);
+			w->monoedit_buffer = realloc(w->monoedit_buffer, N_COL_CHAR*new_nrows*sizeof(TCHAR));
 			w->monoedit_buffer_cap_lines = new_nrows;
 			SendMessage(w->monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
 		}
@@ -958,11 +986,11 @@ ATOM register_wndclass(void)
 	wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
-	wndclass.lpszClassName = "WHEX";
+	wndclass.lpszClassName = TEXT("WHEX");
 	return RegisterClass(&wndclass);
 }
 
-static void format_error_code(char *buf, size_t buflen, DWORD error_code)
+static void format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
 {
 #if 0
    DWORD FormatMessage(
@@ -989,18 +1017,21 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
 	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
-	char errtext[512];
+	TCHAR errtext[512];
 
 	if (w->file != INVALID_HANDLE_VALUE) {
 		CloseHandle(w->file);
 	}
-	w->file = CreateFile(path,
-			    GENERIC_READ,
-			    FILE_SHARE_READ,
-			    0, // lpSecurityAttributes
-			    OPEN_EXISTING,
-			    0,
-			    0);
+	TCHAR *path_tstr;
+	path_tstr = TO_TSTR(path);
+	w->file = CreateFile(path_tstr,
+			     GENERIC_READ,
+			     FILE_SHARE_READ,
+			     0, // lpSecurityAttributes
+			     OPEN_EXISTING,
+			     0,
+			     0);
+	FREE_TSTR(path_tstr);
 	if (w->file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, sizeof errtext, GetLastError());
 		fprintf(stderr, errfmt_open, path, errtext);
@@ -1051,13 +1082,35 @@ int mainwindow_init_cache(struct mainwindow *w)
 
 static int file_chooser_dialog(char *buf, int buflen)
 {
+#ifdef UNICODE
+	TCHAR buf_tstr[512];
+	buf_tstr[0] = 0;
+#else
 	buf[0] = 0;
+#endif
 	OPENFILENAME ofn = {0};
 	ofn.lStructSize = sizeof ofn;
 	ofn.hInstance = GetModuleHandle(0);
+#ifdef UNICODE
+	ofn.lpstrFile = buf_tstr;
+	ofn.nMaxFile = sizeof buf_tstr / sizeof *buf_tstr;
+#else
 	ofn.lpstrFile = buf;
 	ofn.nMaxFile = buflen;
+#endif
 	if (!GetOpenFileName(&ofn)) return -1;
+#ifdef UNICODE
+	wchar_t *psrc = buf_tstr;
+	int idst = 0;
+	while (*psrc) {
+		uint32_t rune = decode_utf16(psrc);
+		psrc += utf16_length(rune) >> 1;
+		// need a byte for trailing '\0' so break when equal
+		if (idst + utf8_length(rune) >= buflen) break;
+		idst += to_utf8(rune, buf + idst);
+	}
+	buf[idst] = 0;
+#endif
 	return 0;
 }
 
@@ -1099,7 +1152,7 @@ WinMain(HINSTANCE instance,
 	mainwindow_init_lua(w);
 	//RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
 	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-	HWND hwnd = CreateWindow("WHEX", // class name
+	HWND hwnd = CreateWindow(TEXT("WHEX"), // class name
 				 0, // window title
 				 WS_OVERLAPPEDWINDOW, // window style
 				 CW_USEDEFAULT, // initial x position

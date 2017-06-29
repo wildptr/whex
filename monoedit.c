@@ -112,14 +112,14 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct monoedit *w = (void *) GetWindowLong(hwnd, 0);
+	struct monoedit *w = (void *) GetWindowLongPtr(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
 		w = calloc(1, sizeof *w);
 		if (!w) {
 			return FALSE;
 		}
-		SetWindowLong(hwnd, 0, (LONG) w);
+		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		return TRUE;
 	case WM_NCDESTROY:
 		if (w) {
@@ -215,7 +215,7 @@ ATOM monoedit_register_class(void)
 	WNDCLASS wndclass = {0};
 	wndclass.style = CS_GLOBALCLASS;
 	wndclass.lpfnWndProc = monoedit_wndproc;
-	wndclass.cbWndExtra = sizeof(long);
+	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
 	wndclass.lpszClassName = "MonoEdit";

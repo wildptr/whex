@@ -67,7 +67,7 @@ uint8_t mainwindow_getbyte(struct mainwindow *w, long long address);
 long long mainwindow_kmp_search(struct mainwindow *w, const uint8_t *pat, int len, long long start);
 long long mainwindow_kmp_search_backward(struct mainwindow *w, const uint8_t *pat, int len, long long start);
 void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, int num_lines);
-void mainwindow_goto_line(struct mainwindow *w, long long line);
+void mainwindow_set_current_line(struct mainwindow *w, long long line);
 void mainwindow_update_cursor_pos(struct mainwindow *w);
 long long mainwindow_cursor_pos(struct mainwindow *w);
 void mainwindow_goto_address(struct mainwindow *w, long long address);
@@ -99,6 +99,8 @@ void mainwindow_move_forward(struct mainwindow *w);
 void mainwindow_move_backward(struct mainwindow *w);
 void mainwindow_move_next_field(struct mainwindow *w);
 void mainwindow_move_prev_field(struct mainwindow *w);
+void mainwindow_goto_bol(struct mainwindow *w);
+void mainwindow_goto_eol(struct mainwindow *w);
 
 #define DECLARE_CMD(x) const char *x(struct mainwindow *, char *)
 

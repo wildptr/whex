@@ -214,7 +214,7 @@ static uint8_t hextobyte(const uint8_t *p)
 	return hexval(p[0]) << 4 | hexval(p[1]);
 }
 
-void mainwindow_goto_line(struct mainwindow *w, long long line)
+void mainwindow_set_current_line(struct mainwindow *w, long long line)
 {
 	assert(line <= w->total_lines);
 	w->current_line = line;
@@ -347,6 +347,8 @@ void mainwindow_update_cursor_pos(struct mainwindow *w)
 		    10+w->cursor_x*3,
 		    w->cursor_y);
 	mainwindow_update_field_info(w);
+	SendMessage(w->monoedit, MONOEDIT_WM_SET_CURSOR_POS,
+		    10+w->cursor_x*3, w->cursor_y);
 }
 
 long long mainwindow_cursor_pos(struct mainwindow *w)
@@ -358,19 +360,23 @@ void mainwindow_goto_address(struct mainwindow *w, long long address)
 {
 	long long line = address >> LOG2_N_COL;
 	int col = address & (N_COL-1);
-	long long line1;
 	assert(address <= w->file_size);
-	if (line >= w->nrows >> 1) {
-		line1 = line - (w->nrows >> 1);
-	} else {
-		line1 = 0;
-	}
-	mainwindow_goto_line(w, line1);
-	SendMessage(w->monoedit, MONOEDIT_WM_SET_CURSOR_POS, 10+col*3, 0);
 	w->cursor_x = col;
-	w->cursor_y = line - line1;
-	mainwindow_update_cursor_pos(w);
-
+	if (line >= w->current_line && line < w->current_line + w->nrows) {
+		w->cursor_y = line - w->current_line;
+		if (w->interactive) {
+			mainwindow_update_cursor_pos(w);
+		}
+	} else {
+		long long line1;
+		if (line >= w->nrows >> 1) {
+			line1 = line - (w->nrows >> 1);
+		} else {
+			line1 = 0;
+		}
+		w->cursor_y = line - line1;
+		mainwindow_set_current_line(w, line1);
+	}
 }
 
 char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
@@ -468,7 +474,7 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 
 void mainwindow_error_prompt(struct mainwindow *w, const char *errmsg)
 {
-	TCHAR *errmsg_tstr = TO_TSTR(errmsg);
+	const TCHAR *errmsg_tstr = TO_TSTR(errmsg);
 	MessageBox(w->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
 	FREE_TSTR(errmsg_tstr);
 }
@@ -706,12 +712,14 @@ monoedit_wndproc(HWND hwnd,
 			mainwindow_move_down_page(w);
 			break;
 		case VK_HOME:
-			mainwindow_goto_address(w, 0);
+			//mainwindow_goto_address(w, 0);
+			mainwindow_goto_bol(w);
 			break;
 		case VK_END:
-			if (w->file_size) {
+			/*if (w->file_size) {
 				mainwindow_goto_address(w, w->file_size-1);
-			}
+			}*/
+			mainwindow_goto_eol(w);
 			break;
 		}
 		return 0;
@@ -1022,8 +1030,7 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 	if (w->file != INVALID_HANDLE_VALUE) {
 		CloseHandle(w->file);
 	}
-	TCHAR *path_tstr;
-	path_tstr = TO_TSTR(path);
+	const TCHAR *path_tstr = TO_TSTR(path);
 	w->file = CreateFile(path_tstr,
 			     GENERIC_READ,
 			     FILE_SHARE_READ,
@@ -1180,7 +1187,7 @@ const char *mainwindow_cmd_goto(struct mainwindow *w, char *arg)
 {
 	long long address;
 	if (sscanf(arg, "%I64x", &address) == 1) {
-		if (address > w->file_size) {
+		if (address < 0 || address >= w->file_size) {
 			return "address out of range";
 		}
 		mainwindow_goto_address(w, address);
@@ -1474,5 +1481,21 @@ void mainwindow_move_prev_field(struct mainwindow *w)
 				mainwindow_goto_address(w, prev_leaf->start);
 			}
 		}
+	}
+}
+
+void mainwindow_goto_bol(struct mainwindow *w)
+{
+	mainwindow_goto_address(w, (w->current_line + w->cursor_y) * N_COL);
+}
+
+void mainwindow_goto_eol(struct mainwindow *w)
+{
+	if (w->file_size > 0) {
+		long long addr = (w->current_line + w->cursor_y + 1) * N_COL - 1;
+		if (addr >= w->file_size) {
+			addr = w->file_size-1;
+		}
+		mainwindow_goto_address(w, addr);
 	}
 }

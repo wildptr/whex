@@ -360,7 +360,7 @@ void mainwindow_goto_address(struct mainwindow *w, long long address)
 {
 	long long line = address >> LOG2_N_COL;
 	int col = address & (N_COL-1);
-	assert(address <= w->file_size);
+	assert(address >= 0 && address < w->file_size);
 	w->cursor_x = col;
 	if (line >= w->current_line && line < w->current_line + w->nrows) {
 		w->cursor_y = line - w->current_line;
@@ -474,7 +474,7 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 
 void mainwindow_error_prompt(struct mainwindow *w, const char *errmsg)
 {
-	const TCHAR *errmsg_tstr = TO_TSTR(errmsg);
+	TCHAR *errmsg_tstr = TO_TSTR(errmsg);
 	MessageBox(w->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
 	FREE_TSTR(errmsg_tstr);
 }
@@ -1030,7 +1030,7 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 	if (w->file != INVALID_HANDLE_VALUE) {
 		CloseHandle(w->file);
 	}
-	const TCHAR *path_tstr = TO_TSTR(path);
+	TCHAR *path_tstr = TO_TSTR(path);
 	w->file = CreateFile(path_tstr,
 			     GENERIC_READ,
 			     FILE_SHARE_READ,
@@ -1486,7 +1486,9 @@ void mainwindow_move_prev_field(struct mainwindow *w)
 
 void mainwindow_goto_bol(struct mainwindow *w)
 {
-	mainwindow_goto_address(w, (w->current_line + w->cursor_y) * N_COL);
+	if (w->file_size > 0) {
+		mainwindow_goto_address(w, (w->current_line + w->cursor_y) * N_COL);
+	}
 }
 
 void mainwindow_goto_eol(struct mainwindow *w)

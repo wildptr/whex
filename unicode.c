@@ -79,7 +79,7 @@ char *utf16_to_utf8(const wchar_t *widestr)
 	wp = widestr;
 	while (*wp) {
 		uint32_t rune = decode_utf16(wp);
-		wp += utf16_length(rune);
+		wp += utf16_length(rune) >> 1;
 		p += to_utf8(rune, p);
 	}
 	*p = 0;

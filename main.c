@@ -670,7 +670,7 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct mainwindow *w = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (message) {
 	case WM_LBUTTONDOWN:
@@ -749,7 +749,7 @@ cmdedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct mainwindow *w = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (message) {
 	case WM_CHAR:

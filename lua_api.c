@@ -88,6 +88,15 @@ int lapi_filepath(lua_State *L)
 	return 1;
 }
 
+int lapi_goto(lua_State *L)
+{
+	struct mainwindow *w = get_mainwindow(L);
+	long long addr = luaL_checkinteger(L, 1);
+	// TODO: bounds check
+	mainwindow_goto_address(w, addr);
+	return 0;
+}
+
 void register_lua_globals(lua_State *L)
 {
 	lua_newtable(L);
@@ -97,5 +106,7 @@ void register_lua_globals(lua_State *L)
 	lua_setfield(L, -2, "filepath");
 	lua_pushcfunction(L, lapi_set_tree);
 	lua_setfield(L, -2, "set_tree");
+	lua_pushcfunction(L, lapi_goto);
+	lua_setfield(L, -2, "goto_address");
 	lua_setglobal(L, "whex");
 }

@@ -475,6 +475,9 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 
 void mainwindow_error_prompt(struct mainwindow *w, const char *errmsg)
 {
+#ifndef UNICODE
+	const
+#endif
 	TCHAR *errmsg_tstr = MBCS_TO_TSTR(errmsg);
 	MessageBox(w->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
 #ifdef UNICODE
@@ -1202,11 +1205,10 @@ WinMain(HINSTANCE instance,
 	mainwindow_init_lua(w);
 
 	if (script_path) {
-		char *script_path_mbcs;
 #ifdef UNICODE
-		script_path_mbcs = utf16_to_mbcs(script_path);
+		char *script_path_mbcs = utf16_to_mbcs(script_path);
 #else
-		script_path_mbcs = script_path;
+		const char *script_path_mbcs = script_path;
 #endif
 		DEBUG_PRINTF("execute Lua script %s\n", script_path_mbcs);
 		lua_State *L = w->lua;

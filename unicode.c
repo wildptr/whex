@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <windows.h>
 
 #include "unicode.h"
 
@@ -72,26 +73,26 @@ char *utf16_to_utf8(const wchar_t *widestr)
 	while (*wp) {
 		uint32_t rune = decode_utf16(wp);
 		n += utf8_length(rune);
-		wp += utf16_length(rune) >> 1;
+		wp += utf16_length(rune);
 	}
 	char *buf = malloc(n+1);
 	char *p = buf;
 	wp = widestr;
 	while (*wp) {
 		uint32_t rune = decode_utf16(wp);
-		wp += utf16_length(rune) >> 1;
+		wp += utf16_length(rune);
 		p += to_utf8(rune, p);
 	}
 	*p = 0;
 	return buf;
 }
 
-// return value in bytes
+// return value in wchar_t's
 int utf16_length(uint32_t rune)
 {
-	if (rune < 0x10000) return 2;
-	if (rune < 0x110000) return 4;
-	return 2; // as if rune were 0xffff
+	if (rune < 0x10000) return 1;
+	if (rune < 0x110000) return 2;
+	return 1; // as if rune were 0xffff
 }
 
 // return value in wchar_t's
@@ -141,7 +142,7 @@ wchar_t *utf8_to_utf16(const char *str)
 	int n = 0;
 	while (*p) {
 		uint32_t rune = decode_utf8(p);
-		n += utf16_length(rune);
+		n += utf16_length(rune)*2;
 		p += utf8_length(rune);
 	}
 	wchar_t *buf = malloc(n+2);
@@ -154,4 +155,31 @@ wchar_t *utf8_to_utf16(const char *str)
 	}
 	*wp = 0;
 	return buf;
+}
+
+char *utf16_to_mbcs(const wchar_t *utf16)
+{
+	int utf16_len = lstrlenW(utf16);
+	char *mbcs = calloc(utf16_len*2+1, 1);
+	WideCharToMultiByte(CP_ACP, 0, utf16, utf16_len,
+			    mbcs, utf16_len*2, 0, 0);
+	return mbcs;
+}
+
+char *utf8_to_mbcs(const char *utf8)
+{
+	// quick'n'dirty implementation, inefficient and
+	// possibly incorrect
+	wchar_t *utf16 = utf8_to_utf16(utf8);
+	char *mbcs = utf16_to_mbcs(utf16);
+	free(utf16);
+	return mbcs;
+}
+
+wchar_t *mbcs_to_utf16(const char *mbcs)
+{
+	int mbcs_len = strlen(mbcs);
+	wchar_t *utf16 = calloc(mbcs_len+1, 2);
+	MultiByteToWideChar(CP_ACP, 0, mbcs, mbcs_len, utf16, mbcs_len);
+	return utf16;
 }

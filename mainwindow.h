@@ -57,6 +57,7 @@ struct mainwindow {
 	long long hl_len;
 	bool interactive;
 	struct tree *tree;
+	struct arena tree_arena;
 	HWND status_bar;
 };
 
@@ -89,12 +90,11 @@ void mainwindow_add_char_to_command(struct mainwindow *w, char c);
 void mainwindow_init_font(struct mainwindow *w);
 void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create);
 void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height);
-int mainwindow_open_file(struct mainwindow *w, const char *path);
+int mainwindow_open_file(struct mainwindow *w, const TCHAR *path);
 int mainwindow_init_cache(struct mainwindow *w);
 const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd);
 void mainwindow_init_lua(struct mainwindow *w);
 void mainwindow_update_monoedit_tags(struct mainwindow *w);
-void mainwindow_set_tree(struct mainwindow *w, struct tree *tree);
 void mainwindow_update_ui(struct mainwindow *w);
 void mainwindow_move_forward(struct mainwindow *w);
 void mainwindow_move_backward(struct mainwindow *w);

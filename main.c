@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arena.h"
 #include "mainwindow.h"
 #include "monoedit.h"
 #include "tree.h"
@@ -11,17 +12,15 @@
 #include <commctrl.h>
 
 #ifdef UNICODE
-#define TO_TSTR(x) utf8_to_utf16(x)
-#define FROM_TSTR(x) utf16_to_utf8(x)
-#define FREE_TSTR(x) free(x)
+#define MBCS_TO_TSTR(x) mbcs_to_utf16(x)
+#define TSTR_TO_MBCS(x) utf16_to_mbcs(x)
 #else
-#define TO_TSTR(x) (x)
-#define FROM_TSTR(x) (x)
-#define FREE_TSTR(x) ((void)0)
+#define MBCS_TO_TSTR(x) (x)
+#define TSTR_TO_MBCS(x) (x)
 #endif
 
 #define INITIAL_N_ROW 32
-#define LOG2_N_COL 5
+#define LOG2_N_COL 4
 #define N_COL (1<<LOG2_N_COL)
 #define N_COL_CHAR (16+4*N_COL)
 
@@ -306,7 +305,7 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 			break;
 		}
 		path = tree_path(leaf);
-		path_tstr = TO_TSTR(path);
+		path_tstr = MBCS_TO_TSTR(path);
 	}
 	TCHAR cursor_pos_buf[17];
 	wsprintf(cursor_pos_buf, TEXT("%I64x"), mainwindow_cursor_pos(w));
@@ -314,7 +313,9 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
 	SendMessage(w->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
 	SendMessage(w->status_bar, SB_SETTEXT, 3, (LPARAM) path_tstr);
-	FREE_TSTR(path_tstr);
+#ifdef UNICODE
+	free(path_tstr);
+#endif
 	free(path);
 }
 
@@ -474,9 +475,11 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 
 void mainwindow_error_prompt(struct mainwindow *w, const char *errmsg)
 {
-	TCHAR *errmsg_tstr = TO_TSTR(errmsg);
+	TCHAR *errmsg_tstr = MBCS_TO_TSTR(errmsg);
 	MessageBox(w->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
-	FREE_TSTR(errmsg_tstr);
+#ifdef UNICODE
+	free(errmsg_tstr);
+#endif
 }
 
 void mainwindow_execute_command(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
@@ -670,7 +673,7 @@ monoedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct mainwindow *w = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (message) {
 	case WM_LBUTTONDOWN:
@@ -749,7 +752,7 @@ cmdedit_wndproc(HWND hwnd,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct mainwindow *w = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (message) {
 	case WM_CHAR:
@@ -762,7 +765,7 @@ cmdedit_wndproc(HWND hwnd,
 			buf_len = GetWindowTextLength(hwnd)+1;
 			raw_cmd = malloc(buf_len * sizeof *raw_cmd);
 			GetWindowText(hwnd, raw_cmd, buf_len);
-			cmd = FROM_TSTR(raw_cmd);
+			cmd = TSTR_TO_MBCS(raw_cmd);
 			errmsg = 0;
 			switch (cmd[0]) {
 			case '/':
@@ -779,7 +782,9 @@ cmdedit_wndproc(HWND hwnd,
 				break;
 			}
 			free(raw_cmd);
-			FREE_TSTR(cmd);
+#ifdef UNICODE
+			free(cmd);
+#endif
 			if (errmsg) {
 				mainwindow_error_prompt(w, errmsg);
 			}
@@ -1021,7 +1026,7 @@ static void format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
 }
 
 // usually you want to update UI after this
-int mainwindow_open_file(struct mainwindow *w, const char *path)
+int mainwindow_open_file(struct mainwindow *w, const TCHAR *path)
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
 	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
@@ -1030,15 +1035,13 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 	if (w->file != INVALID_HANDLE_VALUE) {
 		CloseHandle(w->file);
 	}
-	TCHAR *path_tstr = TO_TSTR(path);
-	w->file = CreateFile(path_tstr,
+	w->file = CreateFile(path,
 			     GENERIC_READ,
 			     FILE_SHARE_READ,
 			     0, // lpSecurityAttributes
 			     OPEN_EXISTING,
 			     0,
 			     0);
-	FREE_TSTR(path_tstr);
 	if (w->file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, sizeof errtext, GetLastError());
 		fprintf(stderr, errfmt_open, path, errtext);
@@ -1047,7 +1050,11 @@ int mainwindow_open_file(struct mainwindow *w, const char *path)
 	if (w->filepath) {
 		free(w->filepath);
 	}
+#ifdef UNICODE
+	w->filepath = utf16_to_mbcs(path);
+#else
 	w->filepath = strdup(path);
+#endif
 	DWORD file_size_high;
 	w->file_size = GetFileSize(w->file, &file_size_high);
 	if (w->file_size == 0xffffffff) {
@@ -1087,51 +1094,30 @@ int mainwindow_init_cache(struct mainwindow *w)
 	return 0;
 }
 
-static int file_chooser_dialog(char *buf, int buflen)
+static int file_chooser_dialog(TCHAR *buf, int buflen)
 {
-#ifdef UNICODE
-	TCHAR buf_tstr[512];
-	buf_tstr[0] = 0;
-#else
 	buf[0] = 0;
-#endif
 	OPENFILENAME ofn = {0};
 	ofn.lStructSize = sizeof ofn;
 	ofn.hInstance = GetModuleHandle(0);
-#ifdef UNICODE
-	ofn.lpstrFile = buf_tstr;
-	ofn.nMaxFile = sizeof buf_tstr / sizeof *buf_tstr;
-#else
 	ofn.lpstrFile = buf;
 	ofn.nMaxFile = buflen;
-#endif
 	if (!GetOpenFileName(&ofn)) return -1;
-#ifdef UNICODE
-	wchar_t *psrc = buf_tstr;
-	int idst = 0;
-	while (*psrc) {
-		uint32_t rune = decode_utf16(psrc);
-		psrc += utf16_length(rune) >> 1;
-		// need a byte for trailing '\0' so break when equal
-		if (idst + utf8_length(rune) >= buflen) break;
-		idst += to_utf8(rune, buf + idst);
-	}
-	buf[idst] = 0;
-#endif
 	return 0;
 }
 
-int APIENTRY
-WinMain(HINSTANCE instance,
-	HINSTANCE prev_instance,
-	LPSTR cmdline,
-	int show)
+static void usage(void)
 {
-	TCHAR *cmdline_tstr = GetCommandLine();
+	fprintf(stderr, "incorrect usage\n");
+	exit(1);
+}
 
-	char filepath[512];
-	struct mainwindow *w;
-
+static int
+start_gui(HINSTANCE instance,
+	  int show,
+	  struct mainwindow *w,
+	  const TCHAR *filepath)
+{
 	InitCommonControls();
 	if (!monoedit_register_class()) {
 		return 1;
@@ -1139,26 +1125,13 @@ WinMain(HINSTANCE instance,
 	if (!register_wndclass()) {
 		return 1;
 	}
-	if (!cmdline[0]) {
-		// no command line argument
-
-		if (file_chooser_dialog(filepath, sizeof filepath) < 0) {
-			return 1;
-		}
-		cmdline = filepath;
-	}
-	// initialize mainwindow struct
-	w = calloc(1, sizeof *w);
-	w->file = INVALID_HANDLE_VALUE;
-	w->interactive = true;
-	if (mainwindow_open_file(w, cmdline) < 0) {
+	if (mainwindow_open_file(w, filepath) < 0) {
 		return 1;
 	}
 	if (mainwindow_init_cache(w) < 0) {
 		return 1;
 	}
 	mainwindow_init_font(w);
-	mainwindow_init_lua(w);
 	//RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
 	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hwnd = CreateWindow(TEXT("WHEX"), // class name
@@ -1181,6 +1154,76 @@ WinMain(HINSTANCE instance,
 	}
 	// window closed now
 	return msg.wParam;
+}
+
+int APIENTRY
+WinMain(HINSTANCE instance,
+	HINSTANCE prev_instance,
+	LPSTR cmdline,
+	int show)
+{
+	int argc;
+	TCHAR **argv;
+	TCHAR openfilename[512];
+	const TCHAR *filepath;
+	const TCHAR *script_path = 0;
+
+#ifdef UNICODE
+	argv = CommandLineToArgvW(GetCommandLine(), &argc);
+#else
+	// TODO test this
+	wchar_t *cmdline_utf16 = mbcs_to_utf16(cmdline);
+	wchar_t **argv_utf16 = CommandLineToArgvW(cmdline_utf16, &argc);
+	argv = malloc((argc+1) * sizeof *argv);
+	for (int i=0; i<argc; i++) {
+		argv[i] = utf16_to_mbcs(argv_utf16[i]);
+	}
+	argv[argc] = 0;
+#endif
+	// parse command line arguments
+	if (argc == 1) {
+		if (file_chooser_dialog(openfilename, sizeof openfilename /
+					sizeof *openfilename)) return 1;
+		filepath = openfilename;
+	} else {
+		if (!lstrcmp(argv[1], TEXT("-c"))) {
+			if (argc < 3) usage();
+			script_path = argv[2];
+		} else {
+			// GUI mode
+			filepath = argv[1];
+		}
+	}
+
+	// initialize mainwindow struct
+	struct mainwindow *w = calloc(1, sizeof *w);
+	w->file = INVALID_HANDLE_VALUE;
+	w->interactive = !script_path;
+	mainwindow_init_lua(w);
+
+	if (script_path) {
+		char *script_path_mbcs;
+#ifdef UNICODE
+		script_path_mbcs = utf16_to_mbcs(script_path);
+#else
+		script_path_mbcs = script_path;
+#endif
+		DEBUG_PRINTF("execute Lua script %s\n", script_path_mbcs);
+		lua_State *L = w->lua;
+		int err = luaL_loadfile(L, script_path_mbcs) ||
+			lua_pcall(L, 0, 0, 0);
+#ifdef UNICODE
+		free(script_path_mbcs);
+#endif
+		if (err) {
+			const char *err = lua_tostring(L, -1);
+			fputs(err, stderr);
+			return 1;
+		}
+		return 0;
+	}
+	DEBUG_PRINTF("starting GUI\n");
+	return start_gui(instance, show, w, filepath);
 }
 
 // commands
@@ -1243,19 +1286,14 @@ const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
 const char *mainwindow_cmd_luafile(struct mainwindow *w, char *arg)
 {
 	while (*arg == ' ') arg++;
-	char *start = arg;
+	char *filepath_mbcs = arg;
 	while (*arg && *arg != ' ') arg++;
 	if (*arg) {
 		return "trailing character";
 	}
 
-	// if in interactive mode and argument is empty, pop up file chooser dialog
-	char path[512];
-	if (!*start && w->interactive) {
-		if (file_chooser_dialog(path, sizeof path) < 0) {
-			return 0;
-		}
-		start = path;
+	if (!*filepath_mbcs) {
+		return "no file specified";
 	}
 
 	int error;
@@ -1263,7 +1301,8 @@ const char *mainwindow_cmd_luafile(struct mainwindow *w, char *arg)
 
 	bool saved_interactive = w->interactive;
 	w->interactive = false;
-	error = luaL_loadfile(L, start) || lua_pcall(L, 0, 0, 0);
+	// luaL_loadfile uses fopen() which accepts MBCS string
+	error = luaL_loadfile(L, filepath_mbcs) || lua_pcall(L, 0, 0, 0);
 	w->interactive = saved_interactive;
 	if (error) {
 		const char *err = lua_tostring(L, -1);
@@ -1394,14 +1433,6 @@ void mainwindow_update_monoedit_tags(struct mainwindow *w)
 	}
 }
 
-void mainwindow_set_tree(struct mainwindow *w, struct tree *tree)
-{
-	if (w->tree) {
-		tree_free(w->tree);
-	}
-	w->tree = tree;
-}
-
 void mainwindow_update_ui(struct mainwindow *w)
 {
 	mainwindow_update_monoedit_buffer(w, 0, w->nrows);
@@ -1419,7 +1450,12 @@ const char *mainwindow_cmd_edit(struct mainwindow *w, char *arg)
 		return "trailing character";
 	}
 
-	if (mainwindow_open_file(w, start)) {
+	TCHAR *filepath = MBCS_TO_TSTR(start);
+	int err = mainwindow_open_file(w, filepath);
+#ifdef UNICODE
+	free(filepath);
+#endif
+	if (err) {
 		return "failed to open file";
 	}
 	w->current_line = 0;

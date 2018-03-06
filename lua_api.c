@@ -1,13 +1,14 @@
+#include "arena.h"
 #include "mainwindow.h"
 #include "tree.h"
-
-char *strdup(const char *);
 
 static struct mainwindow *get_mainwindow(lua_State *L)
 {
 	lua_pushinteger(L, 0);
 	lua_gettable(L, LUA_REGISTRYINDEX);
-	return lua_touserdata(L, -1);
+	struct mainwindow *w = lua_touserdata(L, -1);
+	lua_pop(L, 1);
+	return w;
 }
 
 int lapi_peek(lua_State *L)
@@ -21,24 +22,36 @@ int lapi_peek(lua_State *L)
 	return 1;
 }
 
-static struct tree *convert_tree(lua_State *L)
+static struct tree *convert_tree(struct arena *arena, lua_State *L)
 {
-	struct tree *tree = malloc(sizeof *tree);
+	struct tree *tree = arena_alloc(arena, sizeof *tree);
 	tree->parent = 0;
 
 	lua_getfield(L, -1, "start");
-	if (!lua_isinteger(L, -1)) goto error;
+	if (!lua_isinteger(L, -1)) {
+		lua_pop(L, 1);
+		return 0;
+	}
 	tree->start = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "size");
-	if (!lua_isinteger(L, -1)) goto error;
+	if (!lua_isinteger(L, -1)) {
+		lua_pop(L, 1);
+		return 0;
+	}
 	tree->len = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "name");
-	if (!lua_isstring(L, -1)) goto error;
-	tree->name = strdup(lua_tostring(L, -1));
+	if (!lua_isstring(L, -1)) {
+		lua_pop(L, 1);
+		return 0;
+	}
+	const char *name = lua_tostring(L, -1);
+	int name_len1 = strlen(name)+1;
+	tree->name = arena_alloc(arena, name_len1);
+	memcpy(tree->name, name, name_len1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "value");
@@ -59,36 +72,35 @@ static struct tree *convert_tree(lua_State *L)
 	int n = lua_rawlen(L, -1); // get number of children
 
 	tree->n_child = n;
-	tree->children = malloc(n * sizeof *tree->children);
+	tree->children = arena_alloc(arena, n * sizeof *tree->children);
 	for (int i=0; i<n; i++) {
 		// beware that indices start at 1 in Lua
 		lua_rawgeti(L, -1, 1+i); // push child
-		tree->children[i] = convert_tree(L);
-		if (!tree->children[i]) {
-			free(tree->children);
-			goto error;
+		struct tree *child = convert_tree(arena, L);
+		if (!child) {
+			lua_pop(L, 2);
+			return 0;
 		}
-		tree->children[i]->parent = tree;
-		lua_pop(L, 1);
+		child->parent = tree;
+		tree->children[i] = child;
+		lua_pop(L, 1); // pop child
 	}
 
 	// pop array of children
 	lua_pop(L, 1);
 
 	return tree;
-error:
-	free(tree);
-	return 0;
 }
 
 int lapi_set_tree(lua_State *L)
 {
-	struct tree *tree = convert_tree(L);
-	if (!tree) {
+	struct mainwindow *w = get_mainwindow(L);
+	struct arena *arena = &w->tree_arena;
+	arena_reset(arena);
+	w->tree = convert_tree(arena, L);
+	if (!w->tree) {
 		return luaL_error(L, "invalid argument");
 	}
-	struct mainwindow *w = get_mainwindow(L);
-	mainwindow_set_tree(w, tree);
 	return 0;
 }
 

@@ -1,10 +1,19 @@
 #include <assert.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "arena.h"
-#include "mainwindow.h"
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
+
+#include <windows.h>
+
+#include "util.h"
+#include "whex.h"
+#include "ui.h"
 #include "monoedit.h"
 #include "tree.h"
 #include "unicode.h"
@@ -24,6 +33,8 @@
 #define N_COL (1<<LOG2_N_COL)
 #define N_COL_CHAR (16+4*N_COL)
 
+#define BUFSIZE 512
+
 enum {
 	CONTROL_STATUS_BAR = 0x100
 };
@@ -31,146 +42,356 @@ enum {
 char *strdup(const char *);
 void register_lua_globals(lua_State *L);
 
-static bool iswordchar(char c)
+static bool
+iswordchar(char c)
 {
 	return isalnum(c) || c == '_';
 }
 
-bool mainwindow_cache_valid(struct mainwindow *w, int block)
+static uint8_t
+hexval(char c)
 {
-	return w->cache[block].tag & 1;
-};
-
-int mainwindow_find_cache(struct mainwindow *w, long long address)
-{
-	assert(address >= 0 && address < w->file_size);
-
-	static int next_cache = 0;
-
-	for (int i=0; i<N_CACHE_BLOCK; i++) {
-		long long tag = w->cache[i].tag;
-		if ((tag & 1) && address >> 12 == tag >> 12) return i;
-	}
-
-	long long base = address & -CACHE_BLOCK_SIZE;
-	long long tag = base|1;
-	SetFilePointer(w->file, base, 0, FILE_BEGIN);
-	DWORD nread;
-	int ret = next_cache;
-	ReadFile(w->file, w->cache[ret].data, CACHE_BLOCK_SIZE, &nread, 0);
-	w->cache[ret].tag = tag;
-	next_cache = (ret+1)&(N_CACHE_BLOCK-1);
-
-	DEBUG_PRINTF("loaded %I64x into cache block %d\n", base, ret);
-
-	return ret;
+	return c > '9' ? 10+(c|32)-'a' : c-'0';
 }
 
-uint8_t mainwindow_getbyte(struct mainwindow *w, long long address)
+static uint8_t
+hextobyte(const uint8_t *p)
 {
-	int block = mainwindow_find_cache(w, address);
-	return w->cache[block].data[address & (CACHE_BLOCK_SIZE-1)];
+	return hexval(p[0]) << 4 | hexval(p[1]);
 }
 
-static void kmp_table(int *T, const uint8_t *pat, int len)
+LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK cmdedit_wndproc(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
+ATOM register_wndclass(void);
+static void format_error_code(TCHAR *, size_t, DWORD);
+static int file_chooser_dialog(TCHAR *, int);
+static int start_gui(HINSTANCE, int, UI *, const TCHAR *);
+void update_monoedit_buffer(UI *, int, int);
+void set_current_line(UI *, long long);
+void update_status_text(UI *, struct tree *);
+void update_field_info(UI *);
+void update_cursor_pos(UI *);
+long long cursor_pos(UI *);
+void goto_address(UI *, long long);
+void error_prompt(UI *, const char *);
+void scroll_up_line(UI *);
+void scroll_down_line(UI *);
+void move_up(UI *);
+void move_down(UI *);
+void move_left(UI *);
+void move_right(UI *);
+void move_up_page(UI *);
+void move_down_page(UI *);
+void goto_bol(UI *);
+void goto_eol(UI *);
+int handle_char(UI *, int);
+void init_font(UI *);
+void handle_wm_create(UI *, LPCREATESTRUCT);
+int open_file(UI *, const TCHAR *);
+void update_ui(UI *);
+void init_lua(UI *);
+void update_monoedit_tags(UI *);
+void move_forward(UI *);
+void move_backward(UI *);
+void move_next_field(UI *);
+void move_prev_field(UI *);
+
+LRESULT CALLBACK
+med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	int pos = 2;
-	int cnd = 0;
-	// forall i:nat, 0 < i < len ->
-	// T[i] < i /\ ...
-	// pat[i-T[i]:i] = pat[0:T[i]] /\ ...
-	// forall j:nat, T[i] < j < len -> pat[i-j:i] <> pat[0:j]
-	T[1] = 0; // T[0] is undefined
-	while (pos < len) {
-		if (pat[pos-1] == pat[cnd]) {
-			T[pos++] = cnd+1;
-			cnd++;
-		} else {
-			// pat[pos-1] != pat[cnd]
-			if (cnd > 0) {
-				cnd = T[cnd];
-			} else {
-				T[pos++] = 0;
+	UI *ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	Whex *w = ui->whex;
+
+	switch (msg) {
+	case WM_LBUTTONDOWN:
+		{
+			int x = LOWORD(lparam);
+			int y = HIWORD(lparam);
+			SetFocus(hwnd);
+			int cx = x / ui->charwidth;
+			int cy = y / ui->charheight;
+			if (cx >= 10 && cx < 10+N_COL*3 && cy < ui->nrow) {
+				cx = (cx-10)/3;
+				long long pos = ((ui->current_line + cy) << LOG2_N_COL) + cx;
+				if (pos < w->file_size) {
+					ui->cursor_x = cx;
+					ui->cursor_y = cy;
+					update_cursor_pos(ui);
+				}
 			}
 		}
-	}
-}
-
-long long mainwindow_kmp_search(struct mainwindow *w, const uint8_t *pat, int len, long long start)
-{
-	assert(len);
-	int T[len];
-	kmp_table(T, pat, len);
-	long long m = start; // start of potential match
-	int i = 0;
-	while (m+i < w->file_size) {
-		if (pat[i] == mainwindow_getbyte(w, m+i)) {
-			if (i == len-1) return m; // match found
-			i++;
-		} else {
-			// current character does not match
-			if (i) {
-				m += i-T[i];
-				i = T[i];
+		return 0;
+	case WM_KEYDOWN:
+		switch (wparam) {
+		case VK_UP:
+			move_up(ui);
+			break;
+		case VK_DOWN:
+			move_down(ui);
+			break;
+		case VK_LEFT:
+			move_left(ui);
+			break;
+		case VK_RIGHT:
+			move_right(ui);
+			break;
+		case VK_PRIOR:
+			move_up_page(ui);
+			break;
+		case VK_NEXT:
+			move_down_page(ui);
+			break;
+		case VK_HOME:
+			goto_bol(ui);
+			break;
+		case VK_END:
+			goto_eol(ui);
+			break;
+		}
+		return 0;
+	case WM_MOUSEWHEEL:
+		{
+			int delta = (short) HIWORD(wparam);
+			if (delta > 0) {
+				int n = delta / WHEEL_DELTA;
+				while (n--) {
+					scroll_up_line(ui);
+				}
 			} else {
-				m++;
+				int n = (-delta) / WHEEL_DELTA;
+				while (n--) {
+					scroll_down_line(ui);
+				}
 			}
 		}
+		return 0;
 	}
-	/* no match */
-	return w->file_size;
+	return CallWindowProc(ui->med_wndproc, hwnd, msg, wparam, lparam);
 }
 
-/*
- * ...|xx|x..
- * position of first mark = start
- * number of bytes after the second mark = N-(start+len-1)
- */
-long long mainwindow_kmp_search_backward(struct mainwindow *w, const uint8_t *pat, int len, long long start)
+LRESULT CALLBACK
+cmdedit_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	assert(len);
-	int T[len];
-	uint8_t revpat[len];
-	for (int i=0; i<len; i++) {
-		revpat[i] = pat[len-1-i];
-	}
-	pat = revpat;
-	kmp_table(T, pat, len);
-	long long m = start;
-	int i = 0;
-	while (m+i < w->file_size) {
-		if (pat[i] == mainwindow_getbyte(w, w->file_size-1-(m+i))) {
-			if (i == len-1) return w->file_size-(m+len);
-			i++;
-		} else {
-			if (i) {
-				m += i-T[i];
-				i = T[i];
-			} else {
-				m++;
+	UI *ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+
+	switch (msg) {
+	case WM_CHAR:
+		switch (wparam) {
+			char *cmd;
+			TCHAR *raw_cmd;
+			int buf_len;
+			const char *errmsg;
+		case '\r':
+			buf_len = GetWindowTextLength(hwnd)+1;
+			raw_cmd = malloc(buf_len * sizeof *raw_cmd);
+			GetWindowText(hwnd, raw_cmd, buf_len);
+			cmd = TSTR_TO_MBCS(raw_cmd);
+			errmsg = 0;
+			switch (cmd[0]) {
+			case '/':
+				//execute_command(w, cmd_find_text, cmd+1);
+				break;
+			case ':':
+				//errmsg = parse_and_execute_command(w, cmd+1);
+				break;
+			case '\\':
+				//execute_command(w, cmd_find_hex, cmd+1);
+				break;
+			case 'g':
+				//execute_command(w, cmd_goto, cmd+1);
+				break;
 			}
+			free(raw_cmd);
+#ifdef UNICODE
+			free(cmd);
+#endif
+			if (errmsg) {
+				error_prompt(ui, errmsg);
+			}
+			// fallthrough
+		case 27: // escape
+			SetWindowText(hwnd, TEXT(""));
+			SetFocus(ui->monoedit);
+			return 0;
 		}
 	}
-	/* no match */
-	return w->file_size;
+
+	return CallWindowProc(ui->cmdedit_wndproc, hwnd, msg, wparam, lparam);
 }
 
-void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, int num_lines)
+ATOM
+register_wndclass(void)
 {
-	long long abs_line = w->current_line + buffer_line;
+	WNDCLASS wndclass = {0};
+
+	wndclass.lpfnWndProc = wndproc;
+	wndclass.cbWndExtra = sizeof(LONG_PTR);
+	wndclass.hInstance = GetModuleHandle(0);
+	wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
+	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
+	wndclass.lpszClassName = TEXT("WHEX");
+	return RegisterClass(&wndclass);
+}
+
+static void
+format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
+{
+#if 0
+   DWORD FormatMessage(
+    DWORD dwFlags,	// source and processing options
+    LPCVOID lpSource,	// pointer to message source
+    DWORD dwMessageId,	// requested message identifier
+    DWORD dwLanguageId,	// language identifier for requested message
+    LPTSTR lpBuffer,	// pointer to message buffer
+    DWORD nSize,	// maximum size of message buffer
+    va_list *Arguments 	// address of array of message inserts
+   );
+#endif
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
+		      0,
+		      error_code,
+		      0,
+		      buf,
+		      buflen,
+		      0);
+}
+
+static int
+file_chooser_dialog(TCHAR *buf, int buflen)
+{
+	buf[0] = 0;
+	OPENFILENAME ofn = {0};
+	ofn.lStructSize = sizeof ofn;
+	ofn.hInstance = GetModuleHandle(0);
+	ofn.lpstrFile = buf;
+	ofn.nMaxFile = buflen;
+	if (!GetOpenFileName(&ofn)) return -1;
+	return 0;
+}
+
+static int
+start_gui(HINSTANCE instance,
+	  int show,
+	  UI *ui,
+	  const TCHAR *filepath)
+{
+	InitCommonControls();
+	if (!med_register_class()) return 1;
+	if (!register_wndclass()) return 1;
+	if (open_file(ui, filepath) < 0) return 1;
+	if (whex_init_cache(ui->whex) < 0) return 1;
+	init_font(ui);
+	//RECT rect = { 0, 0, ui->charwidth*N_COL_CHAR, ui->charheight*(INITIAL_N_ROW+1) };
+	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+	HWND hwnd = CreateWindow(TEXT("WHEX"), // class name
+				 0, // window title
+				 WS_OVERLAPPEDWINDOW, // window style
+				 CW_USEDEFAULT, // initial x position
+				 CW_USEDEFAULT, // initial y position
+				 CW_USEDEFAULT, // initial width
+				 CW_USEDEFAULT, // initial height
+				 0,
+				 0,
+				 instance,
+				 ui); // window-creation data
+	ShowWindow(hwnd, show);
+	update_ui(ui);
+	MSG msg;
+	while (GetMessage(&msg, 0, 0, 0)) {
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+	// window closed now
+	return msg.wParam;
+}
+
+/* TODO: handle special characters */
+static TCHAR **
+cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
+{
+	int narg = 0;
+	List head = {0};
+	List *last = &head;
+	TCHAR *p = cmdline;
+	TCHAR *q;
+	TCHAR *arg;
+	do {
+		q = p;
+		while (*q && !isspace(*q)) q++;
+		/* argument between p and q */
+		narg++;
+		int n = q-p;
+		arg = ralloc(r, (n+1) * sizeof *arg);
+		memcpy(arg, p, n*sizeof(TCHAR));
+		arg[n] = 0;
+		APPEND(last, arg, r);
+		p = q;
+		while (isspace(*p)) p++;
+	} while (*p);
+	int i=0;
+	TCHAR **argv = ralloc(r, (narg+1) * sizeof *argv);
+	FOREACH(head.next, arg) argv[i++] = arg;
+	argv[narg] = 0;
+	*argc = narg;
+	return argv;
+}
+
+int APIENTRY
+WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
+{
+	TCHAR openfilename[BUFSIZE];
+	int argc;
+	TCHAR **argv;
+	const TCHAR *filepath;
+	Region rgn = {0}; /* persistent storage */
+
+	argv = cmdline_to_argv(&rgn, GetCommandLine(), &argc);
+
+	/* parse command line arguments */
+	if (argc == 1) {
+		if (file_chooser_dialog(openfilename, BUFSIZE))
+			return 1;
+		filepath = openfilename;
+	} else if (argc == 2) {
+		filepath = argv[1];
+	} else {
+		return 1;
+	}
+
+	struct cache_entry *cache = calloc(N_CACHE_BLOCK, sizeof *cache);
+
+	// initialize mainwindow struct
+	Whex *w = calloc(1, sizeof *w);
+	w->cache = cache;
+
+	UI *ui = calloc(1, sizeof *ui);
+	ui->whex = w;
+	w->file = INVALID_HANDLE_VALUE;
+	init_lua(ui);
+
+	return start_gui(instance, show, ui, filepath);
+}
+
+void
+update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
+{
+	Whex *w = ui->whex;
+	long long abs_line = ui->current_line + buffer_line;
 	long long abs_line_end = abs_line + num_lines;
 	while (abs_line < abs_line_end) {
-		TCHAR *line = &w->monoedit_buffer[buffer_line*N_COL_CHAR];
+		TCHAR *line = ui->med_buffer + buffer_line*N_COL_CHAR;
 		TCHAR *p = line;
-		long long address = abs_line << LOG2_N_COL;
+		long long addr = abs_line << LOG2_N_COL;
 		if (abs_line >= w->total_lines) {
 			for (int i=0; i<N_COL_CHAR; i++) {
 				p[i] = ' ';
 			}
 		} else {
-			int block = mainwindow_find_cache(w, address);
-			int base = address & (CACHE_BLOCK_SIZE-1);
-			wsprintf(p, TEXT("%08I64x: "), address);
+			int block = whex_find_cache(w, addr);
+			int base = addr & (CACHE_BLOCK_SIZE-1);
+			wsprintf(p, TEXT("%08I64x: "), addr);
 			p += 10;
 			int end = 0;
 		       	if (abs_line+1 >= w->total_lines) {
@@ -203,30 +424,22 @@ void mainwindow_update_monoedit_buffer(struct mainwindow *w, int buffer_line, in
 	}
 }
 
-static uint8_t hexval(char c)
+void
+set_current_line(UI *ui, long long line)
 {
-	return c > '9' ? 10+(c|32)-'a' : c-'0';
-}
-
-static uint8_t hextobyte(const uint8_t *p)
-{
-	return hexval(p[0]) << 4 | hexval(p[1]);
-}
-
-void mainwindow_set_current_line(struct mainwindow *w, long long line)
-{
+	Whex *w = ui->whex;
 	assert(line <= w->total_lines);
-	w->current_line = line;
-	if (w->interactive) {
-		mainwindow_update_monoedit_buffer(w, 0, w->nrows);
-		mainwindow_update_monoedit_tags(w);
-		mainwindow_update_cursor_pos(w);
-		InvalidateRect(w->monoedit, 0, FALSE);
-	}
+	ui->current_line = line;
+	update_monoedit_buffer(ui, 0, ui->nrow);
+	update_monoedit_tags(ui);
+	update_cursor_pos(ui);
+	InvalidateRect(ui->monoedit, 0, FALSE);
 }
 
-void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
+void
+update_status_text(UI *ui, struct tree *leaf)
 {
+	Whex *w = ui->whex;
 	const TCHAR *type_name = TEXT("unknown");
 	TCHAR value_buf[80];
 	value_buf[0] = 0;
@@ -245,33 +458,33 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 				long long llval;
 			case 1:
 				type_name = TEXT("uint8");
-				ival = mainwindow_getbyte(w, leaf->start);
+				ival = whex_getbyte(w, leaf->start);
 				wsprintf(value_buf, TEXT("%u (%02x)"), ival, ival);
 				break;
 			case 2:
 				type_name = TEXT("uint16");
-				ival = mainwindow_getbyte(w, leaf->start) |
-					mainwindow_getbyte(w, leaf->start + 1) << 8;
+				ival = whex_getbyte(w, leaf->start) |
+					whex_getbyte(w, leaf->start + 1) << 8;
 				wsprintf(value_buf, TEXT("%u (%04x)"), ival, ival);
 				break;
 			case 4:
 				type_name = TEXT("uint32");
-				ival = mainwindow_getbyte(w, leaf->start)
-					| mainwindow_getbyte(w, leaf->start + 1) << 8
-					| mainwindow_getbyte(w, leaf->start + 2) << 16
-					| mainwindow_getbyte(w, leaf->start + 3) << 24;
+				ival = whex_getbyte(w, leaf->start)
+					| whex_getbyte(w, leaf->start + 1) << 8
+					| whex_getbyte(w, leaf->start + 2) << 16
+					| whex_getbyte(w, leaf->start + 3) << 24;
 				wsprintf(value_buf, TEXT("%u (%08x)"), ival, ival);
 				break;
 			case 8:
 				type_name = TEXT("uint64");
-				ival = mainwindow_getbyte(w, leaf->start)
-					| mainwindow_getbyte(w, leaf->start + 1) << 8
-					| mainwindow_getbyte(w, leaf->start + 2) << 16
-					| mainwindow_getbyte(w, leaf->start + 3) << 24;
-				ival_hi = mainwindow_getbyte(w, leaf->start + 4)
-					| mainwindow_getbyte(w, leaf->start + 5) << 8
-					| mainwindow_getbyte(w, leaf->start + 6) << 16
-					| mainwindow_getbyte(w, leaf->start + 7) << 24;
+				ival = whex_getbyte(w, leaf->start)
+					| whex_getbyte(w, leaf->start + 1) << 8
+					| whex_getbyte(w, leaf->start + 2) << 16
+					| whex_getbyte(w, leaf->start + 3) << 24;
+				ival_hi = whex_getbyte(w, leaf->start + 4)
+					| whex_getbyte(w, leaf->start + 5) << 8
+					| whex_getbyte(w, leaf->start + 6) << 16
+					| whex_getbyte(w, leaf->start + 7) << 24;
 				llval = ((long long) ival_hi) << 32 | ival;
 				wsprintf(value_buf, TEXT("%I64u (%016I64x)"), llval, llval);
 				break;
@@ -290,7 +503,7 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 			if (n > 16) n = 16;
 			*p++ = '"';
 			for (int i=0; i<n; i++) {
-				uint8_t b = mainwindow_getbyte(w, leaf->start + i);
+				uint8_t b = whex_getbyte(w, leaf->start + i);
 				if (b >= 0x20 && b < 0x7f) {
 					*p++ = b;
 				} else {
@@ -308,80 +521,85 @@ void mainwindow_update_status_text(struct mainwindow *w, struct tree *leaf)
 		path_tstr = MBCS_TO_TSTR(path);
 	}
 	TCHAR cursor_pos_buf[17];
-	wsprintf(cursor_pos_buf, TEXT("%I64x"), mainwindow_cursor_pos(w));
-	SendMessage(w->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
-	SendMessage(w->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
-	SendMessage(w->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
-	SendMessage(w->status_bar, SB_SETTEXT, 3, (LPARAM) path_tstr);
+	wsprintf(cursor_pos_buf, TEXT("%I64x"), cursor_pos(ui));
+	SendMessage(ui->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
+	SendMessage(ui->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
+	SendMessage(ui->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
+	SendMessage(ui->status_bar, SB_SETTEXT, 3, (LPARAM) path_tstr);
 #ifdef UNICODE
 	free(path_tstr);
 #endif
 	free(path);
 }
 
-// should be invoked when cursor_pos is changed in interactive mode
-void mainwindow_update_field_info(struct mainwindow *w)
+// should be invoked when cursor_pos is changed
+void
+update_field_info(UI *ui)
 {
+	Whex *w = ui->whex;
 	if (w->tree) {
-		struct tree *leaf = tree_lookup(w->tree, mainwindow_cursor_pos(w));
+		struct tree *leaf = tree_lookup(w->tree, cursor_pos(ui));
 		if (leaf) {
-			w->hl_start = leaf->start;
-			w->hl_len = leaf->len;
+			ui->hl_start = leaf->start;
+			ui->hl_len = leaf->len;
 		} else {
-			w->hl_start = 0;
-			w->hl_len = 0;
+			ui->hl_start = 0;
+			ui->hl_len = 0;
 		}
-		if (w->interactive) {
-			mainwindow_update_monoedit_tags(w);
-			InvalidateRect(w->monoedit, 0, FALSE);
-			mainwindow_update_status_text(w, leaf);
-		}
+		update_monoedit_tags(ui);
+		InvalidateRect(ui->monoedit, 0, FALSE);
+		update_status_text(ui, leaf);
 	} else {
-		mainwindow_update_status_text(w, 0);
+		update_status_text(ui, 0);
 	}
 }
 
-void mainwindow_update_cursor_pos(struct mainwindow *w)
+void
+update_cursor_pos(UI *ui)
 {
-	SendMessage(w->monoedit,
-		    MONOEDIT_WM_SET_CURSOR_POS,
-		    10+w->cursor_x*3,
-		    w->cursor_y);
-	mainwindow_update_field_info(w);
-	SendMessage(w->monoedit, MONOEDIT_WM_SET_CURSOR_POS,
-		    10+w->cursor_x*3, w->cursor_y);
+	SendMessage(ui->monoedit,
+		    MED_WM_SET_CURSOR_POS,
+		    10+ui->cursor_x*3,
+		    ui->cursor_y);
+	update_field_info(ui);
+	SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS,
+		    10+ui->cursor_x*3, ui->cursor_y);
 }
 
-long long mainwindow_cursor_pos(struct mainwindow *w)
+long long
+cursor_pos(UI *ui)
 {
-	return ((w->current_line + w->cursor_y) << LOG2_N_COL) + w->cursor_x;
+	return ((ui->current_line + ui->cursor_y) << LOG2_N_COL) + ui->cursor_x;
 }
 
-void mainwindow_goto_address(struct mainwindow *w, long long address)
+void
+goto_address(UI *ui, long long addr)
 {
-	long long line = address >> LOG2_N_COL;
-	int col = address & (N_COL-1);
-	assert(address >= 0 && address < w->file_size);
-	w->cursor_x = col;
-	if (line >= w->current_line && line < w->current_line + w->nrows) {
-		w->cursor_y = line - w->current_line;
-		if (w->interactive) {
-			mainwindow_update_cursor_pos(w);
-		}
+	Whex *w = ui->whex;
+	long long line = addr >> LOG2_N_COL;
+	int col = addr & (N_COL-1);
+	assert(addr >= 0 && addr < w->file_size);
+	ui->cursor_x = col;
+	if (line >= ui->current_line && line < ui->current_line + ui->nrow) {
+		ui->cursor_y = line - ui->current_line;
+		update_cursor_pos(ui);
 	} else {
 		long long line1;
-		if (line >= w->nrows >> 1) {
-			line1 = line - (w->nrows >> 1);
+		if (line >= ui->nrow >> 1) {
+			line1 = line - (ui->nrow >> 1);
 		} else {
 			line1 = 0;
 		}
-		w->cursor_y = line - line1;
-		mainwindow_set_current_line(w, line1);
+		ui->cursor_y = line - line1;
+		set_current_line(ui, line1);
 	}
 }
 
-char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
+#if 0
+char *
+find(UI *ui, char *arg, bool istext)
 {
+	Whex *w = ui->whex;
 	int patlen;
 	uint8_t *pat;
 	uint8_t *p = (uint8_t *) arg;
@@ -421,47 +639,49 @@ char *mainwindow_find(struct mainwindow *w, char *arg, bool istext)
 			p += 2;
 		}
 	}
-	if (w->last_search_pattern) {
-		free(w->last_search_pattern);
+	if (ui->last_search_pattern) {
+		free(ui->last_search_pattern);
 	}
-	w->last_search_pattern = malloc(patlen);
-	memcpy(w->last_search_pattern, pat, patlen);
-	w->last_search_pattern_len = patlen;
-	long long matchpos = mainwindow_kmp_search(w, pat, patlen, mainwindow_cursor_pos(w));
+	ui->last_search_pattern = malloc(patlen);
+	memcpy(ui->last_search_pattern, pat, patlen);
+	ui->last_search_pattern_len = patlen;
+	long long matchpos = whex_kmp_search(w, pat, patlen, cursor_pos(ui));
 	if (!istext) {
 		free(pat);
 	}
 	if (matchpos == w->file_size) {
 		return "pattern not found";
 	}
-	mainwindow_goto_address(w, matchpos);
+	goto_address(ui, matchpos);
 	return 0;
 }
 
-char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
+char *
+repeat_search(UI *ui, bool reverse)
 {
+	Whex *w = ui->whex;
 	if (!w->last_search_pattern) {
 		return "no previous pattern";
 	}
-	long long (*search_func)(struct mainwindow *w, const uint8_t *pat, int patlen, long long start);
+	long long (*search_func)(Whex *w, const uint8_t *pat, int patlen, long long start);
 	long long start;
 	if (reverse) {
-		long long tmp = mainwindow_cursor_pos(w) + w->last_search_pattern_len - 1;
+		long long tmp = cursor_pos(ui) + w->last_search_pattern_len - 1;
 		if (w->file_size >= tmp) {
 			start = w->file_size - tmp;
 		} else {
 			return "pattern not found";
 		}
-		search_func = mainwindow_kmp_search_backward;
+		search_func = whex_kmp_search_backward;
 	} else {
-		long long cursor_pos = mainwindow_cursor_pos(w);
+		long long cursor_pos = cursor_pos(ui);
 		if (cursor_pos+1 < w->file_size) {
 			start = cursor_pos+1;
 		} else {
 			return "pattern not found";
 			//start = 0;
 		}
-		search_func = mainwindow_kmp_search;
+		search_func = whex_kmp_search;
 	}
 	long long matchpos = search_func(w, w->last_search_pattern,
 					w->last_search_pattern_len,
@@ -469,167 +689,163 @@ char *mainwindow_repeat_search(struct mainwindow *w, bool reverse)
 	if (matchpos == w->file_size) {
 		return "pattern not found";
 	}
-	mainwindow_goto_address(w, matchpos);
+	goto_address(w, matchpos);
 	return 0;
 }
+#endif
 
-void mainwindow_error_prompt(struct mainwindow *w, const char *errmsg)
+void
+error_prompt(UI *ui, const char *errmsg)
 {
 #ifndef UNICODE
 	const
 #endif
 	TCHAR *errmsg_tstr = MBCS_TO_TSTR(errmsg);
-	MessageBox(w->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
+	MessageBox(ui->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
 #ifdef UNICODE
 	free(errmsg_tstr);
 #endif
 }
 
-void mainwindow_execute_command(struct mainwindow *w, cmdproc_t cmdproc, char *arg)
+void
+scroll_up_line(UI *ui)
 {
-	const char *errmsg = cmdproc(w, arg);
-	if (errmsg) {
-		mainwindow_error_prompt(w, errmsg);
+	if (ui->current_line) {
+		ui->current_line--;
+		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, -1);
+		memmove(ui->med_buffer+N_COL_CHAR, ui->med_buffer, N_COL_CHAR*(ui->nrow-1)*sizeof(TCHAR));
+		update_monoedit_buffer(ui, 0, 1);
+		update_monoedit_tags(ui);
+		update_cursor_pos(ui);
 	}
 }
 
-void mainwindow_scroll_up_line(struct mainwindow *w)
+void
+scroll_down_line(UI *ui)
 {
-	if (w->current_line) {
-		w->current_line--;
-		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -1);
-		memmove(w->monoedit_buffer+N_COL_CHAR, w->monoedit_buffer, N_COL_CHAR*(w->nrows-1)*sizeof(TCHAR));
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, 0, 1);
-			mainwindow_update_monoedit_tags(w);
-			mainwindow_update_cursor_pos(w);
-		}
+	if (cursor_pos(ui) + N_COL < ui->whex->file_size) {
+		ui->current_line++;
+		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, 1);
+		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR, N_COL_CHAR*(ui->nrow-1)*sizeof(TCHAR));
+		update_monoedit_buffer(ui, ui->nrow-1, 1);
+		update_monoedit_tags(ui);
+		update_cursor_pos(ui);
 	}
 }
 
-void mainwindow_scroll_down_line(struct mainwindow *w)
+void
+move_up(UI *ui)
 {
-	if (mainwindow_cursor_pos(w) + N_COL < w->file_size) {
-		w->current_line++;
-		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, 1);
-		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR, N_COL_CHAR*(w->nrows-1)*sizeof(TCHAR));
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, w->nrows-1, 1);
-			mainwindow_update_monoedit_tags(w);
-			mainwindow_update_cursor_pos(w);
-		}
-	}
-}
-
-void mainwindow_move_up(struct mainwindow *w)
-{
-	if (mainwindow_cursor_pos(w) >= N_COL) {
-		if (w->cursor_y) {
-			w->cursor_y--;
-			mainwindow_update_cursor_pos(w);
+	if (cursor_pos(ui) >= N_COL) {
+		if (ui->cursor_y) {
+			ui->cursor_y--;
+			update_cursor_pos(ui);
 		} else {
-			mainwindow_scroll_up_line(w);
+			scroll_up_line(ui);
 		}
 	}
 }
 
-void mainwindow_move_down(struct mainwindow *w)
+void
+move_down(UI *ui)
 {
-	if (w->file_size >= N_COL && mainwindow_cursor_pos(w) < w->file_size - N_COL) {
-		if (w->cursor_y < w->nrows-1) {
-			w->cursor_y++;
-			mainwindow_update_cursor_pos(w);
+	long long filesize = ui->whex->file_size;
+	if (filesize >= N_COL && cursor_pos(ui) < filesize - N_COL) {
+		if (ui->cursor_y < ui->nrow-1) {
+			ui->cursor_y++;
+			update_cursor_pos(ui);
 		} else {
-			mainwindow_scroll_down_line(w);
+			scroll_down_line(ui);
 		}
 	}
 }
 
-void mainwindow_move_left(struct mainwindow *w)
+void
+move_left(UI *ui)
 {
-	if (w->cursor_x) {
-		w->cursor_x--;
-		mainwindow_update_cursor_pos(w);
+	if (ui->cursor_x) {
+		ui->cursor_x--;
+		update_cursor_pos(ui);
 	}
 }
 
-void mainwindow_move_right(struct mainwindow *w)
+void
+move_right(UI *ui)
 {
-	if (w->cursor_x < (N_COL-1) && mainwindow_cursor_pos(w)+1 < w->file_size) {
-		w->cursor_x++;
-		mainwindow_update_cursor_pos(w);
+	if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->whex->file_size) {
+		ui->cursor_x++;
+		update_cursor_pos(ui);
 	}
 }
 
-void mainwindow_scroll_up_page(struct mainwindow *w)
+void
+scroll_up_page(UI *ui)
 {
-	if (w->current_line >= w->nrows) {
-		w->current_line -= w->nrows;
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, 0, w->nrows);
-			mainwindow_update_monoedit_tags(w);
-			mainwindow_update_cursor_pos(w);
-			InvalidateRect(w->monoedit, 0, FALSE);
-		}
+	if (ui->current_line >= ui->nrow) {
+		ui->current_line -= ui->nrow;
+		update_monoedit_buffer(ui, 0, ui->nrow);
+		update_monoedit_tags(ui);
+		update_cursor_pos(ui);
+		InvalidateRect(ui->monoedit, 0, FALSE);
 	} else {
-		long long delta = w->current_line;
-		w->current_line = 0;
-		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, -delta);
-		memmove(w->monoedit_buffer+N_COL_CHAR*delta, w->monoedit_buffer, N_COL_CHAR*(w->nrows-delta)*sizeof(TCHAR));
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, 0, delta);
-			mainwindow_update_monoedit_tags(w);
-			mainwindow_update_cursor_pos(w);
-		}
+		long long delta = ui->current_line;
+		ui->current_line = 0;
+		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, -delta);
+		memmove(ui->med_buffer+N_COL_CHAR*delta, ui->med_buffer, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
+		update_monoedit_buffer(ui, 0, delta);
+		update_monoedit_tags(ui);
+		update_cursor_pos(ui);
 	}
 }
 
-void mainwindow_scroll_down_page(struct mainwindow *w)
+void
+scroll_down_page(UI *ui)
 {
-	if (w->current_line + w->nrows <= w->total_lines) {
-		w->current_line += w->nrows;
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, 0, w->nrows);
-			mainwindow_update_monoedit_tags(w);
-			mainwindow_update_cursor_pos(w);
-			InvalidateRect(w->monoedit, 0, FALSE);
-		}
+	Whex *w = ui->whex;
+	if (ui->current_line + ui->nrow <= w->total_lines) {
+		ui->current_line += ui->nrow;
+		update_monoedit_buffer(ui, 0, ui->nrow);
+		update_monoedit_tags(ui);
+		update_cursor_pos(ui);
+		InvalidateRect(ui->monoedit, 0, FALSE);
 	} else {
-		long long delta = w->total_lines - w->current_line;
-		w->current_line = w->total_lines;
-		SendMessage(w->monoedit, MONOEDIT_WM_SCROLL, 0, delta);
-		memmove(w->monoedit_buffer, w->monoedit_buffer+N_COL_CHAR*delta, N_COL_CHAR*(w->nrows-delta)*sizeof(TCHAR));
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, w->nrows-delta, delta);
-			mainwindow_update_monoedit_tags(w);
-			mainwindow_update_cursor_pos(w);
-		}
+		long long delta = w->total_lines - ui->current_line;
+		ui->current_line = w->total_lines;
+		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, delta);
+		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR*delta, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
+		update_monoedit_buffer(ui, ui->nrow-delta, delta);
+		update_monoedit_tags(ui);
+		update_cursor_pos(ui);
 	}
 }
 
-void mainwindow_move_up_page(struct mainwindow *w)
+void
+move_up_page(UI *ui)
 {
-	if (mainwindow_cursor_pos(w) >= N_COL*w->nrows) {
-		mainwindow_scroll_up_page(w);
+	if (cursor_pos(ui) >= N_COL*ui->nrow) {
+		scroll_up_page(ui);
 	}
 }
 
-void mainwindow_move_down_page(struct mainwindow *w)
+void
+move_down_page(UI *ui)
 {
-	if (w->file_size >= N_COL*w->nrows && mainwindow_cursor_pos(w) < w->file_size - N_COL*w->nrows) {
-		mainwindow_scroll_down_page(w);
+	long long filesize = ui->whex->file_size;
+	if (filesize >= N_COL*ui->nrow && cursor_pos(ui) < filesize - N_COL*ui->nrow) {
+		scroll_down_page(ui);
 	}
 }
 
-int mainwindow_handle_char(struct mainwindow *w, int c)
+int
+handle_char(UI *ui, int c)
 {
 	switch (c) {
 		TCHAR buf[2];
 	case 8: // backspace
-		mainwindow_move_backward(w);
+		move_backward(ui);
 		break;
 	case ' ':
-		mainwindow_move_forward(w);
+		move_forward(ui);
 		break;
 	case '/':
 	case ':':
@@ -637,172 +853,41 @@ int mainwindow_handle_char(struct mainwindow *w, int c)
 	case 'g':
 		buf[0] = c;
 		buf[1] = 0;
-		SetWindowText(w->cmdedit, buf);
-		SetFocus(w->cmdedit);
+		SetWindowText(ui->cmdedit, buf);
+		SetFocus(ui->cmdedit);
 		// place caret at end of text
-		SendMessage(w->cmdedit, EM_SETSEL, 1, 1);
+		SendMessage(ui->cmdedit, EM_SETSEL, 1, 1);
 		return 1;
 	case 'N':
-		mainwindow_execute_command(w, mainwindow_cmd_findprev, 0);
+		//execute_command(ui, cmd_findprev, 0);
 		return 1;
 	case 'b':
-		mainwindow_move_prev_field(w);
+		move_prev_field(ui);
 		return 1;
 	case 'h':
-		mainwindow_move_left(w);
+		move_left(ui);
 		return 1;
 	case 'j':
-		mainwindow_move_down(w);
+		move_down(ui);
 		return 1;
 	case 'k':
-		mainwindow_move_up(w);
+		move_up(ui);
 		return 1;
 	case 'l':
-		mainwindow_move_right(w);
+		move_right(ui);
 		return 1;
 	case 'n':
-		mainwindow_execute_command(w, mainwindow_cmd_findnext, 0);
+		//execute_command(w, cmd_findnext, 0);
 		return 1;
 	case 'w':
-		mainwindow_move_next_field(w);
+		move_next_field(ui);
 		return 1;
 	}
 	return 1;
 }
 
-LRESULT CALLBACK
-monoedit_wndproc(HWND hwnd,
-		 UINT message,
-		 WPARAM wparam,
-		 LPARAM lparam)
-{
-	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-
-	switch (message) {
-	case WM_LBUTTONDOWN:
-		{
-			int x = LOWORD(lparam);
-			int y = HIWORD(lparam);
-			SetFocus(hwnd);
-			int cx = x / w->charwidth;
-			int cy = y / w->charheight;
-			if (cx >= 10 && cx < 10+N_COL*3 && cy < w->nrows) {
-				cx = (cx-10)/3;
-				long long pos = ((w->current_line + cy) << LOG2_N_COL) + cx;
-				if (pos < w->file_size) {
-					w->cursor_x = cx;
-					w->cursor_y = cy;
-					mainwindow_update_cursor_pos(w);
-				}
-			}
-		}
-		return 0;
-	case WM_KEYDOWN:
-		switch (wparam) {
-		case VK_UP:
-			mainwindow_move_up(w);
-			break;
-		case VK_DOWN:
-			mainwindow_move_down(w);
-			break;
-		case VK_LEFT:
-			mainwindow_move_left(w);
-			break;
-		case VK_RIGHT:
-			mainwindow_move_right(w);
-			break;
-		case VK_PRIOR:
-			mainwindow_move_up_page(w);
-			break;
-		case VK_NEXT:
-			mainwindow_move_down_page(w);
-			break;
-		case VK_HOME:
-			//mainwindow_goto_address(w, 0);
-			mainwindow_goto_bol(w);
-			break;
-		case VK_END:
-			/*if (w->file_size) {
-				mainwindow_goto_address(w, w->file_size-1);
-			}*/
-			mainwindow_goto_eol(w);
-			break;
-		}
-		return 0;
-	case WM_MOUSEWHEEL:
-		{
-			int delta = (short) HIWORD(wparam);
-			if (delta > 0) {
-				int n = delta / WHEEL_DELTA;
-				while (n--) {
-					mainwindow_scroll_up_line(w);
-				}
-			} else {
-				int n = (-delta) / WHEEL_DELTA;
-				while (n--) {
-					mainwindow_scroll_down_line(w);
-				}
-			}
-		}
-		return 0;
-	}
-	return CallWindowProc(w->monoedit_wndproc, hwnd, message, wparam, lparam);
-}
-
-LRESULT CALLBACK
-cmdedit_wndproc(HWND hwnd,
-		 UINT message,
-		 WPARAM wparam,
-		 LPARAM lparam)
-{
-	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-
-	switch (message) {
-	case WM_CHAR:
-		switch (wparam) {
-			char *cmd;
-			TCHAR *raw_cmd;
-			int buf_len;
-			const char *errmsg;
-		case '\r':
-			buf_len = GetWindowTextLength(hwnd)+1;
-			raw_cmd = malloc(buf_len * sizeof *raw_cmd);
-			GetWindowText(hwnd, raw_cmd, buf_len);
-			cmd = TSTR_TO_MBCS(raw_cmd);
-			errmsg = 0;
-			switch (cmd[0]) {
-			case '/':
-				mainwindow_execute_command(w, mainwindow_cmd_find_text, cmd+1);
-				break;
-			case ':':
-				errmsg = mainwindow_parse_and_execute_command(w, cmd+1);
-				break;
-			case '\\':
-				mainwindow_execute_command(w, mainwindow_cmd_find_hex, cmd+1);
-				break;
-			case 'g':
-				mainwindow_execute_command(w, mainwindow_cmd_goto, cmd+1);
-				break;
-			}
-			free(raw_cmd);
-#ifdef UNICODE
-			free(cmd);
-#endif
-			if (errmsg) {
-				mainwindow_error_prompt(w, errmsg);
-			}
-			// fallthrough
-		case 27: // escape
-			SetWindowText(hwnd, TEXT(""));
-			SetFocus(w->monoedit);
-			return 0;
-		}
-	}
-
-	return CallWindowProc(w->cmdedit_wndproc, hwnd, message, wparam, lparam);
-}
-
-void mainwindow_init_font(struct mainwindow *w)
+void
+init_font(UI *ui)
 {
 	static LOGFONT logfont = {
 		.lfHeight = 16,
@@ -818,15 +903,16 @@ void mainwindow_init_font(struct mainwindow *w)
 	dc = GetDC(0);
 	SelectObject(dc, mono_font);
 	GetTextMetrics(dc, &tm);
-	w->mono_font = mono_font;
-	w->charwidth = tm.tmAveCharWidth;
-	w->charheight = tm.tmHeight;
+	ui->mono_font = mono_font;
+	ui->charwidth = tm.tmAveCharWidth;
+	ui->charheight = tm.tmHeight;
 	ReleaseDC(0, dc);
 }
 
-void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
+void
+handle_wm_create(UI *ui, LPCREATESTRUCT create)
 {
-	HWND hwnd = w->hwnd;
+	HWND hwnd = ui->hwnd;
 	HWND monoedit;
 	HWND cmdedit;
 	HWND status_bar;
@@ -844,22 +930,22 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 				0,
 				instance,
 				0);
-	w->monoedit = monoedit;
-	w->nrows = INITIAL_N_ROW;
-	w->monoedit_buffer = malloc(N_COL_CHAR*INITIAL_N_ROW*sizeof(TCHAR));
-	w->monoedit_buffer_cap_lines = INITIAL_N_ROW;
+	ui->monoedit = monoedit;
+	ui->nrow = INITIAL_N_ROW;
+	ui->med_buffer = malloc(N_COL_CHAR*INITIAL_N_ROW*sizeof(TCHAR));
+	ui->med_buffer_nrow = INITIAL_N_ROW;
 	for (int i=0; i<N_COL_CHAR*INITIAL_N_ROW; i++) {
-		w->monoedit_buffer[i] = ' ';
+		ui->med_buffer[i] = ' ';
 	}
-	SendMessage(monoedit, MONOEDIT_WM_SET_CSIZE, N_COL_CHAR, INITIAL_N_ROW);
-	SendMessage(monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
-	SendMessage(monoedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
-	mainwindow_update_monoedit_buffer(w, 0, INITIAL_N_ROW);
+	SendMessage(monoedit, MED_WM_SET_CSIZE, N_COL_CHAR, INITIAL_N_ROW);
+	SendMessage(monoedit, MED_WM_SET_BUFFER, 0, (LPARAM) ui->med_buffer);
+	SendMessage(monoedit, WM_SETFONT, (WPARAM) ui->mono_font, 0);
+	update_monoedit_buffer(ui, 0, INITIAL_N_ROW);
 	/* subclass monoedit window */
-	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) w);
-	w->monoedit_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) monoedit_wndproc);
+	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) ui);
+	ui->med_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
 	SetFocus(monoedit);
-	mainwindow_update_cursor_pos(w);
+	update_cursor_pos(ui);
 
 	/* create command window */
 	cmdedit = CreateWindow(TEXT("EDIT"),
@@ -873,11 +959,11 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 			       0,
 			       instance,
 			       0);
-	SendMessage(cmdedit, WM_SETFONT, (WPARAM) w->mono_font, 0);
-	w->cmdedit = cmdedit;
+	SendMessage(cmdedit, WM_SETFONT, (WPARAM) ui->mono_font, 0);
+	ui->cmdedit = cmdedit;
 	// subclass command window
-	SetWindowLongPtr(cmdedit, GWLP_USERDATA, (LONG_PTR) w);
-	w->cmdedit_wndproc = (WNDPROC) SetWindowLongPtr(cmdedit, GWLP_WNDPROC, (LONG_PTR) cmdedit_wndproc);
+	SetWindowLongPtr(cmdedit, GWLP_USERDATA, (LONG_PTR) ui);
+	ui->cmdedit_wndproc = (WNDPROC) SetWindowLongPtr(cmdedit, GWLP_WNDPROC, (LONG_PTR) cmdedit_wndproc);
 
 	// create status bar
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
@@ -886,7 +972,7 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 					CONTROL_STATUS_BAR);
 	int parts[] = { 64, 128, 256, -1 };
 	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) parts);
-	w->status_bar = status_bar;
+	ui->status_bar = status_bar;
 
 	// get height of status bar
 	RECT rect;
@@ -895,10 +981,10 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 
 	// adjust size of main window
 	GetWindowRect(hwnd, &rect);
-	rect.right = rect.left + w->charwidth * N_COL_CHAR;
+	rect.right = rect.left + ui->charwidth * N_COL_CHAR;
 	rect.bottom = rect.top +
-		w->charheight * INITIAL_N_ROW + // MonoEdit
-		w->charheight + // command window
+		ui->charheight * INITIAL_N_ROW + // MonoEdit
+		ui->charheight + // command window
 		status_bar_height; // status bar
 	AdjustWindowRect(&rect, GetWindowLongPtr(hwnd, GWL_STYLE), FALSE);
 	SetWindowPos(hwnd, 0, 0, 0,
@@ -909,54 +995,49 @@ void mainwindow_handle_wm_create(struct mainwindow *w, LPCREATESTRUCT create)
 	SetWindowText(hwnd, TEXT("WHEX"));
 }
 
-void mainwindow_resize_monoedit(struct mainwindow *w, int width, int height)
+void
+resize_monoedit(UI *ui, int width, int height)
 {
-	int new_nrows = height/w->charheight;
-	if (new_nrows > w->nrows) {
-		if (new_nrows > w->monoedit_buffer_cap_lines) {
-			w->monoedit_buffer = realloc(w->monoedit_buffer, N_COL_CHAR*new_nrows*sizeof(TCHAR));
-			w->monoedit_buffer_cap_lines = new_nrows;
-			SendMessage(w->monoedit, MONOEDIT_WM_SET_BUFFER, 0, (LPARAM) w->monoedit_buffer);
+	int new_nrows = height/ui->charheight;
+	if (new_nrows > ui->nrow) {
+		if (new_nrows > ui->med_buffer_nrow) {
+			ui->med_buffer = realloc(ui->med_buffer, N_COL_CHAR*new_nrows*sizeof(TCHAR));
+			ui->med_buffer_nrow = new_nrows;
+			SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0, (LPARAM) ui->med_buffer);
 		}
-		if (w->interactive) {
-			mainwindow_update_monoedit_buffer(w, w->nrows, new_nrows - w->nrows);
-			mainwindow_update_monoedit_tags(w);
-		}
+		update_monoedit_buffer(ui, ui->nrow, new_nrows - ui->nrow);
+		update_monoedit_tags(ui);
 	}
-	w->nrows = new_nrows;
-	SendMessage(w->monoedit, MONOEDIT_WM_SET_CSIZE, -1, height/w->charheight);
-	SetWindowPos(w->monoedit,
+	ui->nrow = new_nrows;
+	SendMessage(ui->monoedit, MED_WM_SET_CSIZE, -1, height/ui->charheight);
+	SetWindowPos(ui->monoedit,
 		     0,
 		     0,
 		     0,
 		     width,
 		     height,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
-	if (w->interactive) {
-		InvalidateRect(w->monoedit, 0, FALSE);
-	}
+	InvalidateRect(ui->monoedit, 0, FALSE);
 }
 
 LRESULT CALLBACK
-wndproc(HWND hwnd,
-	UINT message,
-	WPARAM wparam,
-	LPARAM lparam)
+wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	struct mainwindow *w = (void *) GetWindowLongPtr(hwnd, 0);
-	switch (message) {
+	UI *ui = (UI *) GetWindowLongPtr(hwnd, 0);
+
+	switch (msg) {
 	case WM_NCCREATE:
-		w = ((LPCREATESTRUCT)lparam)->lpCreateParams;
-		w->hwnd = hwnd;
-		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
+		ui = ((LPCREATESTRUCT)lparam)->lpCreateParams;
+		ui->hwnd = hwnd;
+		SetWindowLongPtr(hwnd, 0, (LONG_PTR) ui);
 		return TRUE;
 	case WM_NCDESTROY:
-		if (w) {
-			free(w);
+		if (ui) {
+			free(ui);
 		}
 		return 0;
 	case WM_CREATE:
-		mainwindow_handle_wm_create(w, (LPCREATESTRUCT) lparam);
+		handle_wm_create(ui, (LPCREATESTRUCT) lparam);
 		return 0;
 	case WM_DESTROY:
 		PostQuitMessage(0);
@@ -964,76 +1045,43 @@ wndproc(HWND hwnd,
 	case WM_SIZE:
 		{
 			// adjust status bar geometry automatically
-			SendMessage(w->status_bar, WM_SIZE, 0, 0);
+			SendMessage(ui->status_bar, WM_SIZE, 0, 0);
 			RECT status_bar_rect;
-			GetWindowRect(w->status_bar, &status_bar_rect);
+			GetWindowRect(ui->status_bar, &status_bar_rect);
 			// translate top-left from screen to client
-			ScreenToClient(w->hwnd, (LPPOINT) &status_bar_rect);
+			ScreenToClient(ui->hwnd, (LPPOINT) &status_bar_rect);
 			int width  = LOWORD(lparam);
 			//int height = HIWORD(lparam);
-			int cmd_y = status_bar_rect.top - w->charheight;
+			int cmd_y = status_bar_rect.top - ui->charheight;
 			if (cmd_y < 0) cmd_y = 0;
-			mainwindow_resize_monoedit(w, width, cmd_y);
-			SetWindowPos(w->cmdedit,
+			resize_monoedit(ui, width, cmd_y);
+			SetWindowPos(ui->cmdedit,
 				     0,
 				     0,
 				     cmd_y,
 				     width,
-				     w->charheight,
+				     ui->charheight,
 				     SWP_NOZORDER);
 		}
 		return 0;
 	case WM_CHAR:
-		if (mainwindow_handle_char(w, wparam)) {
+		if (handle_char(ui, wparam)) {
 		} else {
 		}
 		return 0;
 	}
-	return DefWindowProc(hwnd, message, wparam, lparam);
-}
-
-ATOM register_wndclass(void)
-{
-	WNDCLASS wndclass = {0};
-
-	wndclass.lpfnWndProc = wndproc;
-	wndclass.cbWndExtra = sizeof(LONG_PTR);
-	wndclass.hInstance = GetModuleHandle(0);
-	wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
-	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
-	wndclass.lpszClassName = TEXT("WHEX");
-	return RegisterClass(&wndclass);
-}
-
-static void format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
-{
-#if 0
-   DWORD FormatMessage(
-    DWORD dwFlags,	// source and processing options
-    LPCVOID lpSource,	// pointer to  message source
-    DWORD dwMessageId,	// requested message identifier
-    DWORD dwLanguageId,	// language identifier for requested message
-    LPTSTR lpBuffer,	// pointer to message buffer
-    DWORD nSize,	// maximum size of message buffer
-    va_list *Arguments 	// address of array of message inserts
-   );
-#endif
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
-		      0,
-		      error_code,
-		      0,
-		      buf,
-		      buflen,
-		      0);
+	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
 // usually you want to update UI after this
-int mainwindow_open_file(struct mainwindow *w, const TCHAR *path)
+int
+open_file(UI *ui, const TCHAR *path)
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
 	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
-	TCHAR errtext[512];
+
+	TCHAR errtext[BUFSIZE];
+	Whex *w = ui->whex;
 
 	if (w->file != INVALID_HANDLE_VALUE) {
 		CloseHandle(w->file);
@@ -1046,17 +1094,17 @@ int mainwindow_open_file(struct mainwindow *w, const TCHAR *path)
 			     0,
 			     0);
 	if (w->file == INVALID_HANDLE_VALUE) {
-		format_error_code(errtext, sizeof errtext, GetLastError());
+		format_error_code(errtext, BUFSIZE, GetLastError());
 		fprintf(stderr, errfmt_open, path, errtext);
 		return -1;
 	}
-	if (w->filepath) {
-		free(w->filepath);
+	if (ui->filepath) {
+		free(ui->filepath);
 	}
 #ifdef UNICODE
-	w->filepath = utf16_to_mbcs(path);
+	ui->filepath = utf16_to_mbcs(path);
 #else
-	w->filepath = strdup(path);
+	ui->filepath = strdup(path);
 #endif
 	DWORD file_size_high;
 	w->file_size = GetFileSize(w->file, &file_size_high);
@@ -1084,325 +1132,43 @@ int mainwindow_open_file(struct mainwindow *w, const TCHAR *path)
 	return 0;
 }
 
-int mainwindow_init_cache(struct mainwindow *w)
-{
-	uint8_t *cache_data = malloc(N_CACHE_BLOCK << LOG2_CACHE_BLOCK_SIZE);
-	if (!cache_data) {
-		return -1;
-	}
-	for (int i=0; i<N_CACHE_BLOCK; i++) {
-		w->cache[i].tag = 0;
-		w->cache[i].data = cache_data + (i << LOG2_CACHE_BLOCK_SIZE);
-	}
-	return 0;
-}
-
-static int file_chooser_dialog(TCHAR *buf, int buflen)
-{
-	buf[0] = 0;
-	OPENFILENAME ofn = {0};
-	ofn.lStructSize = sizeof ofn;
-	ofn.hInstance = GetModuleHandle(0);
-	ofn.lpstrFile = buf;
-	ofn.nMaxFile = buflen;
-	if (!GetOpenFileName(&ofn)) return -1;
-	return 0;
-}
-
-static void usage(void)
-{
-	fprintf(stderr, "incorrect usage\n");
-	exit(1);
-}
-
-static int
-start_gui(HINSTANCE instance,
-	  int show,
-	  struct mainwindow *w,
-	  const TCHAR *filepath)
-{
-	InitCommonControls();
-	if (!monoedit_register_class()) {
-		return 1;
-	}
-	if (!register_wndclass()) {
-		return 1;
-	}
-	if (mainwindow_open_file(w, filepath) < 0) {
-		return 1;
-	}
-	if (mainwindow_init_cache(w) < 0) {
-		return 1;
-	}
-	mainwindow_init_font(w);
-	//RECT rect = { 0, 0, w->charwidth*N_COL_CHAR, w->charheight*(INITIAL_N_ROW+1) };
-	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-	HWND hwnd = CreateWindow(TEXT("WHEX"), // class name
-				 0, // window title
-				 WS_OVERLAPPEDWINDOW, // window style
-				 CW_USEDEFAULT, // initial x position
-				 CW_USEDEFAULT, // initial y position
-				 CW_USEDEFAULT, // initial width
-				 CW_USEDEFAULT, // initial height
-				 0,
-				 0,
-				 instance,
-				 w); // window-creation data
-	ShowWindow(hwnd, show);
-	mainwindow_update_ui(w);
-	MSG msg;
-	while (GetMessage(&msg, 0, 0, 0)) {
-		TranslateMessage(&msg);
-		DispatchMessage(&msg);
-	}
-	// window closed now
-	return msg.wParam;
-}
-
-int APIENTRY
-WinMain(HINSTANCE instance,
-	HINSTANCE prev_instance,
-	LPSTR cmdline,
-	int show)
-{
-	int argc;
-	TCHAR **argv;
-	TCHAR openfilename[512];
-	const TCHAR *filepath;
-	const TCHAR *script_path = 0;
-
-#ifdef UNICODE
-	argv = CommandLineToArgvW(GetCommandLine(), &argc);
-#else
-	// TODO test this
-	wchar_t *cmdline_utf16 = mbcs_to_utf16(cmdline);
-	wchar_t **argv_utf16 = CommandLineToArgvW(cmdline_utf16, &argc);
-	argv = malloc((argc+1) * sizeof *argv);
-	for (int i=0; i<argc; i++) {
-		argv[i] = utf16_to_mbcs(argv_utf16[i]);
-	}
-	argv[argc] = 0;
-#endif
-	// parse command line arguments
-	if (argc == 1) {
-		if (file_chooser_dialog(openfilename, sizeof openfilename /
-					sizeof *openfilename)) return 1;
-		filepath = openfilename;
-	} else {
-		if (!lstrcmp(argv[1], TEXT("-c"))) {
-			if (argc < 3) usage();
-			script_path = argv[2];
-		} else {
-			// GUI mode
-			filepath = argv[1];
-		}
-	}
-
-	// initialize mainwindow struct
-	struct mainwindow *w = calloc(1, sizeof *w);
-	w->file = INVALID_HANDLE_VALUE;
-	w->interactive = !script_path;
-	mainwindow_init_lua(w);
-
-	if (script_path) {
-#ifdef UNICODE
-		char *script_path_mbcs = utf16_to_mbcs(script_path);
-#else
-		const char *script_path_mbcs = script_path;
-#endif
-		DEBUG_PRINTF("execute Lua script %s\n", script_path_mbcs);
-		lua_State *L = w->lua;
-		int err = luaL_loadfile(L, script_path_mbcs) ||
-			lua_pcall(L, 0, 0, 0);
-#ifdef UNICODE
-		free(script_path_mbcs);
-#endif
-		if (err) {
-			const char *err = lua_tostring(L, -1);
-			fputs(err, stderr);
-			return 1;
-		}
-		return 0;
-	}
-	DEBUG_PRINTF("starting GUI\n");
-	return start_gui(instance, show, w, filepath);
-}
-
-// commands
-
-const char *mainwindow_cmd_goto(struct mainwindow *w, char *arg)
-{
-	long long address;
-	if (sscanf(arg, "%I64x", &address) == 1) {
-		if (address < 0 || address >= w->file_size) {
-			return "address out of range";
-		}
-		mainwindow_goto_address(w, address);
-		return 0;
-	}
-	return "invalid argument";
-}
-
-const char *mainwindow_cmd_find_hex(struct mainwindow *w, char *arg)
-{
-	return mainwindow_find(w, arg, false);
-}
-
-const char *mainwindow_cmd_find_text(struct mainwindow *w, char *arg)
-{
-	return mainwindow_find(w, arg, true);
-}
-
-/* arg unused */
-const char *mainwindow_cmd_findnext(struct mainwindow *w, char *arg)
-{
-	return mainwindow_repeat_search(w, false);
-}
-
-/* arg unused */
-const char *mainwindow_cmd_findprev(struct mainwindow *w, char *arg)
-{
-	return mainwindow_repeat_search(w, true);
-}
-
-const char *mainwindow_cmd_lua(struct mainwindow *w, char *arg)
-{
-	int error;
-	lua_State *L = w->lua;
-
-	bool saved_interactive = w->interactive;
-	w->interactive = false;
-	error = luaL_loadbuffer(L, arg, strlen(arg), "line") ||
-		lua_pcall(L, 0, 0, 0);
-	w->interactive = saved_interactive;
-	if (error) {
-		const char *err = lua_tostring(L, -1);
-		return err;
-	}
-	if (w->interactive) {
-		mainwindow_update_ui(w);
-	}
-	return 0;
-}
-
-const char *mainwindow_cmd_luafile(struct mainwindow *w, char *arg)
-{
-	while (*arg == ' ') arg++;
-	char *filepath_mbcs = arg;
-	while (*arg && *arg != ' ') arg++;
-	if (*arg) {
-		return "trailing character";
-	}
-
-	if (!*filepath_mbcs) {
-		return "no file specified";
-	}
-
-	int error;
-	lua_State *L = w->lua;
-
-	bool saved_interactive = w->interactive;
-	w->interactive = false;
-	// luaL_loadfile uses fopen() which accepts MBCS string
-	error = luaL_loadfile(L, filepath_mbcs) || lua_pcall(L, 0, 0, 0);
-	w->interactive = saved_interactive;
-	if (error) {
-		const char *err = lua_tostring(L, -1);
-		return err;
-	}
-	if (w->interactive) {
-		mainwindow_update_ui(w);
-	}
-	return 0;
-}
-
-const char *mainwindow_cmd_hl(struct mainwindow *w, char *arg)
-{
-	long long start = 0;
-	long long len = 0;
-	sscanf(arg, "%I64d%I64d", &start, &len);
-	w->hl_start = start;
-	w->hl_len = len;
-	if (w->interactive) {
-		mainwindow_update_monoedit_tags(w);
-		InvalidateRect(w->monoedit, 0, FALSE);
-	}
-	return 0;
-}
-
-const char *mainwindow_parse_and_execute_command(struct mainwindow *w, char *cmd)
-{
-	DEBUG_PRINTF("execute command {%s}\n", cmd);
-	char *p = cmd;
-	while (*p == ' ') p++;
-	char *start = p;
-	while (iswordchar(*p)) p++;
-	char *end = p;
-	cmdproc_t cmdproc = 0;
-	switch (end-start) {
-	case 1:
-		if (!memcmp(start, "e", 1)) {
-			cmdproc = mainwindow_cmd_edit;
-		} else if (!memcmp(start, "q", 1)) {
-			cmdproc = mainwindow_cmd_quit;
-		}
-		break;
-	case 2:
-		if (!memcmp(start, "hl", 2)) {
-			cmdproc = mainwindow_cmd_hl;
-		}
-		break;
-	case 3:
-		if (!memcmp(start, "lua", 3)) {
-			cmdproc = mainwindow_cmd_lua;
-		}
-		break;
-	case 7:
-		if (!memcmp(start, "luafile", 7)) {
-			cmdproc = mainwindow_cmd_luafile;
-		}
-		break;
-	}
-	if (cmdproc) {
-		return cmdproc(w, end);
-	}
-	return "invalid command";
-}
-
-void mainwindow_init_lua(struct mainwindow *w)
+void
+init_lua(UI *ui)
 {
 	// try not to initialize twice
-	assert(!w->lua);
+	assert(!ui->lua);
 	lua_State *L = luaL_newstate();
 	luaL_openlibs(L);
-	// store `w` at REGISTRY[0]
+	// store ui at REGISTRY[0]
 	lua_pushinteger(L, 0);
-	lua_pushlightuserdata(L, w);
+	lua_pushlightuserdata(L, ui);
 	lua_settable(L, LUA_REGISTRYINDEX);
 	// register C functions
-	register_lua_globals(L);
-	w->lua = L;
+	//register_lua_globals(L);
+	ui->lua = L;
 }
 
-static long long clamp(long long x, long long min, long long max)
+static long long
+clamp(long long x, long long min, long long max)
 {
 	if (x < min) return min;
 	if (x > max) return max;
 	return x;
 }
 
-void mainwindow_update_monoedit_tags(struct mainwindow *w)
+void
+update_monoedit_tags(UI *ui)
 {
-	long long start = w->hl_start;
-	long long len = w->hl_len;
-	long long view_start = w->current_line * N_COL;
-	long long view_end = (w->current_line + w->nrows) * N_COL;
+	long long start = ui->hl_start;
+	long long len = ui->hl_len;
+	long long view_start = ui->current_line * N_COL;
+	long long view_end = (ui->current_line + ui->nrow) * N_COL;
 	long long start_clamp = clamp(start, view_start, view_end) - view_start;
 	long long end_clamp = clamp(start + len, view_start, view_end) - view_start;
-	HWND w1 = w->monoedit;
-	SendMessage(w1, MONOEDIT_WM_CLEAR_TAGS, 0, 0);
+	HWND w1 = ui->monoedit;
+	SendMessage(w1, MED_WM_CLEAR_TAGS, 0, 0);
 	if (end_clamp > start_clamp) {
-		struct tag tag;
+		MedTag tag;
 		tag.attr = 1;
 		int tag_first_line = start_clamp >> LOG2_N_COL;
 		int tag_last_line = (end_clamp-1) >> LOG2_N_COL; // inclusive
@@ -1414,130 +1180,109 @@ void mainwindow_update_monoedit_tags(struct mainwindow *w)
 			tag.line = tag_first_line;
 			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
 			tag.len = (N_COL - (start_clamp & (N_COL-1))) * 3 - 1;
-			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+			SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
 			for (int i=tag_first_line+1; i<tag_last_line; i++) {
 				tag.line = i;
 				tag.start = 10;
 				tag.len = N_COL*3-1;
-				SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+				SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
 			}
 			tag.line = tag_last_line;
 			tag.start = 10;
 			tag.len = end_x * 3 - 1;
-			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+			SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
 		} else {
 			// single line
 			tag.line = tag_first_line;
 			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
 			tag.len = (end_x - (start_clamp & (N_COL-1))) * 3 - 1;
-			SendMessage(w1, MONOEDIT_WM_ADD_TAG, 0, (LPARAM) &tag);
+			SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
 		}
 	}
 }
 
-void mainwindow_update_ui(struct mainwindow *w)
+void
+update_ui(UI *ui)
 {
-	mainwindow_update_monoedit_buffer(w, 0, w->nrows);
-	mainwindow_update_monoedit_tags(w);
-	mainwindow_update_cursor_pos(w);
-	InvalidateRect(w->monoedit, 0, FALSE);
+	update_monoedit_buffer(ui, 0, ui->nrow);
+	update_monoedit_tags(ui);
+	update_cursor_pos(ui);
+	InvalidateRect(ui->monoedit, 0, FALSE);
 }
 
-const char *mainwindow_cmd_edit(struct mainwindow *w, char *arg)
+void
+move_forward(UI *ui)
 {
-	while (*arg == ' ') arg++;
-	char *start = arg;
-	while (*arg && *arg != ' ') arg++;
-	if (*arg) {
-		return "trailing character";
-	}
-
-	TCHAR *filepath = MBCS_TO_TSTR(start);
-	int err = mainwindow_open_file(w, filepath);
-#ifdef UNICODE
-	free(filepath);
-#endif
-	if (err) {
-		return "failed to open file";
-	}
-	w->current_line = 0;
-	w->cursor_y = 0;
-	w->cursor_x = 0;
-	if (w->interactive) {
-		mainwindow_update_ui(w);
-	}
-	return 0;
-}
-
-const char *mainwindow_cmd_quit(struct mainwindow *w, char *arg)
-{
-	SendMessage(w->hwnd, WM_CLOSE, 0, 0);
-	return 0;
-}
-
-void mainwindow_move_forward(struct mainwindow *w)
-{
-	if (mainwindow_cursor_pos(w) < w->file_size) {
-		if (w->cursor_x < N_COL-1) {
-			mainwindow_move_right(w);
+	Whex *w = ui->whex;
+	if (cursor_pos(ui) < w->file_size) {
+		if (ui->cursor_x < N_COL-1) {
+			move_right(ui);
 		} else {
-			w->cursor_x = 0;
-			mainwindow_move_down(w);
+			ui->cursor_x = 0;
+			move_down(ui);
 		}
 	}
 }
 
-void mainwindow_move_backward(struct mainwindow *w)
+void
+move_backward(UI *ui)
 {
-	if (mainwindow_cursor_pos(w) > 0) {
-		if (w->cursor_x > 0) {
-			mainwindow_move_left(w);
+	if (cursor_pos(ui) > 0) {
+		if (ui->cursor_x > 0) {
+			move_left(ui);
 		} else {
-			w->cursor_x = N_COL-1;
-			mainwindow_move_up(w);
+			ui->cursor_x = N_COL-1;
+			move_up(ui);
 		}
 	}
 }
 
-void mainwindow_move_next_field(struct mainwindow *w)
+void
+move_next_field(UI *ui)
 {
+	Whex *w = ui->whex;
 	if (w->tree) {
-		long long cursor_pos = mainwindow_cursor_pos(w);
-		struct tree *leaf = tree_lookup(w->tree, cursor_pos);
+		long long cur = cursor_pos(ui);
+		struct tree *leaf = tree_lookup(w->tree, cur);
 		if (leaf) {
-			mainwindow_goto_address(w, leaf->start + leaf->len);
+			goto_address(ui, leaf->start + leaf->len);
 		}
 	}
 }
 
-void mainwindow_move_prev_field(struct mainwindow *w)
+void
+move_prev_field(UI *ui)
 {
+	Whex *w = ui->whex;
 	if (w->tree) {
-		long long cursor_pos = mainwindow_cursor_pos(w);
-		struct tree *leaf = tree_lookup(w->tree, cursor_pos);
+		long long cur = cursor_pos(ui);
+		struct tree *leaf = tree_lookup(w->tree, cur);
 		if (leaf) {
-			struct tree *prev_leaf = tree_lookup(w->tree, cursor_pos-1);
+			struct tree *prev_leaf = tree_lookup(w->tree, cur-1);
 			if (prev_leaf) {
-				mainwindow_goto_address(w, prev_leaf->start);
+				goto_address(ui, prev_leaf->start);
 			}
 		}
 	}
 }
 
-void mainwindow_goto_bol(struct mainwindow *w)
+void
+goto_bol(UI *ui)
 {
-	if (w->file_size > 0) {
-		mainwindow_goto_address(w, (w->current_line + w->cursor_y) * N_COL);
+	if (ui->whex->file_size > 0) {
+		goto_address(ui, (ui->current_line + ui->cursor_y) * N_COL);
 	}
 }
 
-void mainwindow_goto_eol(struct mainwindow *w)
+void
+goto_eol(UI *ui)
 {
-	if (w->file_size > 0) {
-		long long addr = (w->current_line + w->cursor_y + 1) * N_COL - 1;
-		if (addr >= w->file_size) {
-			addr = w->file_size-1;
+	long long filesize = ui->whex->file_size;
+	if (filesize > 0) {
+		long long addr = (ui->current_line + ui->cursor_y + 1) * N_COL - 1;
+		if (addr >= filesize) {
+			addr = filesize-1;
 		}
-		mainwindow_goto_address(w, addr);
+		goto_address(ui, addr);
 	}
 }

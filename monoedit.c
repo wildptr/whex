@@ -1,24 +1,26 @@
+#include <windows.h>
 #include "monoedit.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-struct monoedit {
+typedef struct {
 	/* in characters */
 	int ncols;
 	int nrows;
-	const TCHAR *buffer;
+	TCHAR *buffer;
 	HFONT font;
 	int cursorx;
 	int cursory;
 	int charwidth;
 	int charheight;
-	struct tag *tags;
+	MedTag *tags;
 	int tag_len;
 	int tag_cap;
-};
+} Med;
 
-static void monoedit_paint(struct monoedit *w, HWND hwnd)
+static void
+med_paint(Med *w, HWND hwnd)
 {
 	PAINTSTRUCT paint;
 	HDC hdc = BeginPaint(hwnd, &paint);
@@ -29,7 +31,7 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 		if (w->font) {
 			old_font = SelectObject(hdc, w->font);
 		}
-		struct tag *segments = malloc((w->nrows + 2*w->tag_len) * sizeof *segments);
+		MedTag *segments = malloc((w->nrows + 2*w->tag_len) * sizeof *segments);
 		int n_seg = 0;
 		int next_tag_i = 0;
 		int line = 0;
@@ -39,7 +41,7 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 			segments[n_seg].start = col;
 			segments[n_seg].attr = 0;
 			if (next_tag_i < w->tag_len && w->tags[next_tag_i].line == line) {
-				struct tag *next_tag = &w->tags[next_tag_i];
+				MedTag *next_tag = &w->tags[next_tag_i];
 				// untagged segment
 				segments[n_seg++].len = next_tag->start - col;
 				// tagged segment
@@ -57,7 +59,7 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 		}
 		const TCHAR *pbuf = w->buffer;
 		for (int i=0; i<n_seg; i++) {
-			struct tag *seg = &segments[i];
+			MedTag *seg = &segments[i];
 #if 0
 			printf("seg[%d].line = %d\n", i, seg->line);
 			printf("seg[%d].start = %d\n", i, seg->start);
@@ -87,15 +89,17 @@ static void monoedit_paint(struct monoedit *w, HWND hwnd)
 	EndPaint(hwnd, &paint);
 }
 
-void monoedit_clear_tags(struct monoedit *w)
+void
+med_clear_tags(Med *w)
 {
 	w->tag_len = 0;
 }
 
-void monoedit_add_tag(struct monoedit *w, struct tag *tag)
+void
+med_add_tag(Med *w, MedTag *tag)
 {
 #if 0
-	printf("monoedit_add_tag() line=%d start=%d len=%d attr=%u\n",
+	printf("med_add_tag() line=%d start=%d len=%d attr=%u\n",
 	       tag->line, tag->start, tag->len, tag->attr);
 #endif
 	if (w->tag_len == w->tag_cap) {
@@ -111,12 +115,12 @@ void monoedit_add_tag(struct monoedit *w, struct tag *tag)
 }
 
 static LRESULT CALLBACK
-monoedit_wndproc(HWND hwnd,
+med_wndproc(HWND hwnd,
 		 UINT message,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	struct monoedit *w = (void *) GetWindowLongPtr(hwnd, 0);
+	Med *w = (void *) GetWindowLongPtr(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
 		w = calloc(1, sizeof *w);
@@ -134,9 +138,9 @@ monoedit_wndproc(HWND hwnd,
 		}
 		return 0;
 	case WM_PAINT:
-		monoedit_paint(w, hwnd);
+		med_paint(w, hwnd);
 		return 0;
-	case MONOEDIT_WM_SCROLL:
+	case MED_WM_SCROLL:
 		{
 			int delta = (int) lparam;
 			RECT scroll_rect = {
@@ -148,10 +152,10 @@ monoedit_wndproc(HWND hwnd,
 			ScrollWindow(hwnd, 0, -delta*w->charheight, &scroll_rect, &scroll_rect);
 		}
 		return 0;
-	case MONOEDIT_WM_SET_BUFFER:
+	case MED_WM_SET_BUFFER:
 		w->buffer = (void *) lparam;
 		return 0;
-	case MONOEDIT_WM_SET_CSIZE:
+	case MED_WM_SET_CSIZE:
 		{
 			int ncols  = (int) wparam;
 			int nrows = (int) lparam;
@@ -163,11 +167,11 @@ monoedit_wndproc(HWND hwnd,
 			}
 		}
 		return 0;
-	case MONOEDIT_WM_CLEAR_TAGS:
-		monoedit_clear_tags(w);
+	case MED_WM_CLEAR_TAGS:
+		med_clear_tags(w);
 		return 0;
-	case MONOEDIT_WM_ADD_TAG:
-		monoedit_add_tag(w, (struct tag *) lparam);
+	case MED_WM_ADD_TAG:
+		med_add_tag(w, (MedTag *) lparam);
 		return 0;
 	case WM_SETFONT:
 		{
@@ -190,7 +194,7 @@ monoedit_wndproc(HWND hwnd,
 		HideCaret(hwnd);
 		DestroyCaret();
 		return 0;
-	case MONOEDIT_WM_SET_CURSOR_POS:
+	case MED_WM_SET_CURSOR_POS:
 		{
 			int cursorx = (int) wparam;
 			int cursory = (int) lparam;
@@ -214,11 +218,12 @@ monoedit_wndproc(HWND hwnd,
 	return DefWindowProc(hwnd, message, wparam, lparam);
 }
 
-ATOM monoedit_register_class(void)
+ATOM
+med_register_class(void)
 {
 	WNDCLASS wndclass = {0};
 	wndclass.style = CS_GLOBALCLASS;
-	wndclass.lpfnWndProc = monoedit_wndproc;
+	wndclass.lpfnWndProc = med_wndproc;
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);

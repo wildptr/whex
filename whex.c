@@ -7,11 +7,13 @@
 #include "util.h"
 #include "whex.h"
 
+#if 0
 bool
 whex_cache_valid(Whex *w, int block)
 {
 	return w->cache[block].tag & 1;
 };
+#endif
 
 int
 whex_find_cache(Whex *w, long long addr)
@@ -133,17 +135,60 @@ whex_kmp_search_backward(Whex *w, const uint8_t *pat, int len, long long start)
 }
 
 int
-whex_init_cache(Whex *w)
+whex_init(Whex *w, HANDLE file)
 {
-	uint8_t *cache_data = malloc(N_CACHE_BLOCK << LOG2_CACHE_BLOCK_SIZE);
+	uint8_t *cache_data;
+	struct cache_entry *cache;
+	DWORD lo, hi;
+	long long size;
+
+	/* get file size */
+	lo = GetFileSize(file, &hi);
+	if (lo == 0xffffffff) {
+		DWORD err = GetLastError();
+		if (err) return -1;
+	}
+	size = (long long) lo | (long long) hi << 32;
+	if (size < 0) return -1;
+
+	cache_data = malloc(N_CACHE_BLOCK << LOG2_CACHE_BLOCK_SIZE);
 	if (!cache_data) {
 		return -1;
 	}
-	for (int i=0; i<N_CACHE_BLOCK; i++) {
-		w->cache[i].tag = 0;
-		w->cache[i].data = cache_data + (i << LOG2_CACHE_BLOCK_SIZE);
+
+	cache = malloc(N_CACHE_BLOCK * sizeof *w->cache);
+	if (!cache) {
+		free(cache_data);
+		return -1;
 	}
+
+	for (int i=0; i<N_CACHE_BLOCK; i++) {
+		cache[i].tag = 0;
+		cache[i].data = cache_data + (i << LOG2_CACHE_BLOCK_SIZE);
+	}
+
+	w->file = file;
+	w->file_size = size;
+	w->cache = cache;
+	w->cache_data = cache_data;
+	w->tree = 0;
+	memset(&w->tree_rgn, 0, sizeof w->tree_rgn);
+
 	return 0;
+}
+
+void
+whex_finalize(Whex *w)
+{
+	CloseHandle(w->file);
+	w->file = INVALID_HANDLE_VALUE;
+	w->file_size = 0;
+	free(w->cache);
+	w->cache = 0;
+	free(w->cache_data);
+	w->cache_data = 0;
+	rfreeall(&w->tree_rgn);
+	w->tree = 0;
 }
 
 // commands

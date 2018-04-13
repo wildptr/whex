@@ -12,12 +12,13 @@ struct tree;
 typedef struct {
 	HANDLE file;
 	long long file_size;
-	long long total_lines;
 	struct cache_entry *cache;
+	uint8_t *cache_data;
 	struct tree *tree;
 	Region tree_rgn;
 } Whex;
 
-int whex_init_cache(Whex *);
+int whex_init(Whex *, HANDLE);
+void whex_finalize(Whex *);
 int whex_find_cache(Whex *, long long);
 uint8_t whex_getbyte(Whex *, long long);

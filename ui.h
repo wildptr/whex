@@ -6,8 +6,8 @@ typedef struct {
 	TCHAR *med_buffer;
 	/* capacity of buffer, in lines (80 bytes per line) */
 	int med_buffer_nrow;
-	HANDLE file;
-	char *filepath;
+	TCHAR *filepath;
+	long long total_lines;
 	/* number of lines displayed */
 	int nrow;
 	WNDPROC med_wndproc;

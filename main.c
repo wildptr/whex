@@ -34,6 +34,7 @@ enum {
 char *strdup(const char *);
 void register_lua_globals(lua_State *L);
 
+#if 0
 static bool
 iswordchar(char c)
 {
@@ -51,6 +52,7 @@ hextobyte(const uint8_t *p)
 {
 	return hexval(p[0]) << 4 | hexval(p[1]);
 }
+#endif
 
 LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK cmdedit_wndproc(HWND, UINT, WPARAM, LPARAM);
@@ -58,7 +60,7 @@ LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
 ATOM register_wndclass(void);
 static void format_error_code(TCHAR *, size_t, DWORD);
 static int file_chooser_dialog(TCHAR *, int);
-static int start_gui(HINSTANCE, int, UI *, const TCHAR *);
+static int start_gui(HINSTANCE, int, UI *, TCHAR *);
 void update_monoedit_buffer(UI *, int, int);
 void set_current_line(UI *, long long);
 void update_status_text(UI *, struct tree *);
@@ -80,7 +82,7 @@ void goto_eol(UI *);
 int handle_char(UI *, int);
 void init_font(UI *);
 void handle_wm_create(UI *, LPCREATESTRUCT);
-int open_file(UI *, const TCHAR *);
+int open_file(UI *, TCHAR *);
 void update_ui(UI *);
 void init_lua(UI *);
 void update_monoedit_tags(UI *);
@@ -267,16 +269,12 @@ file_chooser_dialog(TCHAR *buf, int buflen)
 }
 
 static int
-start_gui(HINSTANCE instance,
-	  int show,
-	  UI *ui,
-	  const TCHAR *filepath)
+start_gui(HINSTANCE instance, int show, UI *ui, TCHAR *filepath)
 {
 	InitCommonControls();
 	if (!med_register_class()) return 1;
 	if (!register_wndclass()) return 1;
 	if (open_file(ui, filepath) < 0) return 1;
-	if (whex_init_cache(ui->whex) < 0) return 1;
 	init_font(ui);
 	//RECT rect = { 0, 0, ui->charwidth*N_COL_CHAR, ui->charheight*(INITIAL_N_ROW+1) };
 	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -342,15 +340,26 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 	return argv;
 }
 
+TCHAR *
+lstrdup(const TCHAR *s)
+{
+	int nb = (lstrlen(s)+1) * sizeof(TCHAR);
+	TCHAR *ret = malloc(nb);
+	memcpy(ret, s, nb);
+	return ret;
+}
+
 int APIENTRY
 WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 {
 	TCHAR openfilename[BUFSIZE];
 	int argc;
 	TCHAR **argv;
-	const TCHAR *filepath;
-	Region rgn = {0}; /* persistent storage */
+	TCHAR *filepath;
+	Region rgn;
 
+	rinit(&rgn);
+	void *top = rgn.cur;
 	argv = cmdline_to_argv(&rgn, GetCommandLine(), &argc);
 
 	/* parse command line arguments */
@@ -364,13 +373,10 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 		return 1;
 	}
 
-	struct cache_entry *cache = ralloc0(&rgn, N_CACHE_BLOCK * sizeof *cache);
+	filepath = lstrdup(filepath);
+	rfree(&rgn, top);
 
-	// initialize mainwindow struct
-	Whex *w = ralloc0(&rgn, sizeof *w);
-	w->file = INVALID_HANDLE_VALUE;
-	w->cache = cache;
-
+	Whex *w = ralloc(&rgn, sizeof *w);
 	UI *ui = ralloc0(&rgn, sizeof *ui);
 	ui->whex = w;
 	ui->rgn = &rgn;
@@ -389,7 +395,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 		TCHAR *line = ui->med_buffer + buffer_line*N_COL_CHAR;
 		TCHAR *p = line;
 		long long addr = abs_line << LOG2_N_COL;
-		if (abs_line >= w->total_lines) {
+		if (abs_line >= ui->total_lines) {
 			for (int i=0; i<N_COL_CHAR; i++) {
 				p[i] = ' ';
 			}
@@ -399,7 +405,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			wsprintf(p, TEXT("%08I64x:"), addr);
 			p += 9;
 			int end = 0;
-		       	if (abs_line+1 >= w->total_lines) {
+		       	if (abs_line+1 >= ui->total_lines) {
 				end = w->file_size & (N_COL-1);
 			}
 			if (!end) {
@@ -433,8 +439,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 void
 set_current_line(UI *ui, long long line)
 {
-	Whex *w = ui->whex;
-	assert(line <= w->total_lines);
+	assert(line <= ui->total_lines);
 	ui->current_line = line;
 	update_monoedit_buffer(ui, 0, ui->nrow);
 	update_monoedit_tags(ui);
@@ -812,16 +817,15 @@ scroll_up_page(UI *ui)
 void
 scroll_down_page(UI *ui)
 {
-	Whex *w = ui->whex;
-	if (ui->current_line + ui->nrow <= w->total_lines) {
+	if (ui->current_line + ui->nrow <= ui->total_lines) {
 		ui->current_line += ui->nrow;
 		update_monoedit_buffer(ui, 0, ui->nrow);
 		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 		InvalidateRect(ui->monoedit, 0, FALSE);
 	} else {
-		long long delta = w->total_lines - ui->current_line;
-		ui->current_line = w->total_lines;
+		long long delta = ui->total_lines - ui->current_line;
+		ui->current_line = ui->total_lines;
 		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, delta);
 		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR*delta, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
 		update_monoedit_buffer(ui, ui->nrow-delta, delta);
@@ -1086,59 +1090,35 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 
 // usually you want to update UI after this
 int
-open_file(UI *ui, const TCHAR *path)
+open_file(UI *ui, TCHAR *path)
 {
 	static char errfmt_open[] = "Failed to open %s: %s\n";
-	static char errfmt_size[] = "Failed to retrieve size of %s: %s\n";
 
 	TCHAR errtext[BUFSIZE];
 	Whex *w = ui->whex;
 
-	if (w->file != INVALID_HANDLE_VALUE) {
-		CloseHandle(w->file);
-	}
-	w->file = CreateFile(path,
-			     GENERIC_READ,
-			     FILE_SHARE_READ,
-			     0, // lpSecurityAttributes
-			     OPEN_EXISTING,
-			     0,
-			     0);
-	if (w->file == INVALID_HANDLE_VALUE) {
+	HANDLE file;
+	file = CreateFile(path,
+			  GENERIC_READ,
+			  FILE_SHARE_READ,
+			  0, // lpSecurityAttributes
+			  OPEN_EXISTING,
+			  0,
+			  0);
+	if (file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, BUFSIZE, GetLastError());
 		fprintf(stderr, errfmt_open, path, errtext);
 		return -1;
 	}
-	if (ui->filepath) {
-		free(ui->filepath);
-	}
-#ifdef UNICODE
-	ui->filepath = utf16_to_mbcs(path);
-#else
-	ui->filepath = strdup(path);
-#endif
-	DWORD file_size_high;
-	w->file_size = GetFileSize(w->file, &file_size_high);
-	if (w->file_size == 0xffffffff) {
-		DWORD error_code = GetLastError();
-		if (error_code) {
-			format_error_code(errtext, sizeof errtext, GetLastError());
-			fprintf(stderr, errfmt_size, path, errtext);
-			return -1;
-		}
-	}
-	if (file_size_high) {
-		fprintf(stderr, errfmt_open, path, "file is too large");
+	if (whex_init(ui->whex, file) < 0) {
+		CloseHandle(file);
 		return -1;
 	}
 	DEBUG_PRINTF("file size: %I64u (0x%I64x)\n", w->file_size, w->file_size);
-	w->total_lines = w->file_size >> LOG2_N_COL;
+	ui->filepath = path;
+	ui->total_lines = w->file_size >> LOG2_N_COL;
 	if (w->file_size&(N_COL-1)) {
-		w->total_lines += 1;
-	}
-	// invalidate cache
-	for (int i=0; i<N_CACHE_BLOCK; i++) {
-		w->cache[i].tag = 0;
+		ui->total_lines += 1;
 	}
 	return 0;
 }

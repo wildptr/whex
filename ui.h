@@ -8,11 +8,11 @@ typedef struct {
 	int med_buffer_nrow;
 	HANDLE file;
 	char *filepath;
-	long long current_line;
 	/* number of lines displayed */
 	int nrow;
 	WNDPROC med_wndproc;
 	WNDPROC cmdedit_wndproc;
+	long long current_line;
 	/* current position in file */
 	int cursor_x;
 	int cursor_y;
@@ -25,4 +25,5 @@ typedef struct {
 	long long hl_start;
 	long long hl_len;
 	HWND status_bar;
+	Region *rgn;
 } UI;

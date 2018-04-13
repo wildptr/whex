@@ -2,19 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "util.h"
 #include "tree.h"
 
-void tree_free(struct tree *tree)
-{
-	free(tree->name);
-	for (int i=0; i<tree->n_child; i++) {
-		tree_free(tree->children[i]);
-	}
-	free(tree->children);
-	free(tree);
-}
-
-static void print_rec(struct tree *tree, int depth)
+static void
+print_rec(Tree *tree, int depth)
 {
 	printf("%s: %I64d bytes", tree->name, tree->len);
 	if (tree->n_child >= 0) {
@@ -35,12 +27,14 @@ static void print_rec(struct tree *tree, int depth)
 	}
 }
 
-void tree_print(struct tree *tree)
+void
+tree_print(Tree *tree)
 {
 	print_rec(tree, 0);
 }
 
-struct tree *tree_lookup(struct tree *tree, long long addr)
+Tree *
+tree_lookup(Tree *tree, long long addr)
 {
 	if (addr < tree->start || addr >= tree->start + tree->len) {
 		// out of bounds
@@ -51,7 +45,7 @@ struct tree *tree_lookup(struct tree *tree, long long addr)
 		return tree;
 	}
 	for (int i=0; i<tree->n_child; i++) {
-		struct tree *result = tree_lookup(tree->children[i], addr);
+		Tree *result = tree_lookup(tree->children[i], addr);
 		if (result) return result;
 	}
 	// `addr` falls within gap
@@ -59,15 +53,15 @@ struct tree *tree_lookup(struct tree *tree, long long addr)
 }
 
 #if 0
-static struct tree *last_leaf(struct tree *tree)
+static Tree *last_leaf(Tree *tree)
 {
 	if (tree->n_child <= 0) return tree;
 	return last_leaf(tree->children[tree->n_child-1]);
 }
 
-struct tree *tree_prev_leaf(struct tree *tree)
+Tree *tree_prev_leaf(Tree *tree)
 {
-	struct tree *parent = tree->parent;
+	Tree *parent = tree->parent;
 	if (!parent) return 0;
 	for (int i=0; i<parent->n_child; i++) {
 		if (tree == parent->children[i]) {
@@ -80,26 +74,28 @@ struct tree *tree_prev_leaf(struct tree *tree)
 }
 #endif
 
-struct link_node {
-	struct link_node *next;
+typedef struct node {
+	struct node *next;
 	char *s;
-	int buf_len;
-};
+	int len;
+} Node;
 
-static struct link_node *tree_path_rec(struct tree *tree, struct link_node *next)
+static Node *
+tree_path_rec(Region *r, Tree *tree, Node *next)
 {
-	struct link_node *node = malloc(sizeof *node);
+	Node *node = ralloc(r, sizeof *node);
 	node->next = next;
 	node->s = tree->name;
-	node->buf_len = strlen(tree->name) + 1 + (next ? next->buf_len : 0);
+	node->len = strlen(tree->name) + 1 + (next ? next->len : 0);
 	if (tree->parent) {
-		return tree_path_rec(tree->parent, node);
+		return tree_path_rec(r, tree->parent, node);
 	}
 	// tree->parent == NULL
 	return node;
 }
 
-static void write_path(struct link_node *node, char *p)
+static void
+write_path(Node *node, char *p)
 {
 	char *q = node->s;
 	while (*q) *p++ = *q++;
@@ -111,16 +107,11 @@ static void write_path(struct link_node *node, char *p)
 	}
 }
 
-char *tree_path(struct tree *tree)
+char *
+tree_path(Region *r, Tree *tree)
 {
-	struct link_node *link = tree_path_rec(tree, 0);
-	char *path = malloc(link->buf_len);
+	Node *link = tree_path_rec(r, tree, 0);
+	char *path = ralloc(r, link->len);
 	write_path(link, path);
-	// free the linked list
-	do {
-		struct link_node *next = link->next;
-		free(link);
-		link = next;
-	} while (link);
 	return path;
 }

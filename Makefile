@@ -10,6 +10,6 @@ list.o: list.c util.h
 lua_api.o: lua_api.c whex.h tree.h
 main.o: main.c whex.h ui.h monoedit.h tree.h unicode.h
 region.o: region.c util.h
-tree.o: tree.c tree.h
-unicode.o: unicode.c unicode.h
+tree.o: tree.c util.h tree.h
+unicode.o: unicode.c util.h unicode.h
 whex.o: whex.c util.h whex.h

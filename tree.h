@@ -1,6 +1,3 @@
-#ifndef _TREE_H_
-#define _TREE_H_
-
 enum field_type {
 	F_RAW,
 	F_UINT,
@@ -8,7 +5,7 @@ enum field_type {
 	F_ASCII,
 };
 
-struct tree {
+typedef struct tree {
 	long long start;
 	long long len;
 	char *name;
@@ -16,11 +13,8 @@ struct tree {
 	struct tree **children;
 	enum field_type type;
 	struct tree *parent;
-};
+} Tree;
 
-void tree_free(struct tree *);
-void tree_print(struct tree *);
-struct tree *tree_lookup(struct tree *tree, long long addr);
-char *tree_path(struct tree *tree);
-
-#endif // _TREE_H_
+void tree_print(Tree *);
+struct tree *tree_lookup(Tree *, long long addr);
+char *tree_path(Region *, Tree *);

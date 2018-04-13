@@ -20,14 +20,6 @@
 
 #include <commctrl.h>
 
-#ifdef UNICODE
-#define MBCS_TO_TSTR(x) mbcs_to_utf16(x)
-#define TSTR_TO_MBCS(x) utf16_to_mbcs(x)
-#else
-#define MBCS_TO_TSTR(x) (x)
-#define TSTR_TO_MBCS(x) (x)
-#endif
-
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 4
 #define N_COL (1<<LOG2_N_COL)
@@ -36,7 +28,7 @@
 #define BUFSIZE 512
 
 enum {
-	CONTROL_STATUS_BAR = 0x100
+	IDC_STATUS_BAR = 0x100
 };
 
 char *strdup(const char *);
@@ -173,20 +165,27 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 LRESULT CALLBACK
 cmdedit_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	UI *ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	UI *ui;
 
 	switch (msg) {
 	case WM_CHAR:
+		ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 		switch (wparam) {
 			char *cmd;
-			TCHAR *raw_cmd;
-			int buf_len;
+			TCHAR *tcmd;
+			int buflen;
 			const char *errmsg;
+			void *top;
 		case '\r':
-			buf_len = GetWindowTextLength(hwnd)+1;
-			raw_cmd = malloc(buf_len * sizeof *raw_cmd);
-			GetWindowText(hwnd, raw_cmd, buf_len);
-			cmd = TSTR_TO_MBCS(raw_cmd);
+			buflen = GetWindowTextLength(hwnd)+1;
+			top = ui->rgn->cur;
+			tcmd = ralloc(ui->rgn, buflen * sizeof *tcmd);
+			GetWindowText(hwnd, tcmd, buflen);
+#ifdef UNICODE
+			cmd = utf16_to_mbcs(ui->rgn, tcmd);
+#else
+			cmd = tcmd;
+#endif
 			errmsg = 0;
 			switch (cmd[0]) {
 			case '/':
@@ -202,10 +201,7 @@ cmdedit_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				//execute_command(w, cmd_goto, cmd+1);
 				break;
 			}
-			free(raw_cmd);
-#ifdef UNICODE
-			free(cmd);
-#endif
+			rfree(ui->rgn, top);
 			if (errmsg) {
 				error_prompt(ui, errmsg);
 			}
@@ -360,15 +356,16 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 		return 1;
 	}
 
-	struct cache_entry *cache = calloc(N_CACHE_BLOCK, sizeof *cache);
+	struct cache_entry *cache = ralloc0(&rgn, N_CACHE_BLOCK * sizeof *cache);
 
 	// initialize mainwindow struct
-	Whex *w = calloc(1, sizeof *w);
+	Whex *w = ralloc0(&rgn, sizeof *w);
+	w->file = INVALID_HANDLE_VALUE;
 	w->cache = cache;
 
-	UI *ui = calloc(1, sizeof *ui);
+	UI *ui = ralloc0(&rgn, sizeof *ui);
 	ui->whex = w;
-	w->file = INVALID_HANDLE_VALUE;
+	ui->rgn = &rgn;
 	init_lua(ui);
 
 	return start_gui(instance, show, ui, filepath);
@@ -391,8 +388,8 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 		} else {
 			int block = whex_find_cache(w, addr);
 			int base = addr & (CACHE_BLOCK_SIZE-1);
-			wsprintf(p, TEXT("%08I64x: "), addr);
-			p += 10;
+			wsprintf(p, TEXT("%08I64x:"), addr);
+			p += 9;
 			int end = 0;
 		       	if (abs_line+1 >= w->total_lines) {
 				end = w->file_size & (N_COL-1);
@@ -401,7 +398,8 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 				end = N_COL;
 			}
 			for (int j=0; j<end; j++) {
-				wsprintf(p, TEXT("%02x "), w->cache[block].data[base|j]);
+				//*p++ = j && !(j&7) ? '-' : ' ';
+				wsprintf(p, TEXT(" %02x"), w->cache[block].data[base|j]);
 				p += 3;
 			}
 			for (int j=end; j<N_COL; j++) {
@@ -444,7 +442,8 @@ update_status_text(UI *ui, struct tree *leaf)
 	TCHAR value_buf[80];
 	value_buf[0] = 0;
 	char *path = 0;
-	TCHAR *path_tstr = 0;
+	TCHAR *tpath = 0;
+	void *top = ui->rgn->cur;
 	if (leaf) {
 		switch (leaf->type) {
 			TCHAR *p;
@@ -517,19 +516,20 @@ update_status_text(UI *ui, struct tree *leaf)
 			}
 			break;
 		}
-		path = tree_path(leaf);
-		path_tstr = MBCS_TO_TSTR(path);
+		path = tree_path(ui->rgn, leaf);
+#ifdef UNICODE
+		tpath = mbcs_to_utf16(ui->rgn, path);
+#else
+		tpath = path;
+#endif
 	}
 	TCHAR cursor_pos_buf[17];
 	wsprintf(cursor_pos_buf, TEXT("%I64x"), cursor_pos(ui));
 	SendMessage(ui->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
 	SendMessage(ui->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
 	SendMessage(ui->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
-	SendMessage(ui->status_bar, SB_SETTEXT, 3, (LPARAM) path_tstr);
-#ifdef UNICODE
-	free(path_tstr);
-#endif
-	free(path);
+	SendMessage(ui->status_bar, SB_SETTEXT, 3, (LPARAM) tpath);
+	rfree(ui->rgn, top);
 }
 
 // should be invoked when cursor_pos is changed
@@ -697,13 +697,16 @@ repeat_search(UI *ui, bool reverse)
 void
 error_prompt(UI *ui, const char *errmsg)
 {
-#ifndef UNICODE
-	const
-#endif
-	TCHAR *errmsg_tstr = MBCS_TO_TSTR(errmsg);
-	MessageBox(ui->hwnd, errmsg_tstr, TEXT("Error"), MB_ICONERROR);
+	const TCHAR *terrmsg;
 #ifdef UNICODE
-	free(errmsg_tstr);
+	void *top = ui->rgn->cur;
+	terrmsg = mbcs_to_utf16(ui->rgn, errmsg);
+#else
+	terrmsg = errmsg;
+#endif
+	MessageBox(ui->hwnd, terrmsg, TEXT("Error"), MB_ICONERROR);
+#ifdef UNICODE
+	rfree(ui->rgn, top);
 #endif
 }
 
@@ -969,7 +972,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
 					NULL,
 					hwnd,
-					CONTROL_STATUS_BAR);
+					IDC_STATUS_BAR);
 	int parts[] = { 64, 128, 256, -1 };
 	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) parts);
 	ui->status_bar = status_bar;
@@ -998,17 +1001,17 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 void
 resize_monoedit(UI *ui, int width, int height)
 {
-	int new_nrows = height/ui->charheight;
-	if (new_nrows > ui->nrow) {
-		if (new_nrows > ui->med_buffer_nrow) {
-			ui->med_buffer = realloc(ui->med_buffer, N_COL_CHAR*new_nrows*sizeof(TCHAR));
-			ui->med_buffer_nrow = new_nrows;
+	int new_nrow = height/ui->charheight;
+	if (new_nrow > ui->nrow) {
+		if (new_nrow > ui->med_buffer_nrow) {
+			ui->med_buffer = realloc(ui->med_buffer, N_COL_CHAR*new_nrow*sizeof(TCHAR));
+			ui->med_buffer_nrow = new_nrow;
 			SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0, (LPARAM) ui->med_buffer);
 		}
-		update_monoedit_buffer(ui, ui->nrow, new_nrows - ui->nrow);
+		update_monoedit_buffer(ui, ui->nrow, new_nrow - ui->nrow);
 		update_monoedit_tags(ui);
 	}
-	ui->nrow = new_nrows;
+	ui->nrow = new_nrow;
 	SendMessage(ui->monoedit, MED_WM_SET_CSIZE, -1, height/ui->charheight);
 	SetWindowPos(ui->monoedit,
 		     0,

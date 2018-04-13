@@ -13,3 +13,7 @@ region.o: region.c util.h
 tree.o: tree.c util.h tree.h
 unicode.o: unicode.c util.h unicode.h
 whex.o: whex.c util.h whex.h
+
+.PHONY: clean
+clean:
+	rm -f whex.exe *.o

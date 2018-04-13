@@ -165,11 +165,10 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 LRESULT CALLBACK
 cmdedit_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	UI *ui;
+	UI *ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (msg) {
 	case WM_CHAR:
-		ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 		switch (wparam) {
 			char *cmd;
 			TCHAR *tcmd;
@@ -303,7 +302,7 @@ start_gui(HINSTANCE instance,
 	return msg.wParam;
 }
 
-/* TODO: handle special characters */
+/* TODO: handle backslash */
 static TCHAR **
 cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 {
@@ -314,11 +313,20 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 	TCHAR *q;
 	TCHAR *arg;
 	do {
+		int n;
 		q = p;
-		while (*q && !isspace(*q)) q++;
-		/* argument between p and q */
+		if (*q == '"') {
+			p++;
+			do q++; while (*q && *q != '"');
+			/* argument between p and q */
+			n = q-p;
+			if (*q) q++;
+		} else {
+			while (*q && !isspace(*q)) q++;
+			/* argument between p and q */
+			n = q-p;
+		}
 		narg++;
-		int n = q-p;
 		arg = ralloc(r, (n+1) * sizeof *arg);
 		memcpy(arg, p, n*sizeof(TCHAR));
 		arg[n] = 0;

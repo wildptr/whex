@@ -1,8 +1,6 @@
-local P = {} -- this package
-
 local bp = require('binary_parser')
 
-function P.parse(file)
+return function(file)
 
   bp.new(file)()
 
@@ -132,5 +130,3 @@ function P.parse(file)
   return pe 'pe'
 
 end
-
-return P

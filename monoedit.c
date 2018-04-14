@@ -1,13 +1,14 @@
-#include <windows.h>
-#include "monoedit.h"
-
 #include <stdlib.h>
 #include <string.h>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include "monoedit.h"
+
 typedef struct {
 	/* in characters */
-	int ncols;
-	int nrows;
+	int ncol;
+	int nrow;
 	TCHAR *buffer;
 	HFONT font;
 	int cursorx;
@@ -31,16 +32,18 @@ med_paint(Med *w, HWND hwnd)
 		if (w->font) {
 			old_font = SelectObject(hdc, w->font);
 		}
-		MedTag *segments = malloc((w->nrows + 2*w->tag_len) * sizeof *segments);
+		MedTag *segments =
+			malloc((w->nrow + 2*w->tag_len) * sizeof *segments);
 		int n_seg = 0;
 		int next_tag_i = 0;
 		int line = 0;
 		int col = 0;
-		while (line < w->nrows) {
+		while (line < w->nrow) {
 			segments[n_seg].line = line;
 			segments[n_seg].start = col;
 			segments[n_seg].attr = 0;
-			if (next_tag_i < w->tag_len && w->tags[next_tag_i].line == line) {
+			if (next_tag_i < w->tag_len &&
+			    w->tags[next_tag_i].line == line) {
 				MedTag *next_tag = &w->tags[next_tag_i];
 				// untagged segment
 				segments[n_seg++].len = next_tag->start - col;
@@ -49,10 +52,10 @@ med_paint(Med *w, HWND hwnd)
 				next_tag_i++;
 				col = next_tag->start + next_tag->len;
 			} else {
-				segments[n_seg++].len = w->ncols - col;
-				col = w->ncols;
+				segments[n_seg++].len = w->ncol - col;
+				col = w->ncol;
 			}
-			if (col == w->ncols) {
+			if (col == w->ncol) {
 				line++;
 				col = 0;
 			}
@@ -84,6 +87,12 @@ med_paint(Med *w, HWND hwnd)
 		if (w->font) {
 			SelectObject(hdc, old_font);
 		}
+	} else {
+		HBRUSH brush;
+		RECT r;
+		brush = (HBRUSH) GetClassLongPtr(hwnd, GCL_HBRBACKGROUND);
+		GetClientRect(hwnd, &r);
+		FillRect(hdc, &r, brush);
 	}
 
 	EndPaint(hwnd, &paint);
@@ -132,8 +141,8 @@ med_wndproc(HWND hwnd,
 	case WM_NCDESTROY:
 		if (w) {
 			/* This check is necessary, since we reach here even
-			 * when WM_NCCREATE returns FALSE (which means we
-			 * failed to allocate w). */
+			   when WM_NCCREATE returns FALSE (which means we
+			   failed to allocate w). */
 			free(w);
 		}
 		return 0;
@@ -146,10 +155,11 @@ med_wndproc(HWND hwnd,
 			RECT scroll_rect = {
 			       	0,
 				0,
-				w->charwidth * w->ncols,
-				w->charheight * w->nrows
+				w->charwidth * w->ncol,
+				w->charheight * w->nrow
 			};
-			ScrollWindow(hwnd, 0, -delta*w->charheight, &scroll_rect, &scroll_rect);
+			ScrollWindow(hwnd, 0, -delta*w->charheight,
+				     &scroll_rect, &scroll_rect);
 		}
 		return 0;
 	case MED_WM_SET_BUFFER:
@@ -157,13 +167,13 @@ med_wndproc(HWND hwnd,
 		return 0;
 	case MED_WM_SET_CSIZE:
 		{
-			int ncols  = (int) wparam;
-			int nrows = (int) lparam;
-			if (ncols >= 0) {
-				w->ncols = ncols;
+			int ncol  = (int) wparam;
+			int nrow = (int) lparam;
+			if (ncol >= 0) {
+				w->ncol = ncol;
 			}
-			if (nrows >= 0) {
-				w->nrows = nrows;
+			if (nrow >= 0) {
+				w->nrow = nrow;
 			}
 		}
 		return 0;
@@ -196,11 +206,11 @@ med_wndproc(HWND hwnd,
 		return 0;
 	case MED_WM_SET_CURSOR_POS:
 		{
-			int cursorx = (int) wparam;
-			int cursory = (int) lparam;
-			w->cursorx = cursorx;
-			w->cursory = cursory;
-			SetCaretPos(cursorx*w->charwidth, cursory*w->charheight);
+			int cx = (int) wparam;
+			int cy = (int) lparam;
+			w->cursorx = cx;
+			w->cursory = cy;
+			SetCaretPos(cx*w->charwidth, cy*w->charheight);
 		}
 		return 0;
 	case WM_CHAR:
@@ -211,8 +221,8 @@ med_wndproc(HWND hwnd,
 			return 0;
 		}
 	case WM_ERASEBKGND:
-		// pretend that the background has been erased in order to
-		// prevent flickering
+		/* pretend that the background has been erased in order to
+		   prevent flickering */
 		return TRUE;
 	}
 	return DefWindowProc(hwnd, message, wparam, lparam);
@@ -227,6 +237,7 @@ med_register_class(void)
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
+	//CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 	wndclass.lpszClassName = TEXT("MonoEdit");
 	return RegisterClass(&wndclass);
 }

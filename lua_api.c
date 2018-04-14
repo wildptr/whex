@@ -37,10 +37,10 @@ lapi_peek(lua_State *L)
 	return 1;
 }
 
-static struct tree *
+static Tree *
 convert_tree(Region *r, lua_State *L)
 {
-	struct tree *tree = ralloc(r, sizeof *tree);
+	Tree *tree = ralloc(r, sizeof *tree);
 	tree->parent = 0;
 
 	lua_getfield(L, -1, "start");
@@ -92,7 +92,7 @@ convert_tree(Region *r, lua_State *L)
 	for (int i=0; i<n; i++) {
 		// beware that indices start at 1 in Lua
 		lua_rawgeti(L, -1, 1+i); // push child
-		struct tree *child = convert_tree(r, L);
+		Tree *child = convert_tree(r, L);
 		if (!child) {
 			lua_pop(L, 2);
 			return 0;

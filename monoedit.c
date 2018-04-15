@@ -25,7 +25,10 @@ med_paint(Med *w, HWND hwnd)
 {
 	PAINTSTRUCT paint;
 	HDC hdc = BeginPaint(hwnd, &paint);
+	HBRUSH bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
+	RECT r;
 
+	GetClientRect(hwnd, &r);
 	if (w->buffer) {
 		HGDIOBJ old_font;
 		COLORREF old_bkcolor;
@@ -87,12 +90,16 @@ med_paint(Med *w, HWND hwnd)
 		if (w->font) {
 			SelectObject(hdc, old_font);
 		}
+		int textw = w->ncol * w->charwidth;
+		int texth = w->nrow * w->charheight;
+		r.left += textw;
+		FillRect(hdc, &r, bgbrush);
+		r.left = 0;
+		r.right = textw;
+		r.top = texth;
+		FillRect(hdc, &r, bgbrush);
 	} else {
-		HBRUSH brush;
-		RECT r;
-		brush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
-		GetClientRect(hwnd, &r);
-		FillRect(hdc, &r, brush);
+		FillRect(hdc, &r, bgbrush);
 	}
 
 	EndPaint(hwnd, &paint);

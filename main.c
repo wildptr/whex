@@ -1022,9 +1022,9 @@ update_window_title(UI *ui)
 	if (ui->filepath) {
 		int pathlen = lstrlen(ui->filepath);
 		void *top = rgn.cur;
-		TCHAR *title = ralloc(&rgn, (7+pathlen+1) * sizeof *title);
-		memcpy(title, TEXT("WHEX - "), 7*sizeof(TCHAR));
-		memcpy(title+7, ui->filepath, pathlen+1);
+		TCHAR *title = ralloc(&rgn, (pathlen+8) * sizeof *title);
+		memcpy(title, ui->filepath, pathlen);
+		memcpy(title+pathlen, TEXT(" - WHEX"), 8*sizeof(TCHAR));
 		SetWindowText(ui->hwnd, title);
 		rfree(&rgn, top);
 	} else {

@@ -5,6 +5,14 @@
 
 #include "util.h"
 
+#define CHUNK_SIZE 0x1000
+#define PTR_SIZE sizeof(void*)
+
+typedef struct chunk {
+	struct chunk *next;
+	char data[CHUNK_SIZE-PTR_SIZE];
+} Chunk;
+
 void *
 ralloc(Region *r, int size)
 {

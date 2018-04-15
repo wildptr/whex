@@ -1,4 +1,3 @@
-#if 0
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +12,7 @@
 #include "util.h"
 #include "whex.h"
 #include "tree.h"
+#include "ui.h"
 
 static UI *
 getui(lua_State *L)
@@ -37,13 +37,33 @@ lapi_peek(lua_State *L)
 	return 1;
 }
 
-static Tree *
+int
+lapi_peekstr(lua_State *L)
+{
+	long long addr = luaL_checkinteger(L, 1);
+	int n = luaL_checkinteger(L, 2);
+	UI *ui = getui(L);
+	Whex *w = ui->whex;
+	if (addr < 0 || addr+n > w->file_size) {
+		return luaL_error(L, "address out of bounds");
+	}
+	char *s = malloc(n+1);
+	for (int i=0; i<n; i++) {
+		s[i] = whex_getbyte(w, addr+i);
+	}
+	s[n] = 0;
+	lua_pushstring(L, s);
+	free(s);
+	return 1;
+}
+
+Tree *
 convert_tree(Region *r, lua_State *L)
 {
 	Tree *tree = ralloc(r, sizeof *tree);
 	tree->parent = 0;
 
-	lua_getfield(L, -1, "start");
+	lua_getfield(L, -1, "_start");
 	if (!lua_isinteger(L, -1)) {
 		lua_pop(L, 1);
 		return 0;
@@ -51,7 +71,7 @@ convert_tree(Region *r, lua_State *L)
 	tree->start = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
-	lua_getfield(L, -1, "size");
+	lua_getfield(L, -1, "_size");
 	if (!lua_isinteger(L, -1)) {
 		lua_pop(L, 1);
 		return 0;
@@ -59,7 +79,7 @@ convert_tree(Region *r, lua_State *L)
 	tree->len = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
-	lua_getfield(L, -1, "name");
+	lua_getfield(L, -1, "_name");
 	if (!lua_isstring(L, -1)) {
 		lua_pop(L, 1);
 		return 0;
@@ -70,7 +90,7 @@ convert_tree(Region *r, lua_State *L)
 	memcpy(tree->name, name, name_len1);
 	lua_pop(L, 1);
 
-	lua_getfield(L, -1, "value");
+	lua_getfield(L, -1, "_value");
 	switch (lua_type(L, -1)) {
 	case LUA_TNUMBER:
 		tree->type = F_UINT;
@@ -83,7 +103,7 @@ convert_tree(Region *r, lua_State *L)
 	}
 	lua_pop(L, 1);
 
-	lua_getfield(L, -1, "children");
+	lua_getfield(L, -1, "_children");
 	// top of stack is array of children
 	int n = lua_rawlen(L, -1); // get number of children
 
@@ -109,50 +129,25 @@ convert_tree(Region *r, lua_State *L)
 }
 
 int
-lapi_set_tree(lua_State *L)
+lapi_msgbox(lua_State *L)
 {
-	Whex *w = get_mainwindow(L);
-	Region *arena = &w->tree_arena;
-	rfreeall(arena);
-	w->tree = convert_tree(arena, L);
-	if (!w->tree) {
-		return luaL_error(L, "invalid argument");
-	}
-	return 0;
-}
-
-int
-lapi_filepath(lua_State *L)
-{
-	Whex *w = get_mainwindow(L);
-	lua_pushstring(L, w->filepath);
-	return 1;
-}
-
-int
-lapi_goto(lua_State *L)
-{
-	Whex *w = get_mainwindow(L);
-	long long addr = luaL_checkinteger(L, 1);
-	if (addr < 0 || addr >= w->file_size) {
-		luaL_error(L, "address out of bounds");
-	}
-	mainwindow_goto_address(w, addr);
+	const char *msg = luaL_checkstring(L, 1);
+	UI *ui = getui(L);
+	MessageBoxA(ui->hwnd, msg, "WHEX", MB_OK);
 	return 0;
 }
 
 void
 register_lua_globals(lua_State *L)
 {
+	lua_pushinteger(L, 1); // index in Lua registry
 	lua_newtable(L);
+	lua_pushcfunction(L, lapi_msgbox);
+	// at index -1 is the C function
+	lua_setfield(L, -2, "msgbox");
 	lua_pushcfunction(L, lapi_peek);
 	lua_setfield(L, -2, "peek");
-	lua_pushcfunction(L, lapi_filepath);
-	lua_setfield(L, -2, "filepath");
-	lua_pushcfunction(L, lapi_set_tree);
-	lua_setfield(L, -2, "set_tree");
-	lua_pushcfunction(L, lapi_goto);
-	lua_setfield(L, -2, "goto_address");
-	lua_setglobal(L, "whex");
+	lua_pushcfunction(L, lapi_peekstr);
+	lua_setfield(L, -2, "peekstr");
+	lua_settable(L, LUA_REGISTRYINDEX);
 }
-#endif

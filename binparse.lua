@@ -5,48 +5,37 @@ Node.__index = Node
 
 function Node:new(name, start, size, value)
   o = {}
-  o.children = {}
-  o.dir = {} -- find child by name
-  o.name = name
-  o.start = start
-  o.size = size
-  o.value = value -- leaf node only
+  o._children = {}
+  o._name = name
+  o._start = start
+  o._size = size
+  o._value = value -- leaf node only
   setmetatable(o, self)
   return o
 end
 
 function Node:append_node(child)
-  local index = #self.children+1
-  self.children[index] = child
-  self.dir[child.name] = index
-end
-
-function Node:__call(field)
-  local child = self.children[self.dir[field]]
-  return child.value or child
-  --[[local node = self
-  for i=1,#list do
-    node = node:child(list[i])
-  end
-  return node.value or node]]
+  local index = #self._children+1
+  self._children[index] = child
+  self[child._name] = child._value or child
 end
 
 function Node:print()
   local function print_r(self, depth)
     local indent = string.rep('  ', depth)
-    if self.value then
-      typ = type(self.value)
+    if self._value then
+      typ = type(self._value)
       if typ == 'number' then
-        print(string.format('%s%s = %d (0x%x)', indent, self.name, self.value, self.value))
+        print(string.format('%s%s = %d (0x%x)', indent, self._name, self._value, self._value))
       elseif typ == 'string' then
-        print(string.format('%s%s = %s', indent, self.name, self.value))
+        print(string.format('%s%s = %s', indent, self._name, self._value))
       end
     else
-      io.write(string.format('%s%s: %d bytes', indent, self.name, self.size))
-      if #self.children > 0 then
+      io.write(string.format('%s%s: %d bytes', indent, self._name, self._size))
+      if #self._children > 0 then
         print(' {')
-        for i=1, #self.children do
-          print_r(self.children[i], depth+1)
+        for i=1, #self._children do
+          print_r(self._children[i], depth+1)
         end
         print(string.format('%s}', indent))
       else
@@ -57,14 +46,13 @@ function Node:print()
   return print_r(self, 0)
 end
 
-function P.new(file)
+function P.new(whex)
 
   local pos = 0
   local current_node
 
   local function u8(name)
-    local bytes = file:read(1)
-    value = string.byte(bytes:sub(1,1))
+    value = whex.peek(pos)
     local t = Node:new(name, pos, 1, value)
     current_node:append_node(t)
     pos = pos+1
@@ -72,9 +60,8 @@ function P.new(file)
   end
 
   local function u16(name)
-    local bytes = file:read(2)
-    value = string.byte(bytes:sub(1,1))
-          | string.byte(bytes:sub(2,2)) << 8
+    value = whex.peek(pos)
+          | whex.peek(pos+1) << 8
     local t = Node:new(name, pos, 2, value)
     current_node:append_node(t)
     pos = pos+2
@@ -82,11 +69,10 @@ function P.new(file)
   end
 
   local function u32(name)
-    local bytes = file:read(4)
-    value = string.byte(bytes:sub(1,1))
-          | string.byte(bytes:sub(2,2)) << 8
-          | string.byte(bytes:sub(3,3)) << 16
-          | string.byte(bytes:sub(4,4)) << 24
+    value = whex.peek(pos)
+          | whex.peek(pos+1) << 8
+          | whex.peek(pos+2) << 16
+          | whex.peek(pos+3) << 24
     local t = Node:new(name, pos, 4, value)
     current_node:append_node(t)
     pos = pos+4
@@ -94,16 +80,14 @@ function P.new(file)
   end
 
   local function u64(name)
-    local bytes = file:read(8)
-    value =
-    string.byte(bytes:sub(1,1))       |
-    string.byte(bytes:sub(2,2)) <<  8 |
-    string.byte(bytes:sub(3,3)) << 16 |
-    string.byte(bytes:sub(4,4)) << 24 |
-    string.byte(bytes:sub(5,5)) << 32 |
-    string.byte(bytes:sub(6,6)) << 40 |
-    string.byte(bytes:sub(7,7)) << 48 |
-    string.byte(bytes:sub(8,8)) << 56
+    value = string.byte(pos)
+          | string.byte(pos+1) <<  8
+          | string.byte(pos+2) << 16
+          | string.byte(pos+3) << 24
+          | string.byte(pos+4) << 32
+          | string.byte(pos+5) << 40
+          | string.byte(pos+6) << 48
+          | string.byte(pos+7) << 56
     local t = Node:new(name, pos, 8, value)
     current_node:append_node(t)
     pos = pos+8
@@ -119,7 +103,7 @@ function P.new(file)
         proc(i)
       end
       current_node = saved_current_node
-      t.size = pos - t.start
+      t._size = pos - t._start
       current_node:append_node(t)
       return t
     end
@@ -127,7 +111,7 @@ function P.new(file)
 
   local function ascii(n)
     return function(name)
-      local bytes = file:read(n)
+      local bytes = whex.peekstr(pos, n)
       local t = Node:new(name, pos, n, bytes)
       current_node:append_node(t)
       pos = pos+n
@@ -140,11 +124,11 @@ function P.new(file)
       local t = Node:new(name, pos)
       local saved_current_node = current_node
       current_node = t
-      for i=1,#list.children do
-        proc(list.children[i])(i)
+      for i=1,#list._children do
+        proc(list._children[i])(i)
       end
       current_node = saved_current_node
-      t.size = pos - t.start
+      t._size = pos - t._start
       current_node:append_node(t)
       return t
     end
@@ -152,7 +136,6 @@ function P.new(file)
 
   local function data(n)
     return function(name)
-      file:seek('cur', n)
       local t = Node:new(name, pos, n)
       current_node:append_node(t)
       pos = pos+n
@@ -165,14 +148,9 @@ function P.new(file)
       local t = Node:new(name, pos)
       local saved_current_node = current_node
       current_node = t
-      proc(function(field)
-        if field == '.' then
-          return pos-t.start
-        end
-        return t(field)
-      end)
+      proc(function() return pos - t._start end)
       current_node = saved_current_node
-      t.size = pos - t.start
+      t._size = pos - t._start
       if current_node then
         current_node:append_node(t)
       else

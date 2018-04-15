@@ -4,17 +4,11 @@
 #define DEBUG_PRINTF(...) ((void)0)
 #endif
 
-#define CHUNK_SIZE 0x1000
-#define PTR_SIZE sizeof(void*)
-
-typedef struct chunk {
-	struct chunk *next;
-	char data[CHUNK_SIZE-PTR_SIZE];
-} Chunk;
+struct chunk;
 
 typedef struct {
 	char *cur, *limit;
-	Chunk *head;
+	struct chunk *head;
 } Region;
 
 void rinit(Region *);

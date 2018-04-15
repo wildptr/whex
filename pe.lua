@@ -1,10 +1,10 @@
-local bp = require('binary_parser')
+local bp = require('binparse')
 
 return function(file)
 
   bp.new(file)()
 
-  local dos_header = record(function(eval)
+  local dos_header = record(function()
     local magic = u16 'e_magic'
     if magic ~= 0x5a4d then
       error(string.format('invalid DOS executable magic: 0x%04x', magic))
@@ -29,9 +29,9 @@ return function(file)
     u32 'e_lfanew'
   end)
 
-  local dos_exe = record(function(eval)
-    dos_header 'dos_header'
-    data( eval'dos_header''e_lfanew' - eval'.' ) 'data'
+  local dos_exe = record(function(dot)
+    local doshdr = dos_header 'dos_header'
+    data( doshdr.e_lfanew - dot() ) 'data'
   end)
 
   local data_directory = record(function()
@@ -39,7 +39,7 @@ return function(file)
     u32 'size'
   end)
 
-  local optional_header = record(function(eval)
+  local optional_header = record(function()
     local magic = u16 'magic'
     local ispe32plus
     if magic == 0x10b then
@@ -78,11 +78,11 @@ return function(file)
     usize 'heap_size_reserve'
     usize 'heap_size_commit'
     u32 'loader_flags'
-    u32 'num_data_directories'
-    array(data_directory, eval'num_data_directories') 'data_directories'
+    local ndir = u32 'num_data_directories'
+    array(data_directory, ndir) 'data_directories'
   end)
 
-  local pe_header = record(function(eval)
+  local pe_header = record(function()
     local magic = u32('pe_signature')
     if magic ~= 0x4550 then
       error(string.format('invalid PE signature: 0x%08x', magic))
@@ -117,13 +117,13 @@ return function(file)
     end)
   end
 
-  local pe = record(function(eval)
+  local pe = record(function(dot)
     dos_exe 'dos_exe'
-    local pe_header = pe_header 'pe_header'
-    local num_sections = pe_header 'num_sections'
+    local pehdr = pe_header 'pe_header'
+    local num_sections = pehdr.num_sections
     local section_headers = array(section_header, num_sections) 'section_headers'
     map(function(h)
-      return section(h'raw_data_offset'-eval'.', h'raw_data_size')
+      return section(h.raw_data_offset - dot(), h.raw_data_size)
     end, section_headers) 'sections'
   end)
 

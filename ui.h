@@ -21,6 +21,5 @@ typedef struct {
 	long long hl_start;
 	long long hl_len;
 	HWND status_bar;
-	Region *rgn;
 	HINSTANCE instance;
 } UI;

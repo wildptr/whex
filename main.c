@@ -28,11 +28,16 @@
 
 #define BUFSIZE 512
 
+#define NELEM(x) (sizeof(x)/sizeof(*x))
+
 enum {
 	IDC_STATUS_BAR = 0x100,
 	IDM_FILE_OPEN,
 	IDM_FILE_CLOSE,
+	IDM_TOOLS_PARSE,
 };
+
+Region rgn;
 
 char *strdup(const char *);
 void register_lua_globals(lua_State *L);
@@ -102,6 +107,9 @@ void move_prev_field(UI *);
 TCHAR *inputbox(UI *, TCHAR *title);
 bool parse_addr(TCHAR *, long long *);
 void errorbox(HWND, TCHAR *);
+void msgbox(HWND, const char *, ...);
+Tree *convert_tree(Region *, lua_State *);
+void load_format_spec(UI *, const char *);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -234,11 +242,15 @@ create_menu()
 	HMENU mainmenu, m;
 
 	mainmenu = CreateMenu();
+
 	m = CreateMenu();
 	AppendMenu(m, MF_STRING, IDM_FILE_OPEN, TEXT("Open..."));
 	AppendMenu(m, MF_STRING, IDM_FILE_CLOSE, TEXT("Close"));
-
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
+
+	m = CreateMenu();
+	AppendMenu(m, MF_STRING, IDM_TOOLS_PARSE, TEXT("Parse..."));
+	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
 	return mainmenu;
 }
@@ -335,7 +347,6 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	int argc;
 	TCHAR **argv;
 	TCHAR *filepath;
-	Region rgn;
 
 	rinit(&rgn);
 	void *top = rgn.cur;
@@ -358,7 +369,6 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	Whex *w = ralloc(&rgn, sizeof *w);
 	UI *ui = ralloc0(&rgn, sizeof *ui);
 	ui->whex = w;
-	ui->rgn = &rgn;
 	ui->instance = instance;
 	init_lua(ui);
 
@@ -436,7 +446,7 @@ update_status_text(UI *ui, struct tree *leaf)
 	value_buf[0] = 0;
 	char *path = 0;
 	TCHAR *tpath = 0;
-	void *top = ui->rgn->cur;
+	void *top = rgn.cur;
 	if (leaf) {
 		switch (leaf->type) {
 			TCHAR *p;
@@ -509,9 +519,9 @@ update_status_text(UI *ui, struct tree *leaf)
 			}
 			break;
 		}
-		path = tree_path(ui->rgn, leaf);
+		path = tree_path(&rgn, leaf);
 #ifdef UNICODE
-		tpath = mbcs_to_utf16(ui->rgn, path);
+		tpath = mbcs_to_utf16(&rgn, path);
 #else
 		tpath = path;
 #endif
@@ -522,7 +532,7 @@ update_status_text(UI *ui, struct tree *leaf)
 	SendMessage(ui->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
 	SendMessage(ui->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
 	SendMessage(ui->status_bar, SB_SETTEXT, 3, (LPARAM) tpath);
-	rfree(ui->rgn, top);
+	rfree(&rgn, top);
 }
 
 // should be invoked when cursor_pos is changed
@@ -600,14 +610,14 @@ error_prompt(UI *ui, const char *errmsg)
 {
 	const TCHAR *terrmsg;
 #ifdef UNICODE
-	void *top = ui->rgn->cur;
-	terrmsg = mbcs_to_utf16(ui->rgn, errmsg);
+	void *top = rgn.cur;
+	terrmsg = mbcs_to_utf16(&rgn, errmsg);
 #else
 	terrmsg = errmsg;
 #endif
 	MessageBox(ui->hwnd, terrmsg, TEXT("Error"), MB_ICONERROR);
 #ifdef UNICODE
-	rfree(ui->rgn, top);
+	rfree(&rgn, top);
 #endif
 }
 
@@ -961,7 +971,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			RECT status_bar_rect;
 			GetWindowRect(ui->status_bar, &status_bar_rect);
 			// translate top-left from screen to client
-			ScreenToClient(ui->hwnd, (LPPOINT) &status_bar_rect);
+			ScreenToClient(hwnd, (LPPOINT) &status_bar_rect);
 			int width  = LOWORD(lparam);
 			//int height = HIWORD(lparam);
 			resize_monoedit(ui, width, status_bar_rect.top);
@@ -974,7 +984,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		switch (LOWORD(wparam)) {
 			TCHAR path[BUFSIZE];
 		case IDM_FILE_OPEN:
-			if (!file_chooser_dialog(ui->hwnd, path, BUFSIZE)) {
+			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
 				if (ui->filepath) close_file(ui);
 				open_file(ui, path);
 				update_ui(ui);
@@ -983,6 +993,21 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		case IDM_FILE_CLOSE:
 			close_file(ui);
 			update_ui(ui);
+			break;
+		case IDM_TOOLS_PARSE:
+			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
+				char *luafilepath;
+#ifdef UNICODE
+				void *top = rgn.cur;
+				luafilepath = utf16_to_mbcs(&rgn, path);
+#else
+				luafilepath = path;
+#endif
+				load_format_spec(ui, luafilepath);
+#ifdef UNICODE
+				rfree(&rgn, top);
+#endif
+			}
 			break;
 		}
 		return 0;
@@ -995,12 +1020,12 @@ update_window_title(UI *ui)
 {
 	if (ui->filepath) {
 		int pathlen = lstrlen(ui->filepath);
-		void *top = ui->rgn->cur;
-		TCHAR *title = ralloc(ui->rgn, (7+pathlen+1) * sizeof *title);
+		void *top = rgn.cur;
+		TCHAR *title = ralloc(&rgn, (7+pathlen+1) * sizeof *title);
 		memcpy(title, TEXT("WHEX - "), 7*sizeof(TCHAR));
 		memcpy(title+7, ui->filepath, pathlen+1);
 		SetWindowText(ui->hwnd, title);
-		rfree(ui->rgn, top);
+		rfree(&rgn, top);
 	} else {
 		SetWindowText(ui->hwnd, TEXT("WHEX"));
 	}
@@ -1073,9 +1098,9 @@ init_lua(UI *ui)
 	// store ui at REGISTRY[0]
 	lua_pushinteger(L, 0);
 	lua_pushlightuserdata(L, ui);
-	lua_settable(L, LUA_REGISTRYINDEX);
+	lua_settable(L, LUA_REGISTRYINDEX); // pops both key and value
 	// register C functions
-	//register_lua_globals(L);
+	register_lua_globals(L);
 	ui->lua = L;
 }
 
@@ -1136,6 +1161,11 @@ update_monoedit_tags(UI *ui)
 void
 update_ui(UI *ui)
 {
+	static const int toggle_menus[] = {
+		IDM_FILE_CLOSE,
+		IDM_TOOLS_PARSE,
+	};
+
 	HMENU menu = GetMenu(ui->hwnd);
 	MENUITEMINFO mii = { sizeof mii };
 	mii.fMask = MIIM_STATE;
@@ -1147,11 +1177,12 @@ update_ui(UI *ui)
 		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 		mii.fState = MFS_ENABLED;
-		SetMenuItemInfo(menu, IDM_FILE_CLOSE, FALSE, &mii);
 	} else {
 		ShowWindow(ui->monoedit, SW_HIDE);
 		mii.fState = MFS_GRAYED;
-		SetMenuItemInfo(menu, IDM_FILE_CLOSE, FALSE, &mii);
+	}
+	for (int i=0; i<NELEM(toggle_menus); i++) {
+		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 	}
 	InvalidateRect(ui->monoedit, 0, FALSE);
 	update_field_info(ui);
@@ -1307,4 +1338,48 @@ void
 errorbox(HWND hwnd, TCHAR *msg)
 {
 	MessageBox(hwnd, msg, TEXT("Error"), MB_OK | MB_ICONERROR);
+}
+
+void
+luaerrorbox(HWND hwnd, lua_State *L)
+{
+	MessageBoxA(hwnd, lua_tostring(L, -1), "Error", MB_OK | MB_ICONERROR);
+}
+
+void
+msgbox(HWND hwnd, const char *fmt, ...)
+{
+	char msg[BUFSIZE];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsprintf(msg, fmt, ap);
+	va_end(ap);
+	MessageBoxA(hwnd, msg, "WHEX", MB_OK);
+}
+
+void
+load_format_spec(UI *ui, const char *path)
+{
+	lua_State *L = ui->lua;
+
+	if (luaL_dofile(L, path)) {
+		luaerrorbox(ui->hwnd, L);
+		return;
+	}
+
+	lua_pushinteger(L, 1);
+	lua_gettable(L, LUA_REGISTRYINDEX);
+	if (lua_pcall(L, 1, 1, 0)) {
+		luaerrorbox(ui->hwnd, L);
+		return;
+	}
+
+	Whex *w = ui->whex;
+	Tree *tree = convert_tree(&w->tree_rgn, L);
+	lua_pop(L, 1);
+	if (w->tree) {
+		rfreeall(&w->tree_rgn);
+	}
+	w->tree = tree;
 }

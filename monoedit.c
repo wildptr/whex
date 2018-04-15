@@ -90,7 +90,7 @@ med_paint(Med *w, HWND hwnd)
 	} else {
 		HBRUSH brush;
 		RECT r;
-		brush = (HBRUSH) GetClassLongPtr(hwnd, GCL_HBRBACKGROUND);
+		brush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 		GetClientRect(hwnd, &r);
 		FillRect(hdc, &r, brush);
 	}

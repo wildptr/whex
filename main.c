@@ -1244,7 +1244,7 @@ inputbox_dlgproc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam)
 
 	switch (msg) {
 	case WM_INITDIALOG:
-		SetWindowLongPtr(dlg, GWL_USERDATA, lparam);
+		SetWindowLongPtr(dlg, GWLP_USERDATA, lparam);
 		conf = (InputBoxConfig *) lparam;
 		SetWindowText(dlg, conf->title);
 		return TRUE;
@@ -1256,7 +1256,7 @@ inputbox_dlgproc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam)
 			text = malloc(len * sizeof *text);
 			GetWindowText(edit, text, len);
 			conf = (InputBoxConfig *)
-				GetWindowLongPtr(dlg, GWL_USERDATA);
+				GetWindowLongPtr(dlg, GWLP_USERDATA);
 			conf->text = text;
 			EndDialog(dlg, 1);
 			return TRUE;

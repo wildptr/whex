@@ -18,6 +18,7 @@
 #include "tree.h"
 #include "unicode.h"
 #include "resource.h"
+#include "printf.h"
 
 #include <commctrl.h>
 
@@ -392,7 +393,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 		} else {
 			int block = whex_find_cache(w, addr);
 			int base = addr & (CACHE_BLOCK_SIZE-1);
-			wsprintf(p, TEXT("%08I64x:"), addr);
+			_wsprintf(p, TEXT("%08llx:"), addr);
 			p += 9;
 			int end = 0;
 			if (abs_line+1 >= ui->total_lines) {
@@ -403,14 +404,14 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			}
 			for (int j=0; j<end; j++) {
 				//*p++ = j && !(j&7) ? '-' : ' ';
-				wsprintf(p, TEXT(" %02x"), w->cache[block].data[base|j]);
+				_wsprintf(p, TEXT(" %02x"), w->cache[block].data[base|j]);
 				p += 3;
 			}
 			for (int j=end; j<N_COL; j++) {
-				wsprintf(p, TEXT("   "));
+				_wsprintf(p, TEXT("   "));
 				p += 3;
 			}
-			wsprintf(p, TEXT("  "));
+			_wsprintf(p, TEXT("  "));
 			p += 2;
 			for (int j=0; j<end; j++) {
 				uint8_t b = w->cache[block].data[base|j];
@@ -461,13 +462,13 @@ update_status_text(UI *ui, struct tree *leaf)
 			case 1:
 				type_name = TEXT("uint8");
 				ival = whex_getbyte(w, leaf->start);
-				wsprintf(value_buf, TEXT("%u (%02x)"), ival, ival);
+				_wsprintf(value_buf, TEXT("%u (%02x)"), ival, ival);
 				break;
 			case 2:
 				type_name = TEXT("uint16");
 				ival = whex_getbyte(w, leaf->start) |
 					whex_getbyte(w, leaf->start + 1) << 8;
-				wsprintf(value_buf, TEXT("%u (%04x)"), ival, ival);
+				_wsprintf(value_buf, TEXT("%u (%04x)"), ival, ival);
 				break;
 			case 4:
 				type_name = TEXT("uint32");
@@ -475,7 +476,7 @@ update_status_text(UI *ui, struct tree *leaf)
 					| whex_getbyte(w, leaf->start + 1) << 8
 					| whex_getbyte(w, leaf->start + 2) << 16
 					| whex_getbyte(w, leaf->start + 3) << 24;
-				wsprintf(value_buf, TEXT("%u (%08x)"), ival, ival);
+				_wsprintf(value_buf, TEXT("%u (%08x)"), ival, ival);
 				break;
 			case 8:
 				type_name = TEXT("uint64");
@@ -488,7 +489,7 @@ update_status_text(UI *ui, struct tree *leaf)
 					| whex_getbyte(w, leaf->start + 6) << 16
 					| whex_getbyte(w, leaf->start + 7) << 24;
 				llval = ((long long) ival_hi) << 32 | ival;
-				wsprintf(value_buf, TEXT("%I64u (%016I64x)"), llval, llval);
+				_wsprintf(value_buf, TEXT("%llu (%016llx)"), llval, llval);
 				break;
 			default:
 				type_name = TEXT("uint");
@@ -509,13 +510,13 @@ update_status_text(UI *ui, struct tree *leaf)
 				if (b >= 0x20 && b < 0x7f) {
 					*p++ = b;
 				} else {
-					wsprintf(p, TEXT("\\x%02x"), b);
+					_wsprintf(p, TEXT("\\x%02x"), b);
 					p += 4;
 				}
 			}
 			*p++ = '"';
 			if (n < leaf->len) {
-				wsprintf(p, TEXT("..."));
+				_wsprintf(p, TEXT("..."));
 			}
 			break;
 		}
@@ -527,7 +528,7 @@ update_status_text(UI *ui, struct tree *leaf)
 #endif
 	}
 	TCHAR cursor_pos_buf[17];
-	wsprintf(cursor_pos_buf, TEXT("%I64x"), cursor_pos(ui));
+	_wsprintf(cursor_pos_buf, TEXT("%llx"), cursor_pos(ui));
 	SendMessage(ui->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
 	SendMessage(ui->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
 	SendMessage(ui->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
@@ -1050,7 +1051,7 @@ open_file(UI *ui, TCHAR *path)
 			  0);
 	if (file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, BUFSIZE, GetLastError());
-		fprintf(stderr, errfmt_open, path, errtext);
+		errorbox(ui->hwnd, errtext);
 		return -1;
 	}
 	if (whex_init(ui->whex, file) < 0) {

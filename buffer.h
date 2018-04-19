@@ -16,9 +16,9 @@ typedef struct {
 	uint8_t *cache_data;
 	struct tree *tree;
 	Region tree_rgn;
-} Whex;
+} Buffer;
 
-int whex_init(Whex *, HANDLE);
-void whex_finalize(Whex *);
-int whex_find_cache(Whex *, long long);
-uint8_t whex_getbyte(Whex *, long long);
+int buf_init(Buffer *, HANDLE);
+void buf_finalize(Buffer *);
+int buf_find_cache(Buffer *, long long);
+uint8_t buf_getbyte(Buffer *, long long);

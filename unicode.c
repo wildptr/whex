@@ -170,7 +170,18 @@ char *utf8_to_mbcs(const char *utf8)
 }
 #endif
 
-char *utf16_to_mbcs(Region *r, const wchar_t *utf16)
+char *
+utf16_to_mbcs(const wchar_t *utf16)
+{
+	int utf16_len = lstrlenW(utf16);
+	char *mbcs = malloc(utf16_len*2+1);
+	WideCharToMultiByte(CP_ACP, 0, utf16, utf16_len,
+			    mbcs, utf16_len*2, 0, 0);
+	return mbcs;
+}
+
+char *
+utf16_to_mbcs_r(Region *r, const wchar_t *utf16)
 {
 	int utf16_len = lstrlenW(utf16);
 	char *mbcs = ralloc(r, utf16_len*2+1);
@@ -179,7 +190,17 @@ char *utf16_to_mbcs(Region *r, const wchar_t *utf16)
 	return mbcs;
 }
 
-wchar_t *mbcs_to_utf16(Region *r, const char *mbcs)
+wchar_t *
+mbcs_to_utf16(const char *mbcs)
+{
+	int mbcs_len = strlen(mbcs);
+	wchar_t *utf16 = malloc((mbcs_len+1)*2);
+	MultiByteToWideChar(CP_ACP, 0, mbcs, mbcs_len, utf16, mbcs_len);
+	return utf16;
+}
+
+wchar_t *
+mbcs_to_utf16_r(Region *r, const char *mbcs)
 {
 	int mbcs_len = strlen(mbcs);
 	wchar_t *utf16 = ralloc(r, (mbcs_len+1)*2);

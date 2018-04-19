@@ -122,9 +122,9 @@ return function(file)
     local pehdr = pe_header 'pe_header'
     local num_sections = pehdr.num_sections
     local section_headers = array(section_header, num_sections) 'section_headers'
-    map(function(h)
+    foreach(section_headers, function(h)
       return section(h.raw_data_offset - dot(), h.raw_data_size)
-    end, section_headers) 'sections'
+    end) 'sections'
   end)
 
   return pe 'pe'

@@ -7,35 +7,35 @@
 #include <windows.h>
 
 #include "util.h"
-#include "whex.h"
+#include "buffer.h"
 
 #if 0
 bool
-whex_cache_valid(Whex *w, int block)
+buf_cache_valid(Buffer *b, int block)
 {
-	return w->cache[block].tag & 1;
+	return b->cache[block].tag & 1;
 };
 #endif
 
 int
-whex_find_cache(Whex *w, long long addr)
+buf_find_cache(Buffer *b, long long addr)
 {
-	assert(addr >= 0 && addr < w->file_size);
+	assert(addr >= 0 && addr < b->file_size);
 
 	static int next_cache = 0;
 
 	for (int i=0; i<N_CACHE_BLOCK; i++) {
-		long long tag = w->cache[i].tag;
+		long long tag = b->cache[i].tag;
 		if ((tag & 1) && addr >> 12 == tag >> 12) return i;
 	}
 
 	long long base = addr & -CACHE_BLOCK_SIZE;
 	long long tag = base|1;
-	SetFilePointer(w->file, base, 0, FILE_BEGIN);
+	SetFilePointer(b->file, base, 0, FILE_BEGIN);
 	DWORD nread;
 	int ret = next_cache;
-	ReadFile(w->file, w->cache[ret].data, CACHE_BLOCK_SIZE, &nread, 0);
-	w->cache[ret].tag = tag;
+	ReadFile(b->file, b->cache[ret].data, CACHE_BLOCK_SIZE, &nread, 0);
+	b->cache[ret].tag = tag;
 	next_cache = (ret+1)&(N_CACHE_BLOCK-1);
 
 	DEBUG_PRINTF("loaded %I64x into cache block %d\n", base, ret);
@@ -44,10 +44,10 @@ whex_find_cache(Whex *w, long long addr)
 }
 
 uint8_t
-whex_getbyte(Whex *w, long long addr)
+buf_getbyte(Buffer *b, long long addr)
 {
-	int block = whex_find_cache(w, addr);
-	return w->cache[block].data[addr & (CACHE_BLOCK_SIZE-1)];
+	int block = buf_find_cache(b, addr);
+	return b->cache[block].data[addr & (CACHE_BLOCK_SIZE-1)];
 }
 
 static void
@@ -76,15 +76,15 @@ kmp_table(int *T, const uint8_t *pat, int len)
 }
 
 long long
-whex_kmp_search(Whex *w, const uint8_t *pat, int len, long long start)
+buf_kmp_search(Buffer *b, const uint8_t *pat, int len, long long start)
 {
 	assert(len);
 	int T[len];
 	kmp_table(T, pat, len);
 	long long m = start; // start of potential match
 	int i = 0;
-	while (m+i < w->file_size) {
-		if (pat[i] == whex_getbyte(w, m+i)) {
+	while (m+i < b->file_size) {
+		if (pat[i] == buf_getbyte(b, m+i)) {
 			if (i == len-1) return m; // match found
 			i++;
 		} else {
@@ -98,7 +98,7 @@ whex_kmp_search(Whex *w, const uint8_t *pat, int len, long long start)
 		}
 	}
 	/* no match */
-	return w->file_size;
+	return b->file_size;
 }
 
 /*
@@ -107,7 +107,7 @@ whex_kmp_search(Whex *w, const uint8_t *pat, int len, long long start)
  * number of bytes after the second mark = N-(start+len-1)
  */
 long long
-whex_kmp_search_backward(Whex *w, const uint8_t *pat, int len, long long start)
+buf_kmp_search_backward(Buffer *b, const uint8_t *pat, int len, long long start)
 {
 	assert(len);
 	int T[len];
@@ -119,9 +119,9 @@ whex_kmp_search_backward(Whex *w, const uint8_t *pat, int len, long long start)
 	kmp_table(T, pat, len);
 	long long m = start;
 	int i = 0;
-	while (m+i < w->file_size) {
-		if (pat[i] == whex_getbyte(w, w->file_size-1-(m+i))) {
-			if (i == len-1) return w->file_size-(m+len);
+	while (m+i < b->file_size) {
+		if (pat[i] == buf_getbyte(b, b->file_size-1-(m+i))) {
+			if (i == len-1) return b->file_size-(m+len);
 			i++;
 		} else {
 			if (i) {
@@ -133,11 +133,11 @@ whex_kmp_search_backward(Whex *w, const uint8_t *pat, int len, long long start)
 		}
 	}
 	/* no match */
-	return w->file_size;
+	return b->file_size;
 }
 
 int
-whex_init(Whex *w, HANDLE file)
+buf_init(Buffer *b, HANDLE file)
 {
 	uint8_t *cache_data;
 	struct cache_entry *cache;
@@ -158,7 +158,7 @@ whex_init(Whex *w, HANDLE file)
 		return -1;
 	}
 
-	cache = malloc(N_CACHE_BLOCK * sizeof *w->cache);
+	cache = malloc(N_CACHE_BLOCK * sizeof *b->cache);
 	if (!cache) {
 		free(cache_data);
 		return -1;
@@ -169,26 +169,26 @@ whex_init(Whex *w, HANDLE file)
 		cache[i].data = cache_data + (i << LOG2_CACHE_BLOCK_SIZE);
 	}
 
-	w->file = file;
-	w->file_size = size;
-	w->cache = cache;
-	w->cache_data = cache_data;
-	w->tree = 0;
-	memset(&w->tree_rgn, 0, sizeof w->tree_rgn);
+	b->file = file;
+	b->file_size = size;
+	b->cache = cache;
+	b->cache_data = cache_data;
+	b->tree = 0;
+	memset(&b->tree_rgn, 0, sizeof b->tree_rgn);
 
 	return 0;
 }
 
 void
-whex_finalize(Whex *w)
+buf_finalize(Buffer *b)
 {
-	CloseHandle(w->file);
-	w->file = INVALID_HANDLE_VALUE;
-	w->file_size = 0;
-	free(w->cache);
-	w->cache = 0;
-	free(w->cache_data);
-	w->cache_data = 0;
-	rfreeall(&w->tree_rgn);
-	w->tree = 0;
+	CloseHandle(b->file);
+	b->file = INVALID_HANDLE_VALUE;
+	b->file_size = 0;
+	free(b->cache);
+	b->cache = 0;
+	free(b->cache_data);
+	b->cache_data = 0;
+	rfreeall(&b->tree_rgn);
+	b->tree = 0;
 }

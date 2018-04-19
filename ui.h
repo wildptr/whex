@@ -1,5 +1,5 @@
 typedef struct {
-	Whex *whex;
+	Buffer *buffer;
 	HWND hwnd;
 	HWND monoedit;
 	TCHAR *med_buffer;
@@ -22,4 +22,5 @@ typedef struct {
 	long long hl_len;
 	HWND status_bar;
 	HINSTANCE instance;
+	int npluginfunc;
 } UI;

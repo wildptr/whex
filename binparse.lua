@@ -46,13 +46,13 @@ function Node:print()
   return print_r(self, 0)
 end
 
-function P.new(whex)
+function P.new(file)
 
   local pos = 0
   local current_node
 
   local function u8(name)
-    value = whex.peek(pos)
+    value = file:peek(pos)
     local t = Node:new(name, pos, 1, value)
     current_node:append_node(t)
     pos = pos+1
@@ -60,8 +60,8 @@ function P.new(whex)
   end
 
   local function u16(name)
-    value = whex.peek(pos)
-          | whex.peek(pos+1) << 8
+    value = file:peek(pos)
+          | file:peek(pos+1) << 8
     local t = Node:new(name, pos, 2, value)
     current_node:append_node(t)
     pos = pos+2
@@ -69,10 +69,10 @@ function P.new(whex)
   end
 
   local function u32(name)
-    value = whex.peek(pos)
-          | whex.peek(pos+1) << 8
-          | whex.peek(pos+2) << 16
-          | whex.peek(pos+3) << 24
+    value = file:peek(pos)
+          | file:peek(pos+1) << 8
+          | file:peek(pos+2) << 16
+          | file:peek(pos+3) << 24
     local t = Node:new(name, pos, 4, value)
     current_node:append_node(t)
     pos = pos+4
@@ -111,7 +111,7 @@ function P.new(whex)
 
   local function ascii(n)
     return function(name)
-      local bytes = whex.peekstr(pos, n)
+      local bytes = file:peekstr(pos, n)
       local t = Node:new(name, pos, n, bytes)
       current_node:append_node(t)
       pos = pos+n

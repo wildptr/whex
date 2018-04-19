@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,7 @@ tree_lookup(Tree *tree, long long addr)
 		// leaf node reached
 		return tree;
 	}
+	assert(tree->children);
 	for (int i=0; i<tree->n_child; i++) {
 		Tree *result = tree_lookup(tree->children[i], addr);
 		if (result) return result;

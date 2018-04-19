@@ -117,3 +117,14 @@ convert_tree(Region *r, lua_State *L)
 
 	return tree;
 }
+
+int
+api_buffer_tree(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	if (!b->tree) {
+		return 0;
+	}
+	lua_getuservalue(L, 1);
+	return 1;
+}

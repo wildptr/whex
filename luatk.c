@@ -12,6 +12,7 @@
 enum {
 	WINDOW,
 	BUTTON,
+	LABEL,
 };
 
 enum {
@@ -38,6 +39,11 @@ static ATOM register_wndclass(void);
 LRESULT CALLBACK luatk_wndproc(HWND, UINT, WPARAM, LPARAM);
 void getluafield(lua_State *L, Window *w, int field);
 void setluafield(lua_State *L, Window *w, int field, int value_index);
+int api_window_move(lua_State *L);
+int api_window_resize(lua_State *L);
+int api_window_configure(lua_State *L);
+int api_window_add_child(lua_State *L);
+int api_label_new(lua_State *);
 
 /* TODO: add type checks */
 
@@ -111,45 +117,29 @@ api_window_new(lua_State *L)
 	return 1;
 }
 
-static void
-format_error_code(TCHAR *buf, size_t buflen, DWORD err)
-{
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
-		      0,
-		      err,
-		      0,
-		      buf,
-		      buflen,
-		      0);
-}
-
 int
 api_button_new(lua_State *L)
 {
 	const TCHAR *caption = luaL_checkstring(L, 1);
+	Window *parent = lua_touserdata(L, 2);
 
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Button");
 	w->kind = BUTTON;
 	HWND hwnd = CreateWindow(TEXT("BUTTON"),
 				 caption,
-				 0,
+				 WS_CHILD | WS_VISIBLE,
 				 CW_USEDEFAULT,
 				 CW_USEDEFAULT,
 				 CW_USEDEFAULT,
 				 CW_USEDEFAULT,
-				 0,
+				 parent->hwnd,
 				 0,
 				 GetModuleHandle(0),
 				 w);
+	assert(hwnd);
 	w->hwnd = hwnd;
 	register_window(L, w);
-	if (!hwnd) {
-		char errmsg[512];
-		format_error_code(errmsg, sizeof errmsg, GetLastError());
-		MessageBoxA(0, errmsg, "luatk", MB_OK|MB_ICONERROR);
-		ExitProcess(1);
-	}
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
 	return 1;
 }
@@ -192,12 +182,6 @@ api_Window__index(lua_State *L)
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
 	switch (len) {
-	case 3:
-		if (!strcmp(field, "new")) {
-			lua_pushcfunction(L, api_window_new);
-			return 1;
-		}
-		break;
 	case 4:
 		if (!strcmp(field, "show")) {
 			lua_pushcfunction(L, api_window_show);
@@ -208,12 +192,30 @@ api_Window__index(lua_State *L)
 		} else if (!strcmp(field, "text")) {
 			Window *w = lua_touserdata(L, 1);
 			return window_get_text(L, w);
+		} else if (!strcmp(field, "move")) {
+			lua_pushcfunction(L, api_window_move);
+			return 1;
+		}
+		break;
+	case 6:
+		if (!strcmp(field, "resize")) {
+			lua_pushcfunction(L, api_window_resize);
+			return 1;
 		}
 		break;
 	case 8:
 		if (!strcmp(field, "on_close")) {
 			Window *w = lua_touserdata(L, 1);
 			getluafield(L, w, F_WINDOW_ON_CLOSE);
+			return 1;
+		}
+		break;
+	case 9:
+		if (!strcmp(field, "configure")) {
+			lua_pushcfunction(L, api_window_configure);
+			return 1;
+		} else if (!strcmp(field, "add_child")) {
+			lua_pushcfunction(L, api_window_add_child);
 			return 1;
 		}
 		break;
@@ -252,12 +254,6 @@ api_Button__index(lua_State *L)
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
 	switch (len) {
-	case 3:
-		if (!strcmp(field, "new")) {
-			lua_pushcfunction(L, api_button_new);
-			return 1;
-		}
-		break;
 	case 8:
 		if (!strcmp(field, "on_click")) {
 			Window *w = lua_touserdata(L, 1);
@@ -304,8 +300,7 @@ init_luatk(lua_State *L)
 	lua_pushcfunction(L, api_Window__newindex);
 	lua_rawset(L, -3);
 
-	luaL_setmetatable(L, "Window");
-	lua_setglobal(L, "Window");
+	lua_register(L, "Window", api_window_new);
 
 	/* Button */
 	luaL_newmetatable(L, "Button");
@@ -317,8 +312,10 @@ init_luatk(lua_State *L)
 	lua_pushcfunction(L, api_Button__newindex);
 	lua_rawset(L, -3);
 
-	luaL_setmetatable(L, "Button");
-	lua_setglobal(L, "Button");
+	lua_register(L, "Button", api_button_new);
+
+	/* Label */
+	lua_register(L, "Label", api_label_new);
 
 	/* Globals */
 	/* none yet */
@@ -441,4 +438,69 @@ setluafield(lua_State *L, Window *w, int field, int value_index)
 	lua_pushvalue(L, value_index);
 	lua_rawseti(L, -2, field);
 	lua_pop(L, 2);
+}
+
+int
+api_window_move(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	int x = luaL_checkinteger(L, 2);
+	int y = luaL_checkinteger(L, 3);
+	SetWindowPos(w->hwnd, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+	return 0;
+}
+
+int
+api_window_resize(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	int wid = luaL_checkinteger(L, 2);
+	int hei = luaL_checkinteger(L, 3);
+	SetWindowPos(w->hwnd, 0, 0, 0, wid, hei, SWP_NOMOVE | SWP_NOZORDER);
+	return 0;
+}
+
+int
+api_window_configure(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	int x = luaL_checkinteger(L, 2);
+	int y = luaL_checkinteger(L, 3);
+	int wid = luaL_checkinteger(L, 4);
+	int hei = luaL_checkinteger(L, 5);
+	SetWindowPos(w->hwnd, 0, x, y, wid, hei, SWP_NOZORDER);
+	return 0;
+}
+
+int
+api_window_add_child(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	Window *child = lua_touserdata(L, 2);
+	SetParent(child->hwnd, w->hwnd);
+	return 0;
+}
+
+int
+api_label_new(lua_State *L)
+{
+	const TCHAR *caption = luaL_checkstring(L, 1);
+	Window *parent = lua_touserdata(L, 2);
+
+	Window *w = lua_newuserdata(L, sizeof *w);
+	luaL_setmetatable(L, "Window");
+	w->kind = LABEL;
+	HWND hwnd = CreateWindow(TEXT("STATIC"),
+				 caption,
+				 WS_CHILD | WS_VISIBLE,
+				 0, 0, 0, 0,
+				 parent->hwnd,
+				 0,
+				 GetModuleHandle(0),
+				 w);
+	assert(hwnd);
+	w->hwnd = hwnd;
+	register_window(L, w);
+	//SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+	return 1;
 }

@@ -35,7 +35,6 @@ enum {
 	IDC_STATUS_BAR = 0x100,
 	IDM_FILE_OPEN,
 	IDM_FILE_CLOSE,
-	IDM_TOOLS_PARSE,
 	IDM_TOOLS_LOAD_PLUGIN,
 	IDM_PLUGIN_0,
 };
@@ -111,10 +110,10 @@ bool parse_addr(TCHAR *, long long *);
 void errorbox(HWND, TCHAR *);
 void msgbox(HWND, const char *, ...);
 Tree *convert_tree(Region *, lua_State *);
-void load_format_spec(UI *, const char *);
 void load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
 int api_buffer_peekstr(lua_State *L);
+int api_buffer_tree(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
 int init_luatk(lua_State *L);
@@ -258,7 +257,6 @@ create_menu(void)
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
 
 	m = CreateMenu();
-	AppendMenu(m, MF_STRING, IDM_TOOLS_PARSE, TEXT("Parse..."));
 	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load plugin..."));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
@@ -390,6 +388,9 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_rawset(L, -3);
 	lua_pushstring(L, "peekstr");
 	lua_pushcfunction(L, api_buffer_peekstr);
+	lua_rawset(L, -3);
+	lua_pushstring(L, "tree");
+	lua_pushcfunction(L, api_buffer_tree);
 	lua_rawset(L, -3);
 	lua_pop(L, 1);
 
@@ -1047,21 +1048,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			close_file(ui);
 			update_ui(ui);
 			break;
-		case IDM_TOOLS_PARSE:
-			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
-				char *luafilepath;
-#ifdef UNICODE
-				void *top = rgn.cur;
-				luafilepath = utf16_to_mbcs(&rgn, path);
-#else
-				luafilepath = path;
-#endif
-				load_format_spec(ui, luafilepath);
-#ifdef UNICODE
-				rfree(&rgn, top);
-#endif
-			}
-			break;
 		case IDM_TOOLS_LOAD_PLUGIN:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
 				char *luafilepath;
@@ -1224,7 +1210,6 @@ update_ui(UI *ui)
 {
 	static const int toggle_menus[] = {
 		IDM_FILE_CLOSE,
-		IDM_TOOLS_PARSE,
 		IDM_TOOLS_LOAD_PLUGIN,
 	};
 
@@ -1431,31 +1416,6 @@ getluaobj(lua_State *L, const char *name)
 }
 
 void
-load_format_spec(UI *ui, const char *path)
-{
-	lua_State *L = ui->lua;
-
-	if (luaL_dofile(L, path)) {
-		luaerrorbox(ui->hwnd, L);
-		return;
-	}
-
-	getluaobj(L, "buffer");
-	if (lua_pcall(L, 1, 1, 0)) {
-		luaerrorbox(ui->hwnd, L);
-		return;
-	}
-
-	Buffer *b = ui->buffer;
-	Tree *tree = convert_tree(&b->tree_rgn, L);
-	lua_pop(L, 1);
-	if (b->tree) {
-		rfreeall(&b->tree_rgn);
-	}
-	b->tree = tree;
-}
-
-void
 load_plugin(UI *ui, const char *path)
 {
 	lua_State *L = ui->lua;
@@ -1468,6 +1428,7 @@ load_plugin(UI *ui, const char *path)
 	/* plugin information is stored as lua table at top of stack */
 	luaL_checktype(L, -1, LUA_TTABLE);
 
+	//getluaobj(L, "buffer");
 	lua_pushstring(L, "parser");
 	lua_rawget(L, -2);
 	luaL_checktype(L, -1, LUA_TFUNCTION);
@@ -1479,6 +1440,9 @@ load_plugin(UI *ui, const char *path)
 
 	Buffer *b = ui->buffer;
 	Tree *tree = convert_tree(&b->tree_rgn, L);
+	getluaobj(L, "buffer");
+	lua_insert(L, -2);
+	lua_setuservalue(L, -2);
 	lua_pop(L, 1);
 	if (b->tree) {
 		rfreeall(&b->tree_rgn);

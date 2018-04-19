@@ -119,7 +119,7 @@ function P.new(whex)
     end
   end
 
-  local function map(proc, list)
+  local function foreach(list, proc)
     return function(name)
       local t = Node:new(name, pos)
       local saved_current_node = current_node
@@ -161,15 +161,15 @@ function P.new(whex)
   end
 
   local table =  {
-    u8     = u8,
-    u16    = u16,
-    u32    = u32,
-    u64    = u64,
-    array  = array,
-    ascii  = ascii,
-    data   = data,
-    map    = map,
-    record = record,
+    u8      = u8,
+    u16     = u16,
+    u32     = u32,
+    u64     = u64,
+    array   = array,
+    ascii   = ascii,
+    data    = data,
+    foreach = foreach,
+    record  = record,
   }
 
   setmetatable(table, {__call = function(self)

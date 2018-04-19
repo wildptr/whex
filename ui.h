@@ -23,4 +23,6 @@ typedef struct {
 	HWND status_bar;
 	HINSTANCE instance;
 	int npluginfunc;
+	TCHAR *plugin_name;
+	TCHAR **plugin_funcname;
 } UI;

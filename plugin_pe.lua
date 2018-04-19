@@ -4,6 +4,7 @@ local function info(file)
 end
 
 return {
+  name = 'PE',
   parser = require 'pe',
   functions = {
     {info, 'PE Info...'},

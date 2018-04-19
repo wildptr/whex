@@ -36,7 +36,7 @@ enum {
 	IDM_FILE_OPEN,
 	IDM_FILE_CLOSE,
 	IDM_TOOLS_PARSE,
-	IDM_PLUGIN_LOAD,
+	IDM_TOOLS_LOAD_PLUGIN,
 	IDM_PLUGIN_0,
 };
 
@@ -118,6 +118,7 @@ int api_buffer_peekstr(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
 int init_luatk(lua_State *L);
+void update_plugin_menu(UI *ui);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -258,12 +259,10 @@ create_menu(void)
 
 	m = CreateMenu();
 	AppendMenu(m, MF_STRING, IDM_TOOLS_PARSE, TEXT("Parse..."));
+	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load plugin..."));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
-	m = CreateMenu();
-	AppendMenu(m, MF_STRING, IDM_PLUGIN_LOAD, TEXT("Load..."));
-	//AppendMenu(m, MF_SEPARATOR, -1, 0);
-	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Plugin"));
+	AppendMenu(mainmenu, MF_SEPARATOR, 0, 0);
 
 	return mainmenu;
 }
@@ -560,7 +559,7 @@ update_status_text(UI *ui, struct tree *leaf)
 		}
 		path = tree_path(&rgn, leaf);
 #ifdef UNICODE
-		tpath = mbcs_to_utf16(&rgn, path);
+		tpath = mbcs_to_utf16_r(&rgn, path);
 #else
 		tpath = path;
 #endif
@@ -650,7 +649,7 @@ error_prompt(UI *ui, const char *errmsg)
 	const TCHAR *terrmsg;
 #ifdef UNICODE
 	void *top = rgn.cur;
-	terrmsg = mbcs_to_utf16(&rgn, errmsg);
+	terrmsg = mbcs_to_utf16_r(&rgn, errmsg);
 #else
 	terrmsg = errmsg;
 #endif
@@ -1031,6 +1030,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				if (lua_pcall(L, 1, 0, 0)) {
 					luaerrorbox(hwnd, L);
 				}
+				lua_pop(L, 1);
 				return 0;
 			}
 		}
@@ -1062,7 +1062,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 #endif
 			}
 			break;
-		case IDM_PLUGIN_LOAD:
+		case IDM_TOOLS_LOAD_PLUGIN:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
 				char *luafilepath;
 #ifdef UNICODE
@@ -1150,6 +1150,17 @@ close_file(UI *ui)
 	ui->cursor_x = 0;
 	ui->hl_start = 0;
 	ui->hl_len = 0;
+	ui->npluginfunc = 0;
+	if (ui->plugin_name) {
+		free(ui->plugin_name);
+		ui->plugin_name = 0;
+		ui->npluginfunc = 0;
+		for (int i=0; i<ui->npluginfunc; i++) {
+			free(ui->plugin_funcname[i]);
+		}
+		free(ui->plugin_funcname);
+		ui->plugin_funcname = 0;
+	}
 
 	SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0, 0);
 }
@@ -1214,7 +1225,7 @@ update_ui(UI *ui)
 	static const int toggle_menus[] = {
 		IDM_FILE_CLOSE,
 		IDM_TOOLS_PARSE,
-		IDM_PLUGIN_LOAD,
+		IDM_TOOLS_LOAD_PLUGIN,
 	};
 
 	HMENU menu = GetMenu(ui->hwnd);
@@ -1237,6 +1248,7 @@ update_ui(UI *ui)
 	}
 	InvalidateRect(ui->monoedit, 0, FALSE);
 	update_field_info(ui);
+	update_plugin_menu(ui);
 }
 
 void
@@ -1455,33 +1467,82 @@ load_plugin(UI *ui, const char *path)
 
 	/* plugin information is stored as lua table at top of stack */
 	luaL_checktype(L, -1, LUA_TTABLE);
+
+	lua_pushstring(L, "parser");
+	lua_rawget(L, -2);
+	luaL_checktype(L, -1, LUA_TFUNCTION);
+	getluaobj(L, "buffer");
+	if (lua_pcall(L, 1, 1, 0)) {
+		luaerrorbox(ui->hwnd, L);
+		return;
+	}
+
+	Buffer *b = ui->buffer;
+	Tree *tree = convert_tree(&b->tree_rgn, L);
+	lua_pop(L, 1);
+	if (b->tree) {
+		rfreeall(&b->tree_rgn);
+	}
+	b->tree = tree;
+
+	lua_pushstring(L, "name");
+	lua_rawget(L, -2); /* plugin.name */
+	const char *plugin_name = luaL_checkstring(L, -1);
+	TCHAR *tplugin_name;
+#ifdef UNICODE
+	tplugin_name = mbcs_to_utf16(plugin_name);
+#else
+	tplugin_name = strdup(plugin_name);
+#endif
+	lua_pop(L, 1);
+	if (ui->plugin_name) {
+		free(ui->plugin_name);
+	}
+	ui->plugin_name = tplugin_name;
+
+	getluaobj(L, "plugin");
 	lua_pushstring(L, "functions");
-	lua_gettable(L, -2);
+	lua_gettable(L, -3);
 	luaL_checktype(L, -1, LUA_TTABLE);
 	int n = luaL_len(L, -1);
 	ui->npluginfunc = n;
-	HMENU mainmenu = GetMenu(ui->hwnd);
-	HMENU plugin_menu = GetSubMenu(mainmenu, 2);
+	ui->plugin_funcname = malloc(n * sizeof *ui->plugin_funcname);
 	for (int i=0; i<n; i++) {
 		lua_geti(L, -1, 1+i); /* push {func, funcname} */
-		getluaobj(L, "plugin"); /* push plugin table */
-		lua_geti(L, -2, 1); /* push func */
-		lua_seti(L, -2, 1+i);
-		lua_pop(L, 1); /* pop plugin table */
+		lua_geti(L, -1, 1); /* push func */
+		lua_seti(L, -4, 1+i);
 		lua_geti(L, -1, 2); /* push funcname */
 		const char *funcname = luaL_checkstring(L, -1);
-		const TCHAR *tfuncname;
+		TCHAR *tfuncname;
 #ifdef UNICODE
-		void *top = rgn.cur;
-		tfuncname = mbcs_to_utf16(&rgn, funcname);
+		tfuncname = mbcs_to_utf16(funcname);
 #else
-		tfuncname = funcname;
-#endif
-		AppendMenu(plugin_menu, MF_STRING, IDM_PLUGIN_0+i, tfuncname);
-#ifdef UNICODE
-		rfree(&rgn, top);
+		tfuncname = strdup(funcname);
 #endif
 		lua_pop(L, 2);
+		ui->plugin_funcname[i] = tfuncname;
 	}
-	lua_pop(L, 1); /* pop function table */
+	lua_pop(L, 3);
+
+	update_plugin_menu(ui);
+}
+
+void
+update_plugin_menu(UI *ui)
+{
+	HMENU mainmenu = GetMenu(ui->hwnd);
+
+	if (ui->plugin_name) {
+		HMENU plugin_menu = CreateMenu();
+		for (int i=0; i<ui->npluginfunc; i++) {
+			AppendMenu(plugin_menu, MF_STRING, IDM_PLUGIN_0+i,
+				   ui->plugin_funcname[i]);
+		}
+		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
+			   (UINT_PTR) plugin_menu, ui->plugin_name);
+	} else {
+		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_SEPARATOR, 0, 0);
+	}
+
+	DrawMenuBar(ui->hwnd);
 }

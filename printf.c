@@ -50,44 +50,44 @@ union u {
 	long long L;
 };
 
-#define PUTNUM10(NAME, FIELD)\
+#define PUTNUM10(NAME, FIELD, TYPE)\
 	static TCHAR *\
 	NAME(union u *value, TCHAR *buf, uint f)\
 	{\
-		typeof(value->FIELD) v = value->FIELD;\
+		TYPE v = value->FIELD;\
 		bool neg = (f & F_SIGNED) && v < 0;\
 		if (neg) v = -v;\
 		TCHAR *p = buf;\
 		do {\
 			int d = v % 10;\
 			*p++ = '0'+d;\
-			v /= 10;\
+			v = (unsigned TYPE) v / 10;\
 		} while (v);\
 		if (neg) *p++ = '-';\
 		return p;\
 	}
 
-#define PUTNUM16(NAME, FIELD)\
+#define PUTNUM16(NAME, FIELD, TYPE)\
 	static TCHAR *\
 	NAME(union u *value, TCHAR *buf, uint f)\
 	{\
-		typeof(value->FIELD) v = value->FIELD;\
+		TYPE v = value->FIELD;\
 		bool upcase = f & F_UPPERCASE;\
 		TCHAR *p = buf;\
 		do {\
 			int d = v&15;\
 			*p++ = d < 10 ? '0'+d : (upcase?'A':'a')+(d-10);\
-			v >>= 4;\
+			v = (unsigned TYPE) v >> 4;\
 		} while (v);\
 		return p;\
 	}
 
-PUTNUM10(puti10, i)
-PUTNUM10(putl10, l)
-PUTNUM10(putL10, L)
-PUTNUM16(puti16, i)
-PUTNUM16(putl16, l)
-PUTNUM16(putL16, L)
+PUTNUM10(puti10, i, int)
+PUTNUM10(putl10, l, long)
+PUTNUM10(putL10, L, long long)
+PUTNUM16(puti16, i, int)
+PUTNUM16(putl16, l, long)
+PUTNUM16(putL16, L, long long)
 
 typedef TCHAR *(*conv_fn)(union u *, TCHAR *, uint);
 

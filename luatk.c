@@ -78,6 +78,7 @@ int api_listbox__newindex(lua_State *L);
 int api_listbox_insert_item(lua_State *L);
 int api_listbox_clear(lua_State *L);
 int api_listview_clear(lua_State *L);
+void msgbox(HWND, const char *, ...);
 
 /* TODO: add type checks */
 
@@ -119,7 +120,8 @@ register_window(lua_State *L, Window *w)
 }
 
 void
-init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle, int cfgindex)
+init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle,
+	    int cfgindex)
 {
 	Config c = {0};
 	parse_config(L, cfgindex, &c);
@@ -133,8 +135,10 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle, int 
 		y = CW_USEDEFAULT;
 	}
 	if (c.has_size) {
-		wid = c.w;
-		hei = c.h;
+		RECT r = {0, 0, c.w, c.h};
+		AdjustWindowRect(&r, wndstyle, FALSE);
+		wid = r.right - r.left;
+		hei = r.bottom - r.top;
 	} else {
 		wid = CW_USEDEFAULT;
 		hei = CW_USEDEFAULT;
@@ -153,8 +157,10 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle, int 
 	if (c.text) free(c.text);
 	assert(hwnd);
 	if (wndclass != luatk_class) {
-		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
 		w->hwnd = hwnd;
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+		SendMessage(hwnd, WM_SETFONT,
+			    (WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);
 	}
 	register_window(L, w);
 }
@@ -621,9 +627,20 @@ api_listview_insert_column(lua_State *L)
 	lvc.mask = LVCF_TEXT;
 	lvc.pszText = colname;
 
+	if (!lua_isnil(L, 4)) {
+		lua_pushstring(L, "width");
+		lua_gettable(L, 4);
+		if (!lua_isnil(L, -1)) {
+			lvc.mask |= LVCF_WIDTH;
+			lvc.cx = luaL_checkinteger(L, -1);
+		}
+		lua_pop(L, -1);
+	}
+
 	int ret = SendMessage(w->hwnd, LVM_INSERTCOLUMN, col, (LPARAM) &lvc);
 	free(colname);
 	assert(ret == col);
+
 	return 0;
 }
 
@@ -788,7 +805,8 @@ api_listbox__newindex(lua_State *L)
 	return api_window__newindex(L);
 }
 
-int api_listbox_insert_item(lua_State *L)
+int
+api_listbox_insert_item(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
 	int row = luaL_checkinteger(L, 2);

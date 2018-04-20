@@ -136,19 +136,21 @@ local function show_ilt(buf, ilt, lv)
       ident = ent & 0xffff
     end
 
+    local item
     if type(ident) == 'string' then
-      lv:insert_item(i-1, {'', ident, hint})
+      item = {'', ident, hint}
     elseif type(ident) == 'number' then
-      lv:insert_item(i-1, {ident, '', ''})
+      item = {ident, '', ''}
     else
-      lv:insert_item(i-1, {'', '', ''})
+      item = {'', '', ''}
     end
+    lv:insert_item(i-1, item)
   end
 end
 
 local function import_table(buf)
   local pe = buf:tree()
-  local w = Window{text='Import table'}
+  local w = Window{text='Import table', size={256,256}}
   local s = find_section(pe, '.idata')
   if not s then
     msgbox('.idata section not found')
@@ -157,11 +159,11 @@ local function import_table(buf)
   idata_off = pe.section_headers[s].raw_data_offset
   local idt = parse_idt(buf, idata_off)
   local ilt = make_ilt(buf, idt)
-  local lb = ListBox{parent=w, pos={8,8}, size={256,128}}
-  local lv = ListView{parent=w, pos={8,144}, size={256,128}}
-  lv:insert_column(0, 'Ordinal')
-  lv:insert_column(1, 'Name')
-  lv:insert_column(2, 'Hint')
+  local lb = ListBox{parent=w, pos={0,0}, size={256,128}}
+  local lv = ListView{parent=w, pos={0,128}, size={256,128}}
+  lv:insert_column(0, 'Ord.', {width=32})
+  lv:insert_column(1, 'Name', {width=192})
+  lv:insert_column(2, 'Hint', {width=32})
   lb.on_select = function(lb, i)
     show_ilt(buf, ilt[1+i], lv)
   end

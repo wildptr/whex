@@ -144,7 +144,7 @@ med_wndproc(HWND hwnd,
 			return FALSE;
 		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
-		return TRUE;
+		break;
 	case WM_NCDESTROY:
 		if (w) {
 			/* This check is necessary, since we reach here even

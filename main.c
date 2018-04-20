@@ -980,7 +980,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		ui = ((LPCREATESTRUCT)lparam)->lpCreateParams;
 		ui->hwnd = hwnd;
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) ui);
-		return TRUE;
+		break;
 	case WM_NCDESTROY:
 		if (ui) {
 			free(ui);
@@ -994,15 +994,16 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return 0;
 	case WM_SIZE:
 		{
+			/* will crash if we continue */
+			if (wparam == SIZE_MINIMIZED) return 0;
+			int wid = LOWORD(lparam);
 			// adjust status bar geometry automatically
 			SendMessage(ui->status_bar, WM_SIZE, 0, 0);
 			RECT status_bar_rect;
 			GetWindowRect(ui->status_bar, &status_bar_rect);
 			// translate top-left from screen to client
 			ScreenToClient(hwnd, (LPPOINT) &status_bar_rect);
-			int width  = LOWORD(lparam);
-			//int height = HIWORD(lparam);
-			resize_monoedit(ui, width, status_bar_rect.top);
+			resize_monoedit(ui, wid, status_bar_rect.top);
 		}
 		return 0;
 	case WM_CHAR:

@@ -53,23 +53,7 @@ convert_tree(Region *r, lua_State *L)
 	Tree *tree = ralloc(r, sizeof *tree);
 	tree->parent = 0;
 
-	lua_getfield(L, -1, "_start");
-	if (!lua_isinteger(L, -1)) {
-		lua_pop(L, 1);
-		return 0;
-	}
-	tree->start = lua_tointeger(L, -1);
-	lua_pop(L, 1);
-
-	lua_getfield(L, -1, "_size");
-	if (!lua_isinteger(L, -1)) {
-		lua_pop(L, 1);
-		return 0;
-	}
-	tree->len = lua_tointeger(L, -1);
-	lua_pop(L, 1);
-
-	lua_getfield(L, -1, "_name");
+	lua_getfield(L, -1, "name");
 	if (!lua_isstring(L, -1)) {
 		lua_pop(L, 1);
 		return 0;
@@ -80,7 +64,23 @@ convert_tree(Region *r, lua_State *L)
 	memcpy(tree->name, name, name_len1);
 	lua_pop(L, 1);
 
-	lua_getfield(L, -1, "_value");
+	lua_getfield(L, -1, "start");
+	if (!lua_isinteger(L, -1)) {
+		lua_pop(L, 1);
+		return 0;
+	}
+	tree->start = lua_tointeger(L, -1);
+	lua_pop(L, 1);
+
+	lua_getfield(L, -1, "size");
+	if (!lua_isinteger(L, -1)) {
+		lua_pop(L, 1);
+		return 0;
+	}
+	tree->len = lua_tointeger(L, -1);
+	lua_pop(L, 1);
+
+	lua_getfield(L, -1, "value");
 	switch (lua_type(L, -1)) {
 	case LUA_TNUMBER:
 		tree->type = F_UINT;
@@ -93,7 +93,7 @@ convert_tree(Region *r, lua_State *L)
 	}
 	lua_pop(L, 1);
 
-	lua_getfield(L, -1, "_children");
+	lua_getfield(L, -1, "children");
 	// top of stack is array of children
 	int n = lua_rawlen(L, -1); // get number of children
 
@@ -126,5 +126,7 @@ api_buffer_tree(lua_State *L)
 		return 0;
 	}
 	lua_getuservalue(L, 1);
+	lua_pushstring(L, "value");
+	lua_rawget(L, -2);
 	return 1;
 }

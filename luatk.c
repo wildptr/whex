@@ -40,6 +40,7 @@ typedef struct {
 typedef struct {
 	bool has_pos;
 	bool has_size;
+	bool has_parent;
 	char *text;
 	int x, y, w, h;
 	HWND parent;
@@ -64,6 +65,7 @@ int api_listview__newindex(lua_State *);
 int api_listview_insert_column(lua_State *L);
 int api_listview_insert_item(lua_State *L);
 int api_quit(lua_State *L);
+int api_msgbox(lua_State *L);
 void parse_config(lua_State *L, int index, Config *);
 
 /* TODO: add type checks */
@@ -332,6 +334,7 @@ init_luatk(lua_State *L)
 
 	/* Globals */
 	lua_register(L, "quit", api_quit);
+	lua_register(L, "msgbox", api_msgbox);
 
 	return 0;
 }
@@ -387,7 +390,9 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		w = ((LPCREATESTRUCT) lparam)->lpCreateParams;
 		w->hwnd = hwnd;
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
-		return TRUE;
+		/* hand off to DefWindowProc(), otherwise window title will not
+		   be set */
+		break;
 	case WM_CLOSE:
 		w = (Window *) GetWindowLongPtr(hwnd, 0);
 		getluafield(lua, w, F_WINDOW_ON_CLOSE);
@@ -477,11 +482,24 @@ int
 api_window_configure(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	int x = luaL_checkinteger(L, 2);
-	int y = luaL_checkinteger(L, 3);
-	int wid = luaL_checkinteger(L, 4);
-	int hei = luaL_checkinteger(L, 5);
-	SetWindowPos(w->hwnd, 0, x, y, wid, hei, SWP_NOZORDER);
+	HWND hwnd = w->hwnd;
+	Config c = {0};
+	parse_config(L, 2, &c);
+	if (c.text) {
+		SetWindowText(hwnd, c.text);
+		free(c.text);
+	}
+	if (c.has_pos || c.has_size) {
+		DWORD flags = SWP_NOZORDER;
+		if (!c.has_pos)
+			flags |= SWP_NOMOVE;
+		if (!c.has_size)
+			flags |= SWP_NOSIZE;
+		SetWindowPos(hwnd, 0, c.x, c.y, c.w, c.h, flags);
+	}
+	if (c.has_parent) {
+		SetParent(hwnd, c.parent);
+	}
 	return 0;
 }
 
@@ -653,8 +671,17 @@ parse_config(lua_State *L, int index, Config *c)
 	lua_pushstring(L, "parent");
 	lua_gettable(L, index);
 	if (!lua_isnil(L, -1)) {
+		c->has_parent = true;
 		Window *w = lua_touserdata(L, -1);
 		c->parent = w->hwnd;
 	}
 	lua_pop(L, 1);
+}
+
+int
+api_msgbox(lua_State *L)
+{
+	const char *msg = luaL_checkstring(L, 1);
+	MessageBoxA(0, msg, "luatk", MB_OK);
+	return 0;
 }

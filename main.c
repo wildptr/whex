@@ -344,6 +344,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	TCHAR **argv;
 	TCHAR *filepath;
 
+	//freopen("stdout.txt", "w", stdout);
+
 	rinit(&rgn);
 	void *top = rgn.cur;
 	argv = cmdline_to_argv(&rgn, GetCommandLine(), &argc);
@@ -1420,6 +1422,12 @@ load_plugin(UI *ui, const char *path)
 	luaL_checktype(L, -1, LUA_TFUNCTION);
 	getluaobj(L, "buffer");
 	if (lua_pcall(L, 1, 1, 0)) {
+		luaerrorbox(ui->hwnd, L);
+		return;
+	}
+
+	/* Get the internal node */
+	if (lua_pcall(L, 0, 1, 0)) {
 		luaerrorbox(ui->hwnd, L);
 		return;
 	}

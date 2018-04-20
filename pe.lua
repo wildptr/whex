@@ -1,8 +1,8 @@
 local bp = require('binparse')
 
-return function(file)
+return function(buf)
 
-  bp.new(file)()
+  bp.new(buf)()
 
   local dos_header = record(function()
     local magic = u16 'e_magic'
@@ -128,5 +128,4 @@ return function(file)
   end)
 
   return pe 'pe'
-
 end

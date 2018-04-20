@@ -17,6 +17,7 @@ enum {
 	WINDOW,
 	BUTTON,
 	LABEL,
+	LISTBOX,
 	LISTVIEW,
 };
 
@@ -27,6 +28,10 @@ enum {
 
 enum {
 	F_BUTTON_ON_CLICK = END_WINDOW,
+};
+
+enum {
+	F_LISTBOX_ON_SELECT = END_WINDOW,
 };
 
 typedef unsigned char uchar;
@@ -58,8 +63,8 @@ int api_window_move(lua_State *L);
 int api_window_resize(lua_State *L);
 int api_window_configure(lua_State *L);
 int api_window_add_child(lua_State *L);
-int api_label_new(lua_State *);
-int api_listview_new(lua_State *);
+int api_label(lua_State *);
+int api_listview(lua_State *);
 int api_listview__index(lua_State *);
 int api_listview__newindex(lua_State *);
 int api_listview_insert_column(lua_State *L);
@@ -67,6 +72,12 @@ int api_listview_insert_item(lua_State *L);
 int api_quit(lua_State *L);
 int api_msgbox(lua_State *L);
 void parse_config(lua_State *L, int index, Config *);
+int api_listbox(lua_State *L);
+int api_listbox__index(lua_State *L);
+int api_listbox__newindex(lua_State *L);
+int api_listbox_insert_item(lua_State *L);
+int api_listbox_clear(lua_State *L);
+int api_listview_clear(lua_State *L);
 
 /* TODO: add type checks */
 
@@ -149,7 +160,7 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle, int 
 }
 
 int
-api_window_new(lua_State *L)
+api_window(lua_State *L)
 {
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Window");
@@ -159,7 +170,7 @@ api_window_new(lua_State *L)
 }
 
 int
-api_button_new(lua_State *L)
+api_button(lua_State *L)
 {
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Button");
@@ -315,22 +326,28 @@ init_luatk(lua_State *L)
 	luaL_newmetatable(L, "Window");
 	bindfunc(L, "__index", api_window__index);
 	bindfunc(L, "__newindex", api_window__newindex);
-	lua_register(L, "Window", api_window_new);
+	lua_register(L, "Window", api_window);
 
 	/* Button */
 	luaL_newmetatable(L, "Button");
 	bindfunc(L, "__index", api_button__index);
 	bindfunc(L, "__newindex", api_button__newindex);
-	lua_register(L, "Button", api_button_new);
+	lua_register(L, "Button", api_button);
 
 	/* Label */
-	lua_register(L, "Label", api_label_new);
+	lua_register(L, "Label", api_label);
+
+	/* ListBox */
+	luaL_newmetatable(L, "ListBox");
+	bindfunc(L, "__index", api_listbox__index);
+	bindfunc(L, "__newindex", api_listbox__newindex);
+	lua_register(L, "ListBox", api_listbox);
 
 	/* ListView */
 	luaL_newmetatable(L, "ListView");
 	bindfunc(L, "__index", api_listview__index);
 	bindfunc(L, "__newindex", api_listview__newindex);
-	lua_register(L, "ListView", api_listview_new);
+	lua_register(L, "ListView", api_listview);
 
 	/* Globals */
 	lua_register(L, "quit", api_quit);
@@ -397,7 +414,9 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		w = (Window *) GetWindowLongPtr(hwnd, 0);
 		getluafield(lua, w, F_WINDOW_ON_CLOSE);
 		if (!lua_isnil(lua, -1)) {
-			lua_pcall(lua, 0, 0, 0);
+			if (lua_pcall(lua, 0, 0, 0)) {
+				luaerrorbox(hwnd, lua);
+			}
 		} else {
 			lua_pop(lua, 1);
 		}
@@ -421,6 +440,27 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			switch (ctlw->kind) {
 			case BUTTON:
 				button_cmd(lua, ctlw);
+				break;
+			case LISTBOX:
+				switch (HIWORD(wparam)) {
+					int sel;
+				case LBN_SELCHANGE:
+					sel = SendMessage(ctl, LB_GETCURSEL, 0, 0);
+					if (sel < 0) {
+						return 0;
+					}
+					getluafield(lua, ctlw, F_LISTBOX_ON_SELECT);
+					if (!lua_isnil(lua, -1)) {
+						lua_pushlightuserdata(lua, ctl);
+						lua_rawget(lua, LUA_REGISTRYINDEX);
+						lua_pushinteger(lua, sel);
+						if (lua_pcall(lua, 2, 0, 0)) {
+							luaerrorbox(hwnd, lua);
+						}
+					}
+					lua_pop(lua, 1);
+					break;
+				}
 				break;
 			}
 		}
@@ -513,7 +553,7 @@ api_window_add_child(lua_State *L)
 }
 
 int
-api_label_new(lua_State *L)
+api_label(lua_State *L)
 {
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Window");
@@ -523,7 +563,7 @@ api_label_new(lua_State *L)
 }
 
 int
-api_listview_new(lua_State *L)
+api_listview(lua_State *L)
 {
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "ListView");
@@ -538,6 +578,12 @@ api_listview__index(lua_State *L)
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
 	switch (len) {
+	case 5:
+		if (!strcmp(field, "clear")) {
+			lua_pushcfunction(L, api_listview_clear);
+			return 1;
+		}
+		break;
 	case 11:
 		if (!strcmp(field, "insert_item")) {
 			lua_pushcfunction(L, api_listview_insert_item);
@@ -683,5 +729,89 @@ api_msgbox(lua_State *L)
 {
 	const char *msg = luaL_checkstring(L, 1);
 	MessageBoxA(0, msg, "luatk", MB_OK);
+	return 0;
+}
+
+int
+api_listbox(lua_State *L)
+{
+	Window *w = lua_newuserdata(L, sizeof *w);
+	luaL_setmetatable(L, "ListBox");
+	w->kind = LISTBOX;
+	init_window(L, w, WC_LISTBOX, WS_CHILD | WS_VISIBLE | LBS_NOTIFY, 1);
+	return 1;
+}
+
+int
+api_listbox__index(lua_State *L)
+{
+	const char *field = luaL_checkstring(L, 2);
+	int len = strlen(field);
+	switch (len) {
+	case 5:
+		if (!strcmp(field, "clear")) {
+			lua_pushcfunction(L, api_listbox_clear);
+			return 1;
+		}
+		break;
+	case 9:
+		if (!strcmp(field, "on_select")) {
+			Window *w = lua_touserdata(L, 1);
+			getluafield(L, w, F_BUTTON_ON_CLICK);
+			return 1;
+		}
+		break;
+	case 11:
+		if (!strcmp(field, "insert_item")) {
+			lua_pushcfunction(L, api_listbox_insert_item);
+			return 1;
+		}
+		break;
+	}
+	return api_window__index(L);
+}
+
+int
+api_listbox__newindex(lua_State *L)
+{
+	const char *field = luaL_checkstring(L, 2);
+	int len = strlen(field);
+	switch (len) {
+	case 9:
+		if (!strcmp(field, "on_select")) {
+			Window *w = lua_touserdata(L, 1);
+			setluafield(L, w, F_BUTTON_ON_CLICK, 3);
+			return 0;
+		}
+		break;
+	}
+	return api_window__newindex(L);
+}
+
+int api_listbox_insert_item(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	int row = luaL_checkinteger(L, 2);
+	char *text = strdup(luaL_checkstring(L, 3));
+
+	SendMessage(w->hwnd, LB_INSERTSTRING, row, (LPARAM) text);
+	free(text);
+
+	return 0;
+}
+
+int
+api_listbox_clear(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	SendMessage(w->hwnd, LB_RESETCONTENT, 0, 0);
+	return 0;
+}
+
+int
+api_listview_clear(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	SendMessage(w->hwnd, LVM_DELETEALLITEMS, 0, 0);
 	return 0;
 }

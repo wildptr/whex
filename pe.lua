@@ -2,7 +2,7 @@ local bp = require('binparse')
 
 return function(buf)
 
-  bp.new(buf)()
+  bp(buf)()
 
   local dos_header = record(function()
     local magic = u16 'e_magic'

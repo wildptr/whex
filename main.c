@@ -246,6 +246,7 @@ create_menu(void)
 	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load plugin..."));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
+	/* appearance will be overridden by update_ui() */
 	AppendMenu(mainmenu, MF_SEPARATOR, 0, 0);
 
 	return mainmenu;
@@ -1499,7 +1500,8 @@ update_plugin_menu(UI *ui)
 		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
 			   (UINT_PTR) plugin_menu, ui->plugin_name);
 	} else {
-		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_SEPARATOR, 0, 0);
+		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_STRING | MF_GRAYED,
+			   0, TEXT("Plugin"));
 	}
 
 	DrawMenuBar(ui->hwnd);

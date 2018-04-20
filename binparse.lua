@@ -1,6 +1,4 @@
-local P = {} -- this package
-
-function Node(name, start, size, value)
+local function Node(name, start, size, value)
   local o = {}
   o.children = {}
   o.name = name
@@ -50,7 +48,7 @@ local function print_node(self)
   return print_r(self, 0)
 end
 
-function P.new(buf, pos)
+return function(buf, pos)
 
   pos = pos or 0
   local current_node
@@ -185,5 +183,3 @@ function P.new(buf, pos)
 
   return table
 end
-
-return P

@@ -73,7 +73,7 @@ LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
 static ATOM register_wndclass(void);
 static void format_error_code(TCHAR *, size_t, DWORD);
-static int file_chooser_dialog(HWND, TCHAR *, int);
+int file_chooser_dialog(HWND, TCHAR *, int);
 static int start_gui(int, UI *, TCHAR *);
 void update_monoedit_buffer(UI *, int, int);
 void set_current_line(UI *, long long);
@@ -228,20 +228,6 @@ format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
 		      buf,
 		      buflen,
 		      0);
-}
-
-static int
-file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
-{
-	buf[0] = 0;
-	OPENFILENAME ofn = {0};
-	ofn.lStructSize = sizeof ofn;
-	ofn.hwndOwner = owner;
-	ofn.hInstance = GetModuleHandle(0);
-	ofn.lpstrFile = buf;
-	ofn.nMaxFile = buflen;
-	if (!GetOpenFileName(&ofn)) return -1;
-	return 0;
 }
 
 static HMENU

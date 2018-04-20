@@ -1,11 +1,14 @@
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
 
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <commctrl.h>
 
 #define BUFSIZE 512
 
@@ -13,6 +16,7 @@ enum {
 	WINDOW,
 	BUTTON,
 	LABEL,
+	LISTVIEW,
 };
 
 enum {
@@ -44,6 +48,12 @@ int api_window_resize(lua_State *L);
 int api_window_configure(lua_State *L);
 int api_window_add_child(lua_State *L);
 int api_label_new(lua_State *);
+int api_listview_new(lua_State *);
+int api_listview__index(lua_State *);
+int api_listview__newindex(lua_State *);
+int api_listview_insert_column(lua_State *L);
+int api_listview_insert_item(lua_State *L);
+int api_quit(lua_State *L);
 
 /* TODO: add type checks */
 
@@ -177,7 +187,7 @@ window_get_text(lua_State *L, Window *w)
 }
 
 int
-api_Window__index(lua_State *L)
+api_window__index(lua_State *L)
 {
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
@@ -224,7 +234,7 @@ api_Window__index(lua_State *L)
 }
 
 int
-api_Window__newindex(lua_State *L)
+api_window__newindex(lua_State *L)
 {
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
@@ -249,7 +259,7 @@ api_Window__newindex(lua_State *L)
 }
 
 int
-api_Button__index(lua_State *L)
+api_button__index(lua_State *L)
 {
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
@@ -262,11 +272,11 @@ api_Button__index(lua_State *L)
 		}
 		break;
 	}
-	return api_Window__index(L);
+	return api_window__index(L);
 }
 
 int
-api_Button__newindex(lua_State *L)
+api_button__newindex(lua_State *L)
 {
 	const char *field = luaL_checkstring(L, 2);
 	int len = strlen(field);
@@ -279,7 +289,7 @@ api_Button__newindex(lua_State *L)
 		}
 		break;
 	}
-	return api_Window__newindex(L);
+	return api_window__newindex(L);
 }
 
 int
@@ -294,10 +304,10 @@ init_luatk(lua_State *L)
 
 	/* set up __index and __newindex */
 	lua_pushstring(L, "__index");
-	lua_pushcfunction(L, api_Window__index);
+	lua_pushcfunction(L, api_window__index);
 	lua_rawset(L, -3);
 	lua_pushstring(L, "__newindex");
-	lua_pushcfunction(L, api_Window__newindex);
+	lua_pushcfunction(L, api_window__newindex);
 	lua_rawset(L, -3);
 
 	lua_register(L, "Window", api_window_new);
@@ -306,16 +316,27 @@ init_luatk(lua_State *L)
 	luaL_newmetatable(L, "Button");
 
 	lua_pushstring(L, "__index");
-	lua_pushcfunction(L, api_Button__index);
+	lua_pushcfunction(L, api_button__index);
 	lua_rawset(L, -3);
 	lua_pushstring(L, "__newindex");
-	lua_pushcfunction(L, api_Button__newindex);
+	lua_pushcfunction(L, api_button__newindex);
 	lua_rawset(L, -3);
 
 	lua_register(L, "Button", api_button_new);
 
 	/* Label */
 	lua_register(L, "Label", api_label_new);
+
+	/* ListView */
+	luaL_newmetatable(L, "ListView");
+	lua_pushstring(L, "__index");
+	lua_pushcfunction(L, api_listview__index);
+	lua_rawset(L, -3);
+	lua_pushstring(L, "__newindex");
+	lua_pushcfunction(L, api_listview__newindex);
+	lua_rawset(L, -3);
+
+	lua_register(L, "ListView", api_listview_new);
 
 	/* Globals */
 	/* none yet */
@@ -503,4 +524,120 @@ api_label_new(lua_State *L)
 	register_window(L, w);
 	//SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
 	return 1;
+}
+
+int
+api_listview_new(lua_State *L)
+{
+	Window *parent = lua_touserdata(L, 2);
+
+	Window *w = lua_newuserdata(L, sizeof *w);
+	luaL_setmetatable(L, "ListView");
+	w->kind = LISTVIEW;
+	HWND hwnd = CreateWindow(WC_LISTVIEW,
+				 0,
+				 WS_CHILD | WS_VISIBLE | LVS_REPORT,
+				 0, 0, 0, 0,
+				 parent->hwnd,
+				 0,
+				 GetModuleHandle(0),
+				 w);
+	assert(hwnd);
+	w->hwnd = hwnd;
+	register_window(L, w);
+	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+	return 1;
+}
+
+int
+api_listview__index(lua_State *L)
+{
+	const char *field = luaL_checkstring(L, 2);
+	int len = strlen(field);
+	switch (len) {
+	case 11:
+		if (!strcmp(field, "insert_item")) {
+			lua_pushcfunction(L, api_listview_insert_item);
+			return 1;
+		}
+		break;
+	case 13:
+		if (!strcmp(field, "insert_column")) {
+			lua_pushcfunction(L, api_listview_insert_column);
+			return 1;
+		}
+		break;
+	}
+	return api_window__index(L);
+}
+
+int
+api_listview__newindex(lua_State *L)
+{
+	const char *field = luaL_checkstring(L, 2);
+	int len = strlen(field);
+	switch (len) {
+	}
+	return api_window__newindex(L);
+}
+
+int
+api_listview_insert_column(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	int col = luaL_checkinteger(L, 2);
+	char *colname = strdup(luaL_checkstring(L, 3));
+
+	LVCOLUMN lvc;
+	lvc.mask = LVCF_TEXT;
+	lvc.pszText = colname;
+
+	int ret = SendMessage(w->hwnd, LVM_INSERTCOLUMN, col, (LPARAM) &lvc);
+	free(colname);
+	assert(ret == col);
+	return 0;
+}
+
+int
+api_listview_insert_item(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	int row = luaL_checkinteger(L, 2);
+	lua_len(L, 3);
+	int n = luaL_checkinteger(L, -1);
+	lua_pop(L, 1);
+	lua_geti(L, 3, 1);
+	char *itemname = strdup(luaL_checkstring(L, -1));
+	assert(itemname);
+
+	lua_pop(L, 1);
+
+	LV_ITEM lvi;
+	lvi.iItem = row;
+	lvi.iSubItem = 0;
+	lvi.mask = LVIF_TEXT;
+	lvi.pszText = itemname;
+
+	int ret = SendMessage(w->hwnd, LVM_INSERTITEM, 0, (LPARAM) &lvi);
+	free(itemname);
+	assert(ret == row);
+	for (int i=1; i<n; i++) {
+		lua_geti(L, 3, 1+i);
+		itemname = strdup(luaL_checkstring(L, -1));
+		lua_pop(L, 1);
+		lvi.iSubItem = i;
+		lvi.pszText = itemname;
+		ret = SendMessage(w->hwnd, LVM_SETITEM, 0, (LPARAM) &lvi);
+		free(itemname);
+		assert(ret == TRUE);
+	}
+
+	return 0;
+}
+
+int
+api_quit(lua_State *L)
+{
+	PostQuitMessage(0);
+	return 0;
 }

@@ -1,7 +1,6 @@
-local w = Window('luatk')
+local w = Window{text='luatk'}
 w.on_close = quit
-local lv = ListView('', w)
-lv:configure(8,8,192,96)
+local lv = ListView{parent=w, pos={8,8}, size={256,128}}
 lv:insert_column(0, 'Name')
 lv:insert_column(1, 'Size')
 lv:insert_item(0, {'python', '1000'})

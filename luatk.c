@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +37,15 @@ typedef struct {
 	HWND hwnd;
 } Window;
 
+typedef struct {
+	bool has_pos;
+	bool has_size;
+	char *text;
+	int x, y, w, h;
+	HWND parent;
+} Config;
+
+static const TCHAR luatk_class[] = TEXT("LUATK");
 static lua_State *lua;
 
 void luaerrorbox(HWND hwnd, lua_State *L);
@@ -54,6 +64,7 @@ int api_listview__newindex(lua_State *);
 int api_listview_insert_column(lua_State *L);
 int api_listview_insert_item(lua_State *L);
 int api_quit(lua_State *L);
+void parse_config(lua_State *L, int index, Config *);
 
 /* TODO: add type checks */
 
@@ -94,75 +105,74 @@ register_window(lua_State *L, Window *w)
 	lua_rawset(L, LUA_REGISTRYINDEX);
 }
 
-int
-api_window_new(lua_State *L)
+void
+init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle, int cfgindex)
 {
-	int narg = lua_gettop(L);
-	const TCHAR *title = TEXT("LuaTk");
-	if (narg >= 1) {
-		title = luaL_checkstring(L, 1);
-	}
+	Config c = {0};
+	parse_config(L, cfgindex, &c);
 
-	Window *w = lua_newuserdata(L, sizeof *w);
-	luaL_setmetatable(L, "Window");
-	w->kind = WINDOW;
+	int x, y, wid, hei;
+	if (c.has_pos) {
+		x = c.x;
+		y = c.y;
+	} else {
+		x = CW_USEDEFAULT;
+		y = CW_USEDEFAULT;
+	}
+	if (c.has_size) {
+		wid = c.w;
+		hei = c.h;
+	} else {
+		wid = CW_USEDEFAULT;
+		hei = CW_USEDEFAULT;
+	}
 
 	HWND hwnd;
 	/* sets w->hwnd */
-	hwnd = CreateWindow(TEXT("LUATK"), /* class name */
-			    0,
-			    WS_OVERLAPPEDWINDOW,
-			    CW_USEDEFAULT,
-			    CW_USEDEFAULT,
-			    CW_USEDEFAULT,
-			    CW_USEDEFAULT,
-			    0,
+	hwnd = CreateWindow(wndclass,
+			    c.text,
+			    wndstyle,
+			    x, y, wid, hei,
+			    c.parent, /* might be 0 */
 			    0, /* menu */
 			    GetModuleHandle(0),
 			    w);
-	SetWindowText(hwnd, title);
-
+	if (c.text) free(c.text);
+	assert(hwnd);
+	if (wndclass != luatk_class) {
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+		w->hwnd = hwnd;
+	}
 	register_window(L, w);
+}
 
+int
+api_window_new(lua_State *L)
+{
+	Window *w = lua_newuserdata(L, sizeof *w);
+	luaL_setmetatable(L, "Window");
+	w->kind = WINDOW;
+	init_window(L, w, luatk_class, WS_OVERLAPPEDWINDOW, 1);
 	return 1;
 }
 
 int
 api_button_new(lua_State *L)
 {
-	const TCHAR *caption = luaL_checkstring(L, 1);
-	Window *parent = lua_touserdata(L, 2);
-
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Button");
 	w->kind = BUTTON;
-	HWND hwnd = CreateWindow(TEXT("BUTTON"),
-				 caption,
-				 WS_CHILD | WS_VISIBLE,
-				 CW_USEDEFAULT,
-				 CW_USEDEFAULT,
-				 CW_USEDEFAULT,
-				 CW_USEDEFAULT,
-				 parent->hwnd,
-				 0,
-				 GetModuleHandle(0),
-				 w);
-	assert(hwnd);
-	w->hwnd = hwnd;
-	register_window(L, w);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+	init_window(L, w, WC_BUTTON, WS_CHILD | WS_VISIBLE, 1);
 	return 1;
 }
 
-#if 0
 static void
-bindfunc(lua_State *L, const char *name, int (*fn)(lua_State *))
+bindfunc(lua_State *L, const char *name, lua_CFunction f)
 {
 	lua_pushstring(L, name);
-	lua_pushcfunction(L, fn);
+	lua_pushcfunction(L, f);
 	lua_rawset(L, -3);
 }
-#endif
 
 int
 fielderr(lua_State *L, const char *cls, const char *field)
@@ -301,27 +311,14 @@ init_luatk(lua_State *L)
 
 	/* Window */
 	luaL_newmetatable(L, "Window");
-
-	/* set up __index and __newindex */
-	lua_pushstring(L, "__index");
-	lua_pushcfunction(L, api_window__index);
-	lua_rawset(L, -3);
-	lua_pushstring(L, "__newindex");
-	lua_pushcfunction(L, api_window__newindex);
-	lua_rawset(L, -3);
-
+	bindfunc(L, "__index", api_window__index);
+	bindfunc(L, "__newindex", api_window__newindex);
 	lua_register(L, "Window", api_window_new);
 
 	/* Button */
 	luaL_newmetatable(L, "Button");
-
-	lua_pushstring(L, "__index");
-	lua_pushcfunction(L, api_button__index);
-	lua_rawset(L, -3);
-	lua_pushstring(L, "__newindex");
-	lua_pushcfunction(L, api_button__newindex);
-	lua_rawset(L, -3);
-
+	bindfunc(L, "__index", api_button__index);
+	bindfunc(L, "__newindex", api_button__newindex);
 	lua_register(L, "Button", api_button_new);
 
 	/* Label */
@@ -329,17 +326,12 @@ init_luatk(lua_State *L)
 
 	/* ListView */
 	luaL_newmetatable(L, "ListView");
-	lua_pushstring(L, "__index");
-	lua_pushcfunction(L, api_listview__index);
-	lua_rawset(L, -3);
-	lua_pushstring(L, "__newindex");
-	lua_pushcfunction(L, api_listview__newindex);
-	lua_rawset(L, -3);
-
+	bindfunc(L, "__index", api_listview__index);
+	bindfunc(L, "__newindex", api_listview__newindex);
 	lua_register(L, "ListView", api_listview_new);
 
 	/* Globals */
-	/* none yet */
+	lua_register(L, "quit", api_quit);
 
 	return 0;
 }
@@ -355,7 +347,7 @@ register_wndclass(void)
 	wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
-	wndclass.lpszClassName = TEXT("LUATK");
+	wndclass.lpszClassName = luatk_class;
 	return RegisterClass(&wndclass);
 }
 
@@ -505,47 +497,20 @@ api_window_add_child(lua_State *L)
 int
 api_label_new(lua_State *L)
 {
-	const TCHAR *caption = luaL_checkstring(L, 1);
-	Window *parent = lua_touserdata(L, 2);
-
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Window");
 	w->kind = LABEL;
-	HWND hwnd = CreateWindow(TEXT("STATIC"),
-				 caption,
-				 WS_CHILD | WS_VISIBLE,
-				 0, 0, 0, 0,
-				 parent->hwnd,
-				 0,
-				 GetModuleHandle(0),
-				 w);
-	assert(hwnd);
-	w->hwnd = hwnd;
-	register_window(L, w);
-	//SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+	init_window(L, w, WC_STATIC, WS_CHILD | WS_VISIBLE, 1);
 	return 1;
 }
 
 int
 api_listview_new(lua_State *L)
 {
-	Window *parent = lua_touserdata(L, 2);
-
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "ListView");
 	w->kind = LISTVIEW;
-	HWND hwnd = CreateWindow(WC_LISTVIEW,
-				 0,
-				 WS_CHILD | WS_VISIBLE | LVS_REPORT,
-				 0, 0, 0, 0,
-				 parent->hwnd,
-				 0,
-				 GetModuleHandle(0),
-				 w);
-	assert(hwnd);
-	w->hwnd = hwnd;
-	register_window(L, w);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+	init_window(L, w, WC_LISTVIEW, WS_CHILD | WS_VISIBLE | LVS_REPORT, 1);
 	return 1;
 }
 
@@ -640,4 +605,56 @@ api_quit(lua_State *L)
 {
 	PostQuitMessage(0);
 	return 0;
+}
+
+void
+parse_config(lua_State *L, int index, Config *c)
+{
+	/* text */
+	lua_pushstring(L, "text");
+	lua_gettable(L, index);
+	if (!lua_isnil(L, -1)) {
+		const char *text = luaL_checkstring(L, -1);
+		if (text) {
+			c->text = strdup(text);
+		}
+	}
+	lua_pop(L, 1);
+
+	/* pos */
+	lua_pushstring(L, "pos");
+	lua_gettable(L, index);
+	if (!lua_isnil(L, -1)) {
+		c->has_pos = true;
+		lua_geti(L, -1, 1);
+		c->x = luaL_checkinteger(L, -1);
+		lua_pop(L, 1);
+		lua_geti(L, -1, 2);
+		c->y = luaL_checkinteger(L, -1);
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1);
+
+	/* size */
+	lua_pushstring(L, "size");
+	lua_gettable(L, index);
+	if (!lua_isnil(L, -1)) {
+		c->has_size = true;
+		lua_geti(L, -1, 1);
+		c->w = luaL_checkinteger(L, -1);
+		lua_pop(L, 1);
+		lua_geti(L, -1, 2);
+		c->h = luaL_checkinteger(L, -1);
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1);
+
+	/* parent */
+	lua_pushstring(L, "parent");
+	lua_gettable(L, index);
+	if (!lua_isnil(L, -1)) {
+		Window *w = lua_touserdata(L, -1);
+		c->parent = w->hwnd;
+	}
+	lua_pop(L, 1);
 }

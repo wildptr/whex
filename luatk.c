@@ -23,6 +23,7 @@ enum {
 
 enum {
 	F_WINDOW_ON_CLOSE,
+	F_WINDOW_ON_RESIZE,
 	END_WINDOW
 };
 
@@ -57,12 +58,11 @@ static lua_State *lua;
 void luaerrorbox(HWND hwnd, lua_State *L);
 static ATOM register_wndclass(void);
 LRESULT CALLBACK luatk_wndproc(HWND, UINT, WPARAM, LPARAM);
-void getluafield(lua_State *L, Window *w, int field);
-void setluafield(lua_State *L, Window *w, int field, int value_index);
+void getluafield(lua_State *L, HWND, int field);
+void setluafield(lua_State *L, HWND, int field, int value_index);
 int api_window_move(lua_State *L);
 int api_window_resize(lua_State *L);
 int api_window_configure(lua_State *L);
-int api_window_add_child(lua_State *L);
 int api_label(lua_State *);
 int api_listview(lua_State *);
 int api_listview__index(lua_State *);
@@ -87,25 +87,6 @@ api_window_show(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
 	ShowWindow(w->hwnd, SW_SHOW);
-	return 0;
-}
-
-int
-api_window_pack(lua_State *L)
-{
-	Window *w = lua_touserdata(L, 1);
-	Window *child = lua_touserdata(L, 2);
-	HWND childhwnd = child->hwnd;
-	int x = luaL_checkinteger(L, 3);
-	int y = luaL_checkinteger(L, 4);
-	int wid = luaL_checkinteger(L, 5);
-	int hei = luaL_checkinteger(L, 6);
-
-	SetParent(childhwnd, w->hwnd);
-	//LONG style = GetWindowLongPtr(childhwnd, GWL_STYLE);
-	SetWindowLongPtr(childhwnd, GWL_STYLE, WS_CHILD);
-	SetWindowPos(childhwnd, 0, x, y, wid, hei,
-		     SWP_NOZORDER | SWP_SHOWWINDOW);
 	return 0;
 }
 
@@ -135,10 +116,15 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle,
 		y = CW_USEDEFAULT;
 	}
 	if (c.has_size) {
+#if 0
 		RECT r = {0, 0, c.w, c.h};
 		AdjustWindowRect(&r, wndstyle, FALSE);
 		wid = r.right - r.left;
 		hei = r.bottom - r.top;
+#else
+		wid = c.w;
+		hei = c.h;
+#endif
 	} else {
 		wid = CW_USEDEFAULT;
 		hei = CW_USEDEFAULT;
@@ -225,9 +211,6 @@ api_window__index(lua_State *L)
 		if (!strcmp(field, "show")) {
 			lua_pushcfunction(L, api_window_show);
 			return 1;
-		} else if (!strcmp(field, "pack")) {
-			lua_pushcfunction(L, api_window_pack);
-			return 1;
 		} else if (!strcmp(field, "text")) {
 			Window *w = lua_touserdata(L, 1);
 			return window_get_text(L, w);
@@ -245,7 +228,7 @@ api_window__index(lua_State *L)
 	case 8:
 		if (!strcmp(field, "on_close")) {
 			Window *w = lua_touserdata(L, 1);
-			getluafield(L, w, F_WINDOW_ON_CLOSE);
+			getluafield(L, w->hwnd, F_WINDOW_ON_CLOSE);
 			return 1;
 		}
 		break;
@@ -253,8 +236,9 @@ api_window__index(lua_State *L)
 		if (!strcmp(field, "configure")) {
 			lua_pushcfunction(L, api_window_configure);
 			return 1;
-		} else if (!strcmp(field, "add_child")) {
-			lua_pushcfunction(L, api_window_add_child);
+		} else if (!strcmp(field, "on_resize")) {
+			Window *w = lua_touserdata(L, 1);
+			getluafield(L, w->hwnd, F_WINDOW_ON_RESIZE);
 			return 1;
 		}
 		break;
@@ -279,8 +263,15 @@ api_window__newindex(lua_State *L)
 	case 8:
 		if (!strcmp(field, "on_close")) {
 			Window *w = lua_touserdata(L, 1);
-			setluafield(L, w, F_WINDOW_ON_CLOSE, 3);
+			setluafield(L, w->hwnd, F_WINDOW_ON_CLOSE, 3);
 			return 0;
+		}
+		break;
+	case 9:
+		if (!strcmp(field, "on_resize")) {
+			Window *w = lua_touserdata(L, 1);
+			setluafield(L, w->hwnd, F_WINDOW_ON_RESIZE, 3);
+			return 1;
 		}
 		break;
 	}
@@ -296,7 +287,7 @@ api_button__index(lua_State *L)
 	case 8:
 		if (!strcmp(field, "on_click")) {
 			Window *w = lua_touserdata(L, 1);
-			getluafield(L, w, F_BUTTON_ON_CLICK);
+			getluafield(L, w->hwnd, F_BUTTON_ON_CLICK);
 			return 1;
 		}
 		break;
@@ -313,7 +304,7 @@ api_button__newindex(lua_State *L)
 	case 8:
 		if (!strcmp(field, "on_click")) {
 			Window *w = lua_touserdata(L, 1);
-			setluafield(L, w, F_BUTTON_ON_CLICK, 3);
+			setluafield(L, w->hwnd, F_BUTTON_ON_CLICK, 3);
 			return 0;
 		}
 		break;
@@ -417,8 +408,7 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		   be set */
 		break;
 	case WM_CLOSE:
-		w = (Window *) GetWindowLongPtr(hwnd, 0);
-		getluafield(lua, w, F_WINDOW_ON_CLOSE);
+		getluafield(lua, hwnd, F_WINDOW_ON_CLOSE);
 		if (!lua_isnil(lua, -1)) {
 			if (lua_pcall(lua, 0, 0, 0)) {
 				luaerrorbox(hwnd, lua);
@@ -455,7 +445,7 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 					if (sel < 0) {
 						return 0;
 					}
-					getluafield(lua, ctlw, F_LISTBOX_ON_SELECT);
+					getluafield(lua, ctl, F_LISTBOX_ON_SELECT);
 					if (!lua_isnil(lua, -1)) {
 						lua_pushlightuserdata(lua, ctl);
 						lua_rawget(lua, LUA_REGISTRYINDEX);
@@ -471,14 +461,28 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			}
 		}
 		return 0;
+	case WM_SIZE:
+		if (wparam == SIZE_MINIMIZED) return 0;
+		getluafield(lua, hwnd, F_WINDOW_ON_RESIZE);
+		if (!lua_isnil(lua, -1)) {
+			lua_pushlightuserdata(lua, hwnd);
+			lua_rawget(lua, LUA_REGISTRYINDEX);
+			lua_pushinteger(lua, LOWORD(lparam));
+			lua_pushinteger(lua, HIWORD(lparam));
+			if (lua_pcall(lua, 3, 0, 0)) {
+				luaerrorbox(hwnd, lua);
+			}
+		}
+		lua_pop(lua, 1);
+		return 0;
 	}
 	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
 void
-getluafield(lua_State *L, Window *w, int field)
+getluafield(lua_State *L, HWND hwnd, int field)
 {
-	lua_pushlightuserdata(L, w->hwnd);
+	lua_pushlightuserdata(L, hwnd);
 	lua_rawget(L, LUA_REGISTRYINDEX);
 	lua_getuservalue(L, -1);
 	lua_rawgeti(L, -1, field);
@@ -493,9 +497,9 @@ getluafield(lua_State *L, Window *w, int field)
 }
 
 void
-setluafield(lua_State *L, Window *w, int field, int value_index)
+setluafield(lua_State *L, HWND hwnd, int field, int value_index)
 {
-	lua_pushlightuserdata(L, w->hwnd);
+	lua_pushlightuserdata(L, hwnd);
 	lua_rawget(L, LUA_REGISTRYINDEX);
 	lua_getuservalue(L, -1);
 	if (value_index < 0) value_index -= 2; /* because we just pushed two */
@@ -546,15 +550,6 @@ api_window_configure(lua_State *L)
 	if (c.has_parent) {
 		SetParent(hwnd, c.parent);
 	}
-	return 0;
-}
-
-int
-api_window_add_child(lua_State *L)
-{
-	Window *w = lua_touserdata(L, 1);
-	Window *child = lua_touserdata(L, 2);
-	SetParent(child->hwnd, w->hwnd);
 	return 0;
 }
 
@@ -774,7 +769,7 @@ api_listbox__index(lua_State *L)
 	case 9:
 		if (!strcmp(field, "on_select")) {
 			Window *w = lua_touserdata(L, 1);
-			getluafield(L, w, F_BUTTON_ON_CLICK);
+			getluafield(L, w->hwnd, F_BUTTON_ON_CLICK);
 			return 1;
 		}
 		break;
@@ -797,7 +792,7 @@ api_listbox__newindex(lua_State *L)
 	case 9:
 		if (!strcmp(field, "on_select")) {
 			Window *w = lua_touserdata(L, 1);
-			setluafield(L, w, F_BUTTON_ON_CLICK, 3);
+			setluafield(L, w->hwnd, F_BUTTON_ON_CLICK, 3);
 			return 0;
 		}
 		break;

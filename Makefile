@@ -4,10 +4,10 @@ include config.mk
 CFLAGS += -std=gnu99 -Wall -I$(LUA_DIR)/include
 
 whex.exe: monoedit.o lua_api.o tree.o main.o unicode.o region.o list.o buffer.o res.o printf.o luatk.o winutil.o
-	$(CC) -o $@ $^ -lgdi32 -lcomdlg32 -lcomctl32 -L$(LUA_DIR)/lib -llua
+	$(CC) -mwindows -o $@ $^ -lgdi32 -lcomdlg32 -lcomctl32 -L$(LUA_DIR)/lib -llua
 
 luatk.exe: luatk.o luatk_main.o winutil.o
-	$(CC) -o $@ $^ -lgdi32 -lcomdlg32 -lcomctl32 -L$(LUA_DIR)/lib -llua
+	$(CC) -mwindows -o $@ $^ -lgdi32 -lcomdlg32 -lcomctl32 -L$(LUA_DIR)/lib -llua
 
 list.o: list.c util.h
 lua_api.o: lua_api.c buffer.h tree.h

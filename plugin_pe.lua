@@ -150,7 +150,7 @@ end
 
 local function import_table(buf)
   local pe = buf:tree()
-  local w = Window{text='Import table', size={256,256}}
+  local w = Window{text='Import table', size={640,480}}
   local s = find_section(pe, '.idata')
   if not s then
     msgbox('.idata section not found')
@@ -159,11 +159,15 @@ local function import_table(buf)
   idata_off = pe.section_headers[s].raw_data_offset
   local idt = parse_idt(buf, idata_off)
   local ilt = make_ilt(buf, idt)
-  local lb = ListBox{parent=w, pos={0,0}, size={256,128}}
-  local lv = ListView{parent=w, pos={0,128}, size={256,128}}
+  local lb = ListBox{parent=w, pos={0,0}}
+  local lv = ListView{parent=w, pos={256,0}}
+  w.on_resize = function(w, wid, hei)
+    lb:resize(256, hei)
+    lv:resize(wid-256, hei)
+  end
   lv:insert_column(0, 'Ord.', {width=32})
-  lv:insert_column(1, 'Name', {width=192})
-  lv:insert_column(2, 'Hint', {width=32})
+  lv:insert_column(1, 'Name', {width=184})
+  lv:insert_column(2, 'Hint', {width=40})
   lb.on_select = function(lb, i)
     show_ilt(buf, ilt[1+i], lv)
   end

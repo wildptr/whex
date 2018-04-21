@@ -144,7 +144,7 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle,
 	assert(hwnd);
 	if (wndclass != luatk_class) {
 		w->hwnd = hwnd;
-		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG) w);
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) w);
 		SendMessage(hwnd, WM_SETFONT,
 			    (WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);
 	}

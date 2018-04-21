@@ -34,11 +34,14 @@ end
 
 local function section_table(buf)
   local pe = buf:tree()
-  local w = Window{text='Section table'}
-  local lv = ListView{parent=w, pos={8,8}, size={256,128}}
-  lv:insert_column(0, 'Name')
-  lv:insert_column(1, 'RVA')
-  lv:insert_column(2, 'Virt. size')
+  local w = Window{text='Section table', size={640,480}}
+  local lv = ListView{parent=w, pos={0,0}}
+  w.on_resize = function(w, wid, hei)
+    lv:resize(wid, hei)
+  end
+  lv:insert_column(0, 'Name', {width=64})
+  lv:insert_column(1, 'RVA', {width=80})
+  lv:insert_column(2, 'Virt. size', {width=80})
   local i = 0
   local n = pe.pe_header.num_sections
   while i < n do

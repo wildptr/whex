@@ -52,6 +52,8 @@ local function section_table(buf)
   w:show()
 end
 
+-- import table
+
 local function parse_idt(buf, off)
   bp(buf, off)()
   local idt_entry = record(function()
@@ -122,6 +124,13 @@ local function get_u16(buf, pos)
   return buf:peek(pos) | buf:peek(pos+1) << 8
 end
 
+local function get_u32(buf, pos)
+  return buf:peek(pos)
+       | buf:peek(pos+1) << 8
+       | buf:peek(pos+2) << 16
+       | buf:peek(pos+3) << 24
+end
+
 local function show_ilt(buf, ilt, lv)
   lv:clear()
   local ident, hint
@@ -165,8 +174,8 @@ local function import_table(buf)
     lb:resize(halfwid, hei)
     lv:configure{pos={halfwid,0}, size={wid-halfwid, hei}}
   end
-  lv:insert_column(0, 'Ord.', {width=32})
-  lv:insert_column(1, 'Name', {width=184})
+  lv:insert_column(0, 'Ord.', {width=40})
+  lv:insert_column(1, 'Name', {width=176})
   lv:insert_column(2, 'Hint', {width=40})
   lb.on_select = function(lb, i)
     show_ilt(buf, ilt[1+i], lv)
@@ -183,6 +192,58 @@ local function import_table(buf)
   w:show()
 end
 
+-- export table
+
+local function parse_edt(buf, off)
+  bp(buf, off)()
+  local edt = record(function()
+    u32 'flags'
+    u32 'timestamp'
+    u16 'major_version'
+    u16 'minor_version'
+    u32 'name_rva'
+    u32 'ordinal_base'
+    u32 'num_addresses'
+    u32 'num_names'
+    u32 'address_table_rva'
+    u32 'name_table_rva'
+    u32 'ordinal_table_rva'
+  end)
+  return edt 'edt'
+end
+
+local function export_table(buf)
+  local pe = buf:tree()
+  local edata_off =
+    rva2off(buf, pe.pe_header.optional_header.data_directories[1].rva)
+  local edt = parse_edt(buf, edata_off)
+  local name_off = rva2off(buf, edt.name_table_rva)
+  local ord_off = rva2off(buf, edt.ordinal_table_rva)
+  local addr_table_off = rva2off(buf, edt.address_table_rva)
+  local exp_table = {}
+  for i=1,edt.num_names do
+    local name_rva = get_u32(buf, name_off)
+    name_off = name_off + 4
+    local ord = get_u16(buf, ord_off)
+    ord_off = ord_off + 2
+    local addr = get_u32(buf, addr_table_off + ord*4)
+    local name = getcstr(buf, rva2off(buf, name_rva))
+    exp_table[i] = {name, ord, string.format('0x%x', addr)}
+  end
+  local w = Window{text='Export table', size={640,480}}
+  local lv = ListView{parent=w, pos={0,0}}
+  w.on_resize = function(w, wid, hei)
+    lv:resize(wid, hei)
+  end
+  lv:insert_column(0, 'Name', {width=216})
+  lv:insert_column(1, 'Ord.', {width=40})
+  lv:insert_column(2, 'Add.', {width=128})
+  for i=1,#exp_table do
+    lv:insert_item(i-1, exp_table[i])
+  end
+  w:show()
+end
+
 return {
   name = 'PE',
   parser = require 'pe',
@@ -190,5 +251,6 @@ return {
     {info, 'PE Info...'},
     {section_table, 'Section table...'},
     {import_table, 'Import table...'},
+    {export_table, 'Export table...'},
   }
 }

@@ -1,4 +1,4 @@
-typedef struct {
+typedef struct ui {
 	Buffer *buffer;
 	HWND hwnd;
 	HWND monoedit;
@@ -25,4 +25,6 @@ typedef struct {
 	int npluginfunc;
 	TCHAR *plugin_name;
 	TCHAR **plugin_funcname;
+	void (*handle_char)(struct ui *, int);
+	uint8_t cursor_at_low_nibble;
 } UI;

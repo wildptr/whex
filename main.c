@@ -34,6 +34,8 @@
 enum {
 	IDC_STATUS_BAR = 0x100,
 	IDM_FILE_OPEN,
+	IDM_FILE_SAVE,
+	IDM_FILE_SAVEAS,
 	IDM_FILE_CLOSE,
 	IDM_TOOLS_LOAD_PLUGIN,
 	IDM_PLUGIN_0,
@@ -94,7 +96,8 @@ void move_up_page(UI *);
 void move_down_page(UI *);
 void goto_bol(UI *);
 void goto_eol(UI *);
-void handle_char(UI *, int);
+void handle_char_normal(UI *, int);
+void handle_char_replace(UI *, int);
 void init_font(UI *);
 void handle_wm_create(UI *, LPCREATESTRUCT);
 int open_file(UI *, TCHAR *);
@@ -119,6 +122,7 @@ void luaerrorbox(HWND hwnd, lua_State *L);
 int init_luatk(lua_State *L);
 void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
+int save_file(UI *);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -134,11 +138,14 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			int cy = y / ui->charheight;
 			SetFocus(hwnd);
 			if (cx >= 10 && cx < 10+N_COL*3 && cy < ui->nrow) {
+				bool lownib = (cx-10)%3;
 				cx = (cx-10)/3;
 				long long pos = ((ui->current_line + cy) << LOG2_N_COL) + cx;
 				if (pos < ui->buffer->file_size) {
 					ui->cursor_x = cx;
 					ui->cursor_y = cy;
+					ui->cursor_at_low_nibble = lownib;
+					ui->handle_char = handle_char_normal;
 					update_cursor_pos(ui);
 				}
 			}
@@ -169,6 +176,9 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			break;
 		case VK_END:
 			goto_eol(ui);
+			break;
+		case VK_ESCAPE:
+			ui->handle_char = handle_char_normal;
 			break;
 		}
 		return 0;
@@ -240,6 +250,8 @@ create_menu(void)
 
 	m = CreateMenu();
 	AppendMenu(m, MF_STRING, IDM_FILE_OPEN, TEXT("Open..."));
+	AppendMenu(m, MF_STRING, IDM_FILE_SAVE, TEXT("Save"));
+	AppendMenu(m, MF_STRING, IDM_FILE_SAVEAS, TEXT("Save As..."));
 	AppendMenu(m, MF_STRING, IDM_FILE_CLOSE, TEXT("Close"));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
 
@@ -346,7 +358,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	TCHAR **argv;
 	TCHAR *filepath;
 
-	//freopen("stdout.txt", "w", stdout);
+	AllocConsole();
+	freopen("CON", "w", stdout);
 
 	rinit(&rgn);
 	void *top = rgn.cur;
@@ -408,6 +421,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	ui->lua = L;
 	ui->buffer = b;
 	ui->instance = instance;
+	ui->handle_char = handle_char_normal;
 
 	return start_gui(show, ui, filepath);
 }
@@ -427,7 +441,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 				p[i] = ' ';
 			}
 		} else {
-			int block = buf_find_cache(b, addr);
+			uint8_t *data = buf_get_data(b, addr);
 			int base = addr & (CACHE_BLOCK_SIZE-1);
 			_wsprintf(p, TEXT("%08llx:"), addr);
 			p += 9;
@@ -440,7 +454,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			}
 			for (int j=0; j<end; j++) {
 				//*p++ = j && !(j&7) ? '-' : ' ';
-				_wsprintf(p, TEXT(" %02x"), b->cache[block].data[base|j]);
+				_wsprintf(p, TEXT(" %02x"), data[base|j]);
 				p += 3;
 			}
 			for (int j=end; j<N_COL; j++) {
@@ -450,7 +464,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			_wsprintf(p, TEXT("  "));
 			p += 2;
 			for (int j=0; j<end; j++) {
-				uint8_t c = b->cache[block].data[base|j];
+				uint8_t c = data[base|j];
 				*p++ = c < 0x20 || c > 0x7e ? '.' : c;
 			}
 			// fill the rest of the line with spaces
@@ -572,7 +586,7 @@ update_status_text(UI *ui, struct tree *leaf)
 	rfree(&rgn, top);
 }
 
-// should be invoked when cursor_pos is changed
+// should be invoked when position in file is changed
 void
 update_field_info(UI *ui)
 {
@@ -605,13 +619,9 @@ update_field_info(UI *ui)
 void
 update_cursor_pos(UI *ui)
 {
-	SendMessage(ui->monoedit,
-		    MED_WM_SET_CURSOR_POS,
-		    10+ui->cursor_x*3,
-		    ui->cursor_y);
+	int cx = 10+ui->cursor_x*3 + ui->cursor_at_low_nibble;
+	SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS, cx, ui->cursor_y);
 	update_field_info(ui);
-	SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS,
-		    10+ui->cursor_x*3, ui->cursor_y);
 }
 
 long long
@@ -716,6 +726,7 @@ move_left(UI *ui)
 {
 	if (ui->cursor_x) {
 		ui->cursor_x--;
+		ui->cursor_at_low_nibble = 0;
 		update_cursor_pos(ui);
 	}
 }
@@ -725,6 +736,7 @@ move_right(UI *ui)
 {
 	if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->buffer->file_size) {
 		ui->cursor_x++;
+		ui->cursor_at_low_nibble = 0;
 		update_cursor_pos(ui);
 	}
 }
@@ -787,7 +799,7 @@ move_down_page(UI *ui)
 }
 
 void
-handle_char(UI *ui, int c)
+handle_char_normal(UI *ui, int c)
 {
 	TCHAR *text;
 	long long addr;
@@ -862,6 +874,42 @@ handle_char(UI *ui, int c)
 	case 'w':
 		move_next_field(ui);
 		break;
+	case 'R':
+		ui->handle_char = handle_char_replace;
+		break;
+	}
+}
+
+void
+handle_char_replace(UI *ui, int c)
+{
+	uint8_t val;
+	if (c >= '0' && c <= '9') {
+		val = c-'0';
+	} else if (c >= 'a' && c <= 'f') {
+		val = 10+(c-'a');
+	} else if (c >= 'A' && c <= 'F') {
+		val = 10+(c-'A');
+	} else return;
+
+	int cy = ui->cursor_y;
+	int cx = ui->cursor_x;
+	long long pos = cursor_pos(ui);
+	uint8_t b = buf_getbyte(ui->buffer, pos);
+	if (ui->cursor_at_low_nibble) {
+		val |= b&0xf0;
+		buf_setbyte(ui->buffer, pos, val);
+		ui->med_buffer[N_COL_CHAR*cy + (11+cx*3)] = c|32;
+		ui->cursor_at_low_nibble = 0;
+		move_forward(ui);
+	} else {
+		val = val<<4 | (b&0x0f);
+		buf_setbyte(ui->buffer, pos, val);
+		ui->med_buffer[N_COL_CHAR*cy + (10+cx*3)] = c|32;
+		ui->cursor_at_low_nibble = 1;
+		SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS, 11+cx*3, cy);
+		/* TODO this is inefficient */
+		InvalidateRect(ui->monoedit, 0, FALSE);
 	}
 }
 
@@ -1016,7 +1064,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		}
 		return 0;
 	case WM_CHAR:
-		handle_char(ui, wparam);
+		ui->handle_char(ui, wparam);
 		return 0;
 	case WM_COMMAND:
 		idc = LOWORD(wparam);
@@ -1041,6 +1089,11 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				if (ui->filepath) close_file(ui);
 				open_file(ui, path);
 				update_ui(ui);
+			}
+			break;
+		case IDM_FILE_SAVE:
+			if (save_file(ui)) {
+				errorbox(hwnd, TEXT("Could not save file"));
 			}
 			break;
 		case IDM_FILE_CLOSE:
@@ -1093,7 +1146,7 @@ open_file(UI *ui, TCHAR *path)
 	HANDLE file;
 
 	file = CreateFile(path,
-			  GENERIC_READ,
+			  GENERIC_READ | GENERIC_WRITE,
 			  FILE_SHARE_READ,
 			  0, // lpSecurityAttributes
 			  OPEN_EXISTING,
@@ -1211,6 +1264,8 @@ void
 update_ui(UI *ui)
 {
 	static const int toggle_menus[] = {
+		IDM_FILE_SAVE,
+		IDM_FILE_SAVEAS,
 		IDM_FILE_CLOSE,
 		IDM_TOOLS_LOAD_PLUGIN,
 	};
@@ -1561,4 +1616,10 @@ det:
 	}
 	lua_pop(L, 1);
 	return ret;
+}
+
+int
+save_file(UI *ui)
+{
+	return buf_save(ui->buffer);
 }

@@ -29,9 +29,9 @@ return function(buf)
     u32 'e_lfanew'
   end)
 
-  local dos_exe = record(function(dot)
-    local doshdr = dos_header 'dos_header'
-    data( doshdr.e_lfanew - dot() ) 'data'
+  local dos_exe = record(function(self, dot)
+    dos_header 'dos_header'
+    data( self.dos_header.e_lfanew - dot() ) 'data'
   end)
 
   local data_directory = record(function()
@@ -117,12 +117,11 @@ return function(buf)
     end)
   end
 
-  local pe = record(function(dot)
+  local pe = record(function(self, dot)
     dos_exe 'dos_exe'
-    local pehdr = pe_header 'pe_header'
-    local num_sections = pehdr.num_sections
-    local section_headers = array(section_header, num_sections) 'section_headers'
-    foreach(section_headers, function(h)
+    pe_header 'pe_header'
+    array(section_header, self.pe_header.num_sections) 'section_headers'
+    foreach(self.section_headers, function(h)
       return section(h.raw_data_offset - dot(), h.raw_data_size)
     end) 'sections'
   end)

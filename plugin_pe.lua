@@ -63,33 +63,44 @@ local function parse_idt(buf, off)
     u32 'name_rva'
     u32 'iat_rva'
   end)
-  local idt = record(function()
+  local idt = record(function(self)
     local i=1
     while true do
-      local ent = idt_entry(i)
+      local ent = idt_entry()
       if ent.ilt_rva == 0 then break end
+      self[i] = ent
       i=i+1
     end
   end)
-  local ret = idt 'idt'
-  ret[#ret] = nil
-  return ret
+  return idt 'idt'
 end
 
-local function parse_ilt(buf, off)
+local function parse_ilt(buf, off, pe32plus)
   bp(buf, off)()
-  local ilt = record(function()
-    local i=1
-    while true do
-      -- TODO: PE32+
-      local ent = u32(i)
-      if ent == 0 then break end
-      i=i+1
-    end
-  end)
-  local ret = ilt 'ilt'
-  ret[#ret] = nil
-  return ret
+  local ilt
+  if pe32plus then
+    ilt = record(function(self)
+      local i=1
+      while true do
+        local entlo = u32()
+        local enthi = u32()
+        if entlo == 0 and enthi == 0 then break end
+        self[i] = enthi&0x80000000 | entlo&0x7fffffff
+        i=i+1
+      end
+    end)
+  else
+    ilt = record(function()
+      local i=1
+      while true do
+        local ent = u32()
+        if ent == 0 then break end
+        self[i] = ent
+        i=i+1
+      end
+    end)
+  end
+  return ilt 'ilt'
 end
 
 local function getcstr(buf, pos)
@@ -107,12 +118,12 @@ local function getpascalstr(buf, pos)
   return buf:peekstr(pos+1, n)
 end
 
-local function make_ilt(buf, idt)
+local function make_ilt(buf, idt, pe32plus)
   local ilt = {}
   for i,idtent in pairs(idt) do
     local ilt_off = rva2off(buf, idtent.ilt_rva)
     if ilt_off then
-      ilt[i] = parse_ilt(buf, ilt_off)
+      ilt[i] = parse_ilt(buf, ilt_off, pe32plus)
     else
       ilt[i] = {}
     end
@@ -166,7 +177,8 @@ local function import_table(buf)
   local idata_off =
     rva2off(buf, pe.pe_header.optional_header.data_directories[2].rva)
   local idt = parse_idt(buf, idata_off)
-  local ilt = make_ilt(buf, idt)
+  local pe32plus = pe.pe_header.optional_header.magic == 0x20b
+  local ilt = make_ilt(buf, idt, pe32plus)
   local lb = ListBox{parent=w, pos={0,0}}
   local lv = ListView{parent=w, pos={256,0}}
   w.on_resize = function(w, wid, hei)

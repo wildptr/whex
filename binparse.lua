@@ -17,7 +17,9 @@ local function Node(name, start, size, value)
   o.append_node = function(self, child)
     local index = #self.children+1
     self.children[index] = child
-    self.value[child.name] = child.value
+    if child.name ~= nil then
+      self.value[child.name] = child.value
+    end
   end
   return o
 end
@@ -150,7 +152,7 @@ return function(buf, pos)
       local t = Node(name, pos)
       local saved_current_node = current_node
       current_node = t
-      proc(function() return pos - t.start end)
+      proc(t.value, function() return pos - t.start end)
       current_node = saved_current_node
       t.size = pos - t.start
       if current_node then

@@ -154,12 +154,8 @@ end
 local function import_table(buf)
   local pe = buf:tree()
   local w = Window{text='Import table', size={640,480}}
-  local s = find_section(pe, '.idata')
-  if not s then
-    msgbox('.idata section not found')
-    return
-  end
-  idata_off = pe.section_headers[s].raw_data_offset
+  local idata_off =
+    rva2off(buf, pe.pe_header.optional_header.data_directories[2].rva)
   local idt = parse_idt(buf, idata_off)
   local ilt = make_ilt(buf, idt)
   local lb = ListBox{parent=w, pos={0,0}}

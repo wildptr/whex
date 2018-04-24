@@ -24,4 +24,5 @@ int buf_init(Buffer *, HANDLE);
 void buf_finalize(Buffer *);
 uint8_t *buf_get_data(Buffer *, long long);
 uint8_t buf_getbyte(Buffer *, long long);
+void buf_setbyte(Buffer *, long long, uint8_t);
 int buf_save(Buffer *);

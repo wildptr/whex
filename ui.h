@@ -26,5 +26,6 @@ typedef struct ui {
 	TCHAR *plugin_name;
 	TCHAR **plugin_funcname;
 	void (*handle_char)(struct ui *, int);
-	uint8_t cursor_at_low_nibble;
+	bool cursor_at_low_nibble;
+	bool readonly;
 } UI;

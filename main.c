@@ -42,6 +42,8 @@ enum {
 };
 
 Region rgn;
+TCHAR mydir[MAX_PATH];
+int mydir_len;
 
 char *strdup(const char *);
 void register_lua_globals(lua_State *L);
@@ -256,7 +258,7 @@ create_menu(void)
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
 
 	m = CreateMenu();
-	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load plugin..."));
+	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load Plugin..."));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
 	/* appearance will be overridden by update_ui() */
@@ -376,6 +378,13 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 		return 1;
 	}
 
+	HMODULE thisexe = GetModuleHandle(0);
+	GetModuleFileName(thisexe, mydir, NELEM(mydir));
+	mydir_len = lstrlen(mydir);
+	while (mydir_len >= 1 && mydir[mydir_len-1] != '\\')
+		mydir_len--;
+	mydir[mydir_len] = 0;
+
 	filepath = lstrdup(filepath);
 	rfree(&rgn, top);
 
@@ -410,12 +419,15 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	if (init_luatk(L)) return -1;
 
 	lua_pushstring(L, "ftdet");
-	if (luaL_dofile(L, "ftdet.lua")) {
+	TCHAR *ftdet_path = malloc((mydir_len + 11) * sizeof *ftdet_path);
+	_wsprintf(ftdet_path, TEXT("%sftdet.lua"), mydir);
+	if (luaL_dofile(L, ftdet_path)) {
 		luaerrorbox(0, L);
 		lua_pop(L, 2);
 	} else {
 		lua_rawset(L, LUA_REGISTRYINDEX);
 	}
+	free(ftdet_path);
 
 	UI *ui = ralloc0(&rgn, sizeof *ui);
 	ui->lua = L;
@@ -724,21 +736,25 @@ move_down(UI *ui)
 void
 move_left(UI *ui)
 {
-	if (ui->cursor_x) {
-		ui->cursor_x--;
+	if (ui->cursor_at_low_nibble) {
 		ui->cursor_at_low_nibble = 0;
-		update_cursor_pos(ui);
-	}
+	} else if (ui->cursor_x) {
+		ui->cursor_x--;
+		ui->cursor_at_low_nibble = 1;
+	} else return;
+	update_cursor_pos(ui);
 }
 
 void
 move_right(UI *ui)
 {
-	if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->buffer->file_size) {
+	if (!ui->cursor_at_low_nibble) {
+		ui->cursor_at_low_nibble = 1;
+	} else if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->buffer->file_size) {
 		ui->cursor_x++;
 		ui->cursor_at_low_nibble = 0;
-		update_cursor_pos(ui);
-	}
+	} else return;
+	update_cursor_pos(ui);
 }
 
 void
@@ -1127,9 +1143,10 @@ update_window_title(UI *ui)
 	if (ui->filepath) {
 		int pathlen = lstrlen(ui->filepath);
 		void *top = rgn.cur;
-		TCHAR *title = ralloc(&rgn, (pathlen+8) * sizeof *title);
-		memcpy(title, ui->filepath, pathlen);
-		memcpy(title+pathlen, TEXT(" - WHEX"), 8*sizeof(TCHAR));
+		TCHAR *title = ralloc(&rgn, (pathlen+13) * sizeof *title);
+		_wsprintf(title, TEXT("%s%s - WHEX"),
+			  ui->filepath,
+			  ui->readonly ? TEXT(" [RO]") : TEXT(""));
 		SetWindowText(ui->hwnd, title);
 		rfree(&rgn, top);
 	} else {
@@ -1144,14 +1161,18 @@ open_file(UI *ui, TCHAR *path)
 	TCHAR errtext[BUFSIZE];
 	Buffer *b = ui->buffer;
 	HANDLE file;
+	bool readonly = 0;
 
-	file = CreateFile(path,
-			  GENERIC_READ | GENERIC_WRITE,
-			  FILE_SHARE_READ,
+	file = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
 			  0, // lpSecurityAttributes
-			  OPEN_EXISTING,
-			  0,
-			  0);
+			  OPEN_EXISTING, 0, 0);
+	if (file == INVALID_HANDLE_VALUE &&
+	    GetLastError() == ERROR_SHARING_VIOLATION) {
+		readonly = 1;
+		file = CreateFile(path, GENERIC_READ, FILE_SHARE_READ,
+				  0, // lpSecurityAttributes
+				  OPEN_EXISTING, 0, 0);
+	}
 	if (file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, BUFSIZE, GetLastError());
 		errorbox(ui->hwnd, errtext);
@@ -1170,6 +1191,7 @@ open_file(UI *ui, TCHAR *path)
 	ui->med_buffer_nrow = ui->nrow;
 	SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0,
 		    (LPARAM) ui->med_buffer);
+	ui->readonly = readonly;
 
 	load_filetype_plugin(ui, path);
 
@@ -1264,7 +1286,6 @@ void
 update_ui(UI *ui)
 {
 	static const int toggle_menus[] = {
-		IDM_FILE_SAVE,
 		IDM_FILE_SAVEAS,
 		IDM_FILE_CLOSE,
 		IDM_TOOLS_LOAD_PLUGIN,
@@ -1280,10 +1301,13 @@ update_ui(UI *ui)
 		update_monoedit_buffer(ui, 0, ui->nrow);
 		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
+		mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
+		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);
 		mii.fState = MFS_ENABLED;
 	} else {
 		ShowWindow(ui->monoedit, SW_HIDE);
 		mii.fState = MFS_GRAYED;
+		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);
 	}
 	for (int i=0; i<NELEM(toggle_menus); i++) {
 		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
@@ -1299,9 +1323,11 @@ move_forward(UI *ui)
 	Buffer *b = ui->buffer;
 	if (cursor_pos(ui) < b->file_size) {
 		if (ui->cursor_x < N_COL-1) {
+			ui->cursor_at_low_nibble = 1;
 			move_right(ui);
 		} else {
 			ui->cursor_x = 0;
+			ui->cursor_at_low_nibble = 0;
 			move_down(ui);
 		}
 	}
@@ -1311,8 +1337,10 @@ void
 move_backward(UI *ui)
 {
 	if (cursor_pos(ui) > 0) {
+		ui->cursor_at_low_nibble = 0;
 		if (ui->cursor_x > 0) {
 			move_left(ui);
+			ui->cursor_at_low_nibble = 0;
 		} else {
 			ui->cursor_x = N_COL-1;
 			move_up(ui);
@@ -1607,8 +1635,8 @@ det:
 	}
 	int ret;
 	if (ft) {
-		char *buf = malloc(7+strlen(ft)+4+1);
-		_wsprintf(buf, "plugin_%s.lua", ft);
+		char *buf = malloc(mydir_len+8+strlen(ft)+4+1);
+		_wsprintf(buf, TEXT("%splugin_%s.lua"), mydir, ft);
 		ret = load_plugin(ui, buf);
 		free(buf);
 	} else {

@@ -110,7 +110,7 @@ bool parse_addr(TCHAR *, long long *);
 void errorbox(HWND, TCHAR *);
 void msgbox(HWND, const char *, ...);
 Tree *convert_tree(Region *, lua_State *);
-void load_plugin(UI *, const char *);
+int load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
 int api_buffer_peekstr(lua_State *L);
 int api_buffer_tree(lua_State *L);
@@ -118,6 +118,7 @@ void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
 int init_luatk(lua_State *L);
 void update_plugin_menu(UI *ui);
+int load_filetype_plugin(UI *, const TCHAR *);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -394,6 +395,14 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setglobal(L, "whex");
 
 	if (init_luatk(L)) return -1;
+
+	lua_pushstring(L, "ftdet");
+	if (luaL_dofile(L, "ftdet.lua")) {
+		luaerrorbox(0, L);
+		lua_pop(L, 2);
+	} else {
+		lua_rawset(L, LUA_REGISTRYINDEX);
+	}
 
 	UI *ui = ralloc0(&rgn, sizeof *ui);
 	ui->lua = L;
@@ -1108,6 +1117,9 @@ open_file(UI *ui, TCHAR *path)
 	ui->med_buffer_nrow = ui->nrow;
 	SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0,
 		    (LPARAM) ui->med_buffer);
+
+	load_filetype_plugin(ui, path);
+
 	return 0;
 }
 
@@ -1405,14 +1417,14 @@ getluaobj(lua_State *L, const char *name)
 	lua_remove(L, -2);
 }
 
-void
+int
 load_plugin(UI *ui, const char *path)
 {
 	lua_State *L = ui->lua;
 
 	if (luaL_dofile(L, path)) {
 		luaerrorbox(ui->hwnd, L);
-		return;
+		return -1;
 	}
 
 	/* plugin information is stored as lua table at top of stack */
@@ -1425,13 +1437,13 @@ load_plugin(UI *ui, const char *path)
 	getluaobj(L, "buffer");
 	if (lua_pcall(L, 1, 1, 0)) {
 		luaerrorbox(ui->hwnd, L);
-		return;
+		return -1;
 	}
 
 	/* Get the internal node */
 	if (lua_pcall(L, 0, 1, 0)) {
 		luaerrorbox(ui->hwnd, L);
-		return;
+		return -1;
 	}
 
 	Buffer *b = ui->buffer;
@@ -1485,6 +1497,7 @@ load_plugin(UI *ui, const char *path)
 	lua_pop(L, 3);
 
 	update_plugin_menu(ui);
+	return 0;
 }
 
 void
@@ -1506,4 +1519,46 @@ update_plugin_menu(UI *ui)
 	}
 
 	DrawMenuBar(ui->hwnd);
+}
+
+int
+load_filetype_plugin(UI *ui, const TCHAR *path)
+{
+	int i = lstrlen(path);
+	while (i >= 1) {
+		switch (path[i-1]) {
+		case '/':
+		case '\\':
+			return 0;
+		case '.':
+			goto det;
+		}
+		i--;
+	}
+	return 0;
+	lua_State *L;
+det:
+	L = ui->lua;
+	lua_pushstring(L, "ftdet");
+	lua_rawget(L, LUA_REGISTRYINDEX);
+	lua_pushstring(L, path+i);
+	if (lua_pcall(L, 1, 1, 0)) {
+		// error
+		return -1;
+	}
+	const char *ft = 0;
+	if (lua_isstring(L, -1)) {
+		ft = luaL_checkstring(L, -1);
+	}
+	int ret;
+	if (ft) {
+		char *buf = malloc(7+strlen(ft)+4+1);
+		_wsprintf(buf, "plugin_%s.lua", ft);
+		ret = load_plugin(ui, buf);
+		free(buf);
+	} else {
+		ret = -1;
+	}
+	lua_pop(L, 1);
+	return ret;
 }

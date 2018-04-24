@@ -161,8 +161,9 @@ local function import_table(buf)
   local lb = ListBox{parent=w, pos={0,0}}
   local lv = ListView{parent=w, pos={256,0}}
   w.on_resize = function(w, wid, hei)
-    lb:resize(256, hei)
-    lv:resize(wid-256, hei)
+    local halfwid = wid//2
+    lb:resize(halfwid, hei)
+    lv:configure{pos={halfwid,0}, size={wid-halfwid, hei}}
   end
   lv:insert_column(0, 'Ord.', {width=32})
   lv:insert_column(1, 'Name', {width=184})

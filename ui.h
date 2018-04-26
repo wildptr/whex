@@ -28,4 +28,5 @@ typedef struct ui {
 	void (*handle_char)(struct ui *, int);
 	bool cursor_at_low_nibble;
 	bool readonly;
+	HWND treeview;
 } UI;

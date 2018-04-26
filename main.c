@@ -125,6 +125,7 @@ int init_luatk(lua_State *L);
 void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
 int save_file(UI *);
+void populate_treeview(UI *);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -274,9 +275,6 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 	InitCommonControls();
 	if (!med_register_class()) return 1;
 	if (!register_wndclass()) return 1;
-	int ret = open_file(ui, filepath);
-	free(filepath);
-	if (ret < 0) return 1;
 	init_font(ui);
 	//RECT rect = { 0, 0, ui->charwidth*N_COL_CHAR, ui->charheight*(INITIAL_N_ROW+1) };
 	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -293,6 +291,8 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 				 ui->instance,
 				 ui); // window-creation data
 	ShowWindow(hwnd, show);
+	open_file(ui, filepath);
+	free(filepath);
 	update_ui(ui);
 	MSG msg;
 	while (GetMessage(&msg, 0, 0, 0)) {
@@ -964,14 +964,8 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	monoedit = CreateWindow(TEXT("MonoEdit"),
 				TEXT(""),
 				WS_CHILD | WS_VISIBLE,
-				CW_USEDEFAULT,
-				CW_USEDEFAULT,
-				CW_USEDEFAULT,
-				CW_USEDEFAULT,
-				hwnd,
-				0,
-				instance,
-				0);
+				0, 0, 0, 0,
+				hwnd, 0, instance, 0);
 	ui->monoedit = monoedit;
 	ui->nrow = INITIAL_N_ROW;
 	ui->med_buffer = malloc(N_COL_CHAR*INITIAL_N_ROW*sizeof(TCHAR));
@@ -987,6 +981,16 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	ui->med_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
 	SetFocus(monoedit);
 	update_cursor_pos(ui);
+
+	/* create tree view */
+	HWND treeview;
+	treeview = CreateWindow(WC_TREEVIEW,
+				TEXT(""),
+				WS_CHILD | WS_VISIBLE |
+				TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS,
+				0, 0, 0, 0,
+				hwnd, 0, instance, 0);
+	ui->treeview = treeview;
 
 	// create status bar
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
@@ -1076,7 +1080,12 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			GetWindowRect(ui->status_bar, &status_bar_rect);
 			// translate top-left from screen to client
 			ScreenToClient(hwnd, (LPPOINT) &status_bar_rect);
-			resize_monoedit(ui, wid, status_bar_rect.top);
+			int med_wid = 80*ui->charwidth;
+			int med_hei = status_bar_rect.top;
+			resize_monoedit(ui, med_wid, med_hei);
+			SetWindowPos(ui->treeview, 0,
+				     med_wid, 0, wid - med_wid, med_hei,
+				     SWP_NOZORDER);
 		}
 		return 0;
 	case WM_CHAR:
@@ -1579,6 +1588,7 @@ load_plugin(UI *ui, const char *path)
 	}
 	lua_pop(L, 3);
 
+	populate_treeview(ui);
 	update_plugin_menu(ui);
 	return 0;
 }
@@ -1650,4 +1660,26 @@ int
 save_file(UI *ui)
 {
 	return buf_save(ui->buffer);
+}
+
+static void
+addtotree(HWND treeview, HTREEITEM parent, Tree *tree)
+{
+	TVINSERTSTRUCT tvins;
+	tvins.hParent = parent;
+	tvins.hInsertAfter = TVI_LAST;
+	tvins.item.mask = TVIF_TEXT;
+	tvins.item.pszText = tree->name;
+	HTREEITEM item = (HTREEITEM)
+		SendMessage(treeview, TVM_INSERTITEM,
+			    0, (LPARAM) &tvins);
+	for (int i=0; i<tree->n_child; i++)
+		addtotree(treeview, item, tree->children[i]);
+}
+
+void
+populate_treeview(UI *ui)
+{
+	Tree *tree = ui->buffer->tree;
+	addtotree(ui->treeview, 0, tree);
 }

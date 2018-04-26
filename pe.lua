@@ -1,8 +1,27 @@
 local bp = require('binparse')
 
+local function rva2off(pe, rva)
+  for i,s in pairs(pe.section_headers) do
+    local voff = rva - s.virtual_address
+    if voff >= 0 and voff < s.virtual_size then
+      return s.raw_data_offset + voff
+    end
+  end
+  return -- not found
+end
+
+local function format_rva(pe, rva)
+  local off = rva2off(pe, rva)
+  if off then
+    return string.format('%x (%x)', rva, off)
+  end
+  return string.format('%x (not in file)', rva)
+end
+
 return function(buf)
 
   bp(buf)()
+  local rva = newtype(u32, {name='rva', format=format_rva})
 
   local dos_header = record(function()
     local magic = u16 'e_magic'
@@ -35,7 +54,7 @@ return function(buf)
   end)
 
   local data_directory = record(function()
-    u32 'rva'
+    rva 'rva'
     u32 'size'
   end)
 
@@ -100,7 +119,7 @@ return function(buf)
   local section_header = record(function()
     ascii(8) 'name'
     u32 'virtual_size'
-    u32 'virtual_address'
+    rva 'virtual_address'
     u32 'raw_data_size'
     u32 'raw_data_offset'
     u32 'reloc_offset'

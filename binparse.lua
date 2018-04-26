@@ -164,6 +164,16 @@ return function(buf, pos)
     end
   end
 
+  local function newtype(proc, ty)
+    whex.customtype[ty.name] = ty
+    return function(name)
+      local value = proc(name)
+      local children = current_node.children
+      children[#children].type = ty.name
+      return value
+    end
+  end
+
   local table =  {
     u8      = u8,
     u16     = u16,
@@ -174,7 +184,7 @@ return function(buf, pos)
     data    = data,
     foreach = foreach,
     record  = record,
-    print_node = print_node
+    newtype = newtype
   }
 
   setmetatable(table, {__call = function(self)

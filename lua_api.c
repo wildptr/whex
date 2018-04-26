@@ -80,16 +80,28 @@ convert_tree(Region *r, lua_State *L)
 	tree->len = lua_tointeger(L, -1);
 	lua_pop(L, 1);
 
+	tree->intvalue = 0;
 	lua_getfield(L, -1, "value");
 	switch (lua_type(L, -1)) {
 	case LUA_TNUMBER:
 		tree->type = F_UINT;
+		tree->intvalue = lua_tointeger(L, -1);
 		break;
 	case LUA_TSTRING:
 		tree->type = F_ASCII;
 		break;
 	default:
 		tree->type = F_RAW;
+	}
+	lua_pop(L, 1);
+
+	lua_getfield(L, -1, "type");
+	if (!lua_isnil(L, -1)) {
+		const char *typename = luaL_checkstring(L, -1);
+		tree->custom_type_name = strdup(typename);
+		tree->type = F_CUSTOM;
+	} else {
+		tree->custom_type_name = 0;
 	}
 	lua_pop(L, 1);
 
@@ -126,7 +138,7 @@ api_buffer_tree(lua_State *L)
 		return 0;
 	}
 	lua_getuservalue(L, 1);
-	lua_pushstring(L, "value");
-	lua_rawget(L, -2);
+	lua_getfield(L, -1, "value");
+	lua_remove(L, -2);
 	return 1;
 }

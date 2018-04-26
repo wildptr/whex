@@ -82,7 +82,7 @@ static int start_gui(int, UI *, TCHAR *);
 void update_monoedit_buffer(UI *, int, int);
 void set_current_line(UI *, long long);
 static void update_window_title(UI *ui);
-void update_status_text(UI *, struct tree *);
+void update_status_text(UI *, Tree *);
 void update_field_info(UI *);
 void update_cursor_pos(UI *);
 long long cursor_pos(UI *);
@@ -126,6 +126,8 @@ void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
 int save_file(UI *);
 void populate_treeview(UI *);
+int format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR
+		      **pvaluerepr);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -290,9 +292,9 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 				 menu,
 				 ui->instance,
 				 ui); // window-creation data
-	ShowWindow(hwnd, show);
 	open_file(ui, filepath);
 	free(filepath);
+	ShowWindow(hwnd, show);
 	update_ui(ui);
 	MSG msg;
 	while (GetMessage(&msg, 0, 0, 0)) {
@@ -414,6 +416,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_pushstring(L, "plugin");
 	lua_newtable(L);
 	lua_rawset(L, -3);
+	lua_newtable(L);
+	lua_setfield(L, -2, "customtype");
 	lua_setglobal(L, "whex");
 
 	if (init_luatk(L)) return -1;
@@ -454,7 +458,6 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			}
 		} else {
 			uint8_t *data = buf_get_data(b, addr);
-			int base = addr & (CACHE_BLOCK_SIZE-1);
 			_wsprintf(p, TEXT("%08llx:"), addr);
 			p += 9;
 			int end = 0;
@@ -466,7 +469,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			}
 			for (int j=0; j<end; j++) {
 				//*p++ = j && !(j&7) ? '-' : ' ';
-				_wsprintf(p, TEXT(" %02x"), data[base|j]);
+				_wsprintf(p, TEXT(" %02x"), data[j]);
 				p += 3;
 			}
 			for (int j=end; j<N_COL; j++) {
@@ -476,7 +479,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			_wsprintf(p, TEXT("  "));
 			p += 2;
 			for (int j=0; j<end; j++) {
-				uint8_t c = data[base|j];
+				uint8_t c = data[j];
 				*p++ = c < 0x20 || c > 0x7e ? '.' : c;
 			}
 			// fill the rest of the line with spaces
@@ -501,101 +504,29 @@ set_current_line(UI *ui, long long line)
 }
 
 void
-update_status_text(UI *ui, struct tree *leaf)
+update_status_text(UI *ui, Tree *leaf)
 {
-	Buffer *b = ui->buffer;
-	const TCHAR *type_name = TEXT("unknown");
-	TCHAR value_buf[80];
-	value_buf[0] = 0;
+	TCHAR buf[17];
 	char *path = 0;
-	TCHAR *tpath = 0;
-	void *top = rgn.cur;
+	HWND sb = ui->status_bar;
+	long long pos = cursor_pos(ui);
+	_wsprintf(buf, TEXT("%llx"), pos);
+	SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
 	if (leaf) {
-		switch (leaf->type) {
-			TCHAR *p;
-		case F_RAW:
-			type_name = TEXT("raw");
-			break;
-		case F_UINT:
-			switch (leaf->len) {
-				int ival;
-				int ival_hi;
-				long long llval;
-			case 1:
-				type_name = TEXT("uint8");
-				ival = buf_getbyte(b, leaf->start);
-				_wsprintf(value_buf, TEXT("%u (%02x)"), ival, ival);
-				break;
-			case 2:
-				type_name = TEXT("uint16");
-				ival = buf_getbyte(b, leaf->start) |
-					buf_getbyte(b, leaf->start + 1) << 8;
-				_wsprintf(value_buf, TEXT("%u (%04x)"), ival, ival);
-				break;
-			case 4:
-				type_name = TEXT("uint32");
-				ival = buf_getbyte(b, leaf->start)
-					| buf_getbyte(b, leaf->start + 1) << 8
-					| buf_getbyte(b, leaf->start + 2) << 16
-					| buf_getbyte(b, leaf->start + 3) << 24;
-				_wsprintf(value_buf, TEXT("%u (%08x)"), ival, ival);
-				break;
-			case 8:
-				type_name = TEXT("uint64");
-				ival = buf_getbyte(b, leaf->start)
-					| buf_getbyte(b, leaf->start + 1) << 8
-					| buf_getbyte(b, leaf->start + 2) << 16
-					| buf_getbyte(b, leaf->start + 3) << 24;
-				ival_hi = buf_getbyte(b, leaf->start + 4)
-					| buf_getbyte(b, leaf->start + 5) << 8
-					| buf_getbyte(b, leaf->start + 6) << 16
-					| buf_getbyte(b, leaf->start + 7) << 24;
-				llval = ((long long) ival_hi) << 32 | ival;
-				_wsprintf(value_buf, TEXT("%llu (%016llx)"), llval, llval);
-				break;
-			default:
-				type_name = TEXT("uint");
-			}
-			break;
-		case F_INT:
-			// TODO
-			type_name = TEXT("int");
-			break;
-		case F_ASCII:
-			type_name = TEXT("ascii");
-			p = value_buf;
-			int n = leaf->len;
-			if (n > 16) n = 16;
-			*p++ = '"';
-			for (int i=0; i<n; i++) {
-				uint8_t c = buf_getbyte(b, leaf->start + i);
-				if (c >= 0x20 && c < 0x7f) {
-					*p++ = c;
-				} else {
-					_wsprintf(p, TEXT("\\x%02x"), c);
-					p += 4;
-				}
-			}
-			*p++ = '"';
-			if (n < leaf->len) {
-				_wsprintf(p, TEXT("..."));
-			}
-			break;
-		}
+		TCHAR *typename;
+		TCHAR *valuerepr;
+		void *top = rgn.cur;
+		format_leaf_value(ui, leaf, &typename, &valuerepr);
 		path = tree_path(&rgn, leaf);
-#ifdef UNICODE
-		tpath = mbcs_to_utf16_r(&rgn, path);
-#else
-		tpath = path;
-#endif
+		SendMessage(sb, SB_SETTEXT, 1, (LPARAM) typename);
+		SendMessage(sb, SB_SETTEXT, 2, (LPARAM) valuerepr);
+		SendMessage(sb, SB_SETTEXT, 3, (LPARAM) path);
+		rfree(&rgn, top);
+	} else {
+		SendMessage(sb, SB_SETTEXT, 1, 0);
+		SendMessage(sb, SB_SETTEXT, 2, 0);
+		SendMessage(sb, SB_SETTEXT, 3, 0);
 	}
-	TCHAR cursor_pos_buf[17];
-	_wsprintf(cursor_pos_buf, TEXT("%llx"), cursor_pos(ui));
-	SendMessage(ui->status_bar, SB_SETTEXT, 0, (LPARAM) cursor_pos_buf);
-	SendMessage(ui->status_bar, SB_SETTEXT, 1, (LPARAM) type_name);
-	SendMessage(ui->status_bar, SB_SETTEXT, 2, (LPARAM) value_buf);
-	SendMessage(ui->status_bar, SB_SETTEXT, 3, (LPARAM) tpath);
-	rfree(&rgn, top);
 }
 
 // should be invoked when position in file is changed
@@ -605,7 +536,7 @@ update_field_info(UI *ui)
 	if (ui->filepath) {
 		Tree *tree = ui->buffer->tree;
 		if (tree) {
-			struct tree *leaf = tree_lookup(tree, cursor_pos(ui));
+			Tree *leaf = tree_lookup(tree, cursor_pos(ui));
 			if (leaf) {
 				ui->hl_start = leaf->start;
 				ui->hl_len = leaf->len;
@@ -1363,7 +1294,7 @@ move_next_field(UI *ui)
 	Buffer *b = ui->buffer;
 	if (b->tree) {
 		long long cur = cursor_pos(ui);
-		struct tree *leaf = tree_lookup(b->tree, cur);
+		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			goto_address(ui, leaf->start + leaf->len);
 		}
@@ -1376,9 +1307,9 @@ move_prev_field(UI *ui)
 	Buffer *b = ui->buffer;
 	if (b->tree) {
 		long long cur = cursor_pos(ui);
-		struct tree *leaf = tree_lookup(b->tree, cur);
+		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
-			struct tree *prev_leaf = tree_lookup(b->tree, cur-1);
+			Tree *prev_leaf = tree_lookup(b->tree, cur-1);
 			if (prev_leaf) {
 				goto_address(ui, prev_leaf->start);
 			}
@@ -1504,8 +1435,7 @@ void
 getluaobj(lua_State *L, const char *name)
 {
 	lua_getglobal(L, "whex");
-	lua_pushstring(L, name);
-	lua_rawget(L, -2);
+	lua_getfield(L, -1, name);
 	lua_remove(L, -2);
 }
 
@@ -1682,4 +1612,113 @@ populate_treeview(UI *ui)
 {
 	Tree *tree = ui->buffer->tree;
 	addtotree(ui->treeview, 0, tree);
+}
+
+int
+format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
+{
+	*ptypename = 0;
+	*pvaluerepr = 0;
+	TCHAR *buf;
+
+	switch (t->type) {
+		lua_State *L;
+		int ival;
+	case F_RAW:
+		*ptypename = TEXT("raw");
+		return 0;
+	case F_UINT:
+		ival = t->intvalue;
+		buf = ralloc(&rgn, 24 * sizeof *buf);
+		switch (t->len) {
+		case 1:
+			*ptypename = TEXT("uint8");
+			*pvaluerepr = buf;
+			return _wsprintf(buf, TEXT("%u (%02x)"), ival, ival);
+		case 2:
+			*ptypename = TEXT("uint16");
+			*pvaluerepr = buf;
+			return _wsprintf(buf, TEXT("%u (%04x)"), ival, ival);
+		case 4:
+			*ptypename = TEXT("uint32");
+			*pvaluerepr = buf;
+			return _wsprintf(buf, TEXT("%u (%08x)"), ival, ival);
+		}
+		*ptypename = TEXT("uint");
+		return 0;
+	case F_INT:
+		ival = t->intvalue;
+		buf = ralloc(&rgn, 12 * sizeof *buf);
+		switch (t->len) {
+		case 1:
+			*ptypename = TEXT("int8");
+			*pvaluerepr = buf;
+			return _wsprintf(buf, TEXT("%d"), ival);
+		case 2:
+			*ptypename = TEXT("int16");
+			*pvaluerepr = buf;
+			return _wsprintf(buf, TEXT("%d"), ival);
+		case 4:
+			*ptypename = TEXT("int32");
+			*pvaluerepr = buf;
+			return _wsprintf(buf, TEXT("%d"), ival);
+		}
+		*ptypename = TEXT("int");
+		return 0;
+	case F_ASCII:
+		*ptypename = TEXT("ascii");
+#if 0
+		p = value_buf;
+		int n = t->len;
+		if (n > 16) n = 16;
+		*p++ = '"';
+		for (int i=0; i<n; i++) {
+			uint8_t c = buf_getbyte(b, t->start + i);
+			if (c >= 0x20 && c < 0x7f) {
+				*p++ = c;
+			} else {
+				_wsprintf(p, TEXT("\\x%02x"), c);
+				p += 4;
+			}
+		}
+		*p++ = '"';
+		if (n < t->len) {
+			_wsprintf(p, TEXT("..."));
+		}
+#endif
+		/* TODO */
+		return 0;
+	case F_CUSTOM:
+		L = ui->lua;
+		*ptypename = t->custom_type_name;
+		getluaobj(L, "customtype");
+		assert(!lua_isnil(L, -1));
+		lua_getfield(L, -1, t->custom_type_name);
+		assert(!lua_isnil(L, -1));
+		lua_getfield(L, -1, "format");
+		assert(!lua_isnil(L, -1));
+		getluaobj(L, "buffer");
+		lua_getuservalue(L, -1);
+		lua_remove(L, -2);
+		lua_getfield(L, -1, "value");
+		lua_remove(L, -2);
+		lua_pushinteger(L, t->intvalue);
+		int vrlen = 0;
+		if (lua_pcall(L, 2, 1, 0)) {
+			puts(lua_tostring(L, -1));
+		} else {
+			size_t n;
+			vrlen = n;
+			const char *vr = luaL_tolstring(L, -1, &n);
+			n += 1;
+			char *vrdup = ralloc(&rgn, n);
+			memcpy(vrdup, vr, n);
+			*pvaluerepr = vrdup;
+			vrlen = n;
+		}
+		lua_pop(L, 3);
+		return vrlen;
+	}
+
+	return 0;
 }

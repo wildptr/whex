@@ -394,44 +394,38 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	luaL_openlibs(L);
 
 	luaL_newmetatable(L, "buffer");
-	lua_pushstring(L, "__index");
-	lua_pushvalue(L, -2);
-	lua_rawset(L, -3);
-	lua_pushstring(L, "peek");
+	lua_pushvalue(L, -1);
+	lua_setfield(L, -2, "__index");
 	lua_pushcfunction(L, api_buffer_peek);
-	lua_rawset(L, -3);
-	lua_pushstring(L, "peekstr");
+	lua_setfield(L, -2, "peek");
 	lua_pushcfunction(L, api_buffer_peekstr);
-	lua_rawset(L, -3);
-	lua_pushstring(L, "tree");
+	lua_setfield(L, -2, "peekstr");
 	lua_pushcfunction(L, api_buffer_tree);
-	lua_rawset(L, -3);
+	lua_setfield(L, -2, "tree");
 	lua_pop(L, 1);
-
-	lua_newtable(L);
-	lua_pushstring(L, "buffer");
-	Buffer *b = lua_newuserdata(L, sizeof *b);
-	luaL_setmetatable(L, "buffer");
-	lua_rawset(L, -3);
-	lua_pushstring(L, "plugin");
-	lua_newtable(L);
-	lua_rawset(L, -3);
-	lua_newtable(L);
-	lua_setfield(L, -2, "customtype");
-	lua_setglobal(L, "whex");
 
 	if (init_luatk(L)) return -1;
 
-	lua_pushstring(L, "ftdet");
+	lua_newtable(L); /* global 'whex' */
+	Buffer *b = lua_newuserdata(L, sizeof *b);
+	luaL_setmetatable(L, "buffer");
+	lua_setfield(L, -2, "buffer");
+	lua_newtable(L);
+	lua_setfield(L, -2, "plugin");
+	lua_newtable(L);
+	lua_setfield(L, -2, "customtype");
+
 	TCHAR *ftdet_path = malloc((mydir_len + 11) * sizeof *ftdet_path);
 	_wsprintf(ftdet_path, TEXT("%sftdet.lua"), mydir);
 	if (luaL_dofile(L, ftdet_path)) {
 		luaerrorbox(0, L);
-		lua_pop(L, 2);
+		lua_pop(L, 1);
 	} else {
-		lua_rawset(L, LUA_REGISTRYINDEX);
+		lua_setfield(L, -2, "ftdet");
 	}
 	free(ftdet_path);
+
+	lua_setglobal(L, "whex");
 
 	UI *ui = ralloc0(&rgn, sizeof *ui);
 	ui->lua = L;
@@ -1029,7 +1023,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			if (pluginfunc >= 0 && pluginfunc < ui->npluginfunc) {
 				lua_State *L = ui->lua;
 				getluaobj(L, "plugin");
-				lua_rawgeti(L, -1, 1+pluginfunc);
+				lua_geti(L, -1, 1+pluginfunc);
 				getluaobj(L, "buffer");
 				if (lua_pcall(L, 1, 0, 0)) {
 					luaerrorbox(hwnd, L);
@@ -1452,9 +1446,7 @@ load_plugin(UI *ui, const char *path)
 	/* plugin information is stored as lua table at top of stack */
 	luaL_checktype(L, -1, LUA_TTABLE);
 
-	//getluaobj(L, "buffer");
-	lua_pushstring(L, "parser");
-	lua_rawget(L, -2);
+	lua_getfield(L, -1, "parser"); /* plugin.parser */
 	luaL_checktype(L, -1, LUA_TFUNCTION);
 	getluaobj(L, "buffer");
 	if (lua_pcall(L, 1, 1, 0)) {
@@ -1479,8 +1471,7 @@ load_plugin(UI *ui, const char *path)
 	}
 	b->tree = tree;
 
-	lua_pushstring(L, "name");
-	lua_rawget(L, -2); /* plugin.name */
+	lua_getfield(L, -1, "name"); /* plugin.name */
 	const char *plugin_name = luaL_checkstring(L, -1);
 	TCHAR *tplugin_name;
 #ifdef UNICODE
@@ -1562,8 +1553,7 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
 	lua_State *L;
 det:
 	L = ui->lua;
-	lua_pushstring(L, "ftdet");
-	lua_rawget(L, LUA_REGISTRYINDEX);
+	getluaobj(L, "ftdet");
 	lua_pushstring(L, path+i);
 	if (lua_pcall(L, 1, 1, 0)) {
 		// error

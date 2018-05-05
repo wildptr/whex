@@ -90,7 +90,7 @@ local function parse_ilt(buf, off, pe32plus)
       end
     end)
   else
-    ilt = record(function()
+    ilt = record(function(self)
       local i=1
       while true do
         local ent = u32()

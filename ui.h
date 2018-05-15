@@ -25,8 +25,12 @@ typedef struct ui {
 	int npluginfunc;
 	TCHAR *plugin_name;
 	TCHAR **plugin_funcname;
-	void (*handle_char)(struct ui *, int);
+	uint8_t mode;
 	bool cursor_at_low_nibble;
 	bool readonly;
 	HWND treeview;
+	long long replace_start;
+	uint8_t *replace_buf;
+	int replace_buf_cap;
+	int replace_buf_len;
 } UI;

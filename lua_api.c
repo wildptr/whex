@@ -29,6 +29,34 @@ api_buffer_peek(lua_State *L)
 }
 
 int
+api_buffer_peeku16(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	long long addr = luaL_checkinteger(L, 2);
+	union {
+		uint16_t i;
+		uint8_t b[2];
+	} u;
+	buf_read(b, u.b, addr, 2);
+	lua_pushinteger(L, u.i);
+	return 1;
+}
+
+int
+api_buffer_peeku32(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	long long addr = luaL_checkinteger(L, 2);
+	union {
+		uint32_t i;
+		uint8_t b[4];
+	} u;
+	buf_read(b, u.b, addr, 4);
+	lua_pushinteger(L, u.i);
+	return 1;
+}
+
+int
 api_buffer_peekstr(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");

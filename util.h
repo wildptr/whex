@@ -37,3 +37,5 @@ typedef struct list {
 
 List *cons(Region *, void *data, List *next);
 int len(List *);
+
+#define NELEM(x) (sizeof (x)/sizeof *(x))

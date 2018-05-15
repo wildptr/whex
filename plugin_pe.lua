@@ -131,17 +131,6 @@ local function make_ilt(buf, idt, pe32plus)
   return ilt
 end
 
-local function get_u16(buf, pos)
-  return buf:peek(pos) | buf:peek(pos+1) << 8
-end
-
-local function get_u32(buf, pos)
-  return buf:peek(pos)
-       | buf:peek(pos+1) << 8
-       | buf:peek(pos+2) << 16
-       | buf:peek(pos+3) << 24
-end
-
 local function show_ilt(buf, ilt, lv)
   lv:clear()
   local ident, hint
@@ -151,7 +140,7 @@ local function show_ilt(buf, ilt, lv)
       local rva = ent & 0x7fffffff
       local off = rva2off(buf, rva)
       if off then
-        hint = get_u16(buf, off)
+        hint = buf:peeku16(off)
         ident = getcstr(buf, off+2)
       end
     else
@@ -234,11 +223,11 @@ local function export_table(buf)
   local addr_table_off = rva2off(buf, edt.address_table_rva)
   local exp_table = {}
   for i=1,edt.num_names do
-    local name_rva = get_u32(buf, name_off)
+    local name_rva = buf:peeku32(name_off)
     name_off = name_off + 4
-    local ord = get_u16(buf, ord_off)
+    local ord = buf:peeku16(ord_off)
     ord_off = ord_off + 2
-    local addr = get_u32(buf, addr_table_off + ord*4)
+    local addr = buf:peeku32(addr_table_off + ord*4)
     local name = getcstr(buf, rva2off(buf, name_rva))
     exp_table[i] = {name, ord, string.format('0x%x', addr)}
   end

@@ -64,8 +64,7 @@ return function(buf, pos)
   end
 
   local function u16(name)
-    value = buf:peek(pos)
-          | buf:peek(pos+1) << 8
+    value = buf:peeku16(pos)
     local t = Node(name, pos, 2, value)
     current_node:append_node(t)
     pos = pos+2
@@ -73,10 +72,7 @@ return function(buf, pos)
   end
 
   local function u32(name)
-    value = buf:peek(pos)
-          | buf:peek(pos+1) << 8
-          | buf:peek(pos+2) << 16
-          | buf:peek(pos+3) << 24
+    value = buf:peeku32(pos)
     local t = Node(name, pos, 4, value)
     current_node:append_node(t)
     pos = pos+4

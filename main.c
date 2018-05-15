@@ -29,8 +29,6 @@
 
 #define BUFSIZE 512
 
-#define NELEM(x) (sizeof(x)/sizeof(*x))
-
 enum {
 	IDC_STATUS_BAR = 0x100,
 	IDM_FILE_OPEN,
@@ -39,6 +37,11 @@ enum {
 	IDM_FILE_CLOSE,
 	IDM_TOOLS_LOAD_PLUGIN,
 	IDM_PLUGIN_0,
+};
+
+enum {
+	MODE_NORMAL,
+	MODE_REPLACE,
 };
 
 Region rgn;
@@ -76,7 +79,7 @@ typedef struct {
 LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
 static ATOM register_wndclass(void);
-static void format_error_code(TCHAR *, size_t, DWORD);
+void format_error_code(TCHAR *, size_t, DWORD);
 int file_chooser_dialog(HWND, TCHAR *, int);
 static int start_gui(int, UI *, TCHAR *);
 void update_monoedit_buffer(UI *, int, int);
@@ -117,6 +120,8 @@ void msgbox(HWND, const char *, ...);
 Tree *convert_tree(Region *, lua_State *);
 int load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
+int api_buffer_peeku16(lua_State *L);
+int api_buffer_peeku32(lua_State *L);
 int api_buffer_peekstr(lua_State *L);
 int api_buffer_tree(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
@@ -136,7 +141,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 
 	switch (msg) {
 	case WM_LBUTTONDOWN:
-		{
+		if (ui->mode == MODE_NORMAL) {
 			int x = LOWORD(lparam);
 			int y = HIWORD(lparam);
 			int cx = x / ui->charwidth;
@@ -150,40 +155,51 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 					ui->cursor_x = cx;
 					ui->cursor_y = cy;
 					ui->cursor_at_low_nibble = lownib;
-					ui->handle_char = handle_char_normal;
 					update_cursor_pos(ui);
 				}
 			}
 		}
 		return 0;
 	case WM_KEYDOWN:
-		switch (wparam) {
-		case VK_UP:
-			move_up(ui);
+		switch (ui->mode) {
+		case MODE_NORMAL:
+			switch (wparam) {
+			case VK_UP:
+				move_up(ui);
+				break;
+			case VK_DOWN:
+				move_down(ui);
+				break;
+			case VK_LEFT:
+				move_left(ui);
+				break;
+			case VK_RIGHT:
+				move_right(ui);
+				break;
+			case VK_PRIOR:
+				move_up_page(ui);
+				break;
+			case VK_NEXT:
+				move_down_page(ui);
+				break;
+			case VK_HOME:
+				goto_bol(ui);
+				break;
+			case VK_END:
+				goto_eol(ui);
+				break;
+			}
 			break;
-		case VK_DOWN:
-			move_down(ui);
-			break;
-		case VK_LEFT:
-			move_left(ui);
-			break;
-		case VK_RIGHT:
-			move_right(ui);
-			break;
-		case VK_PRIOR:
-			move_up_page(ui);
-			break;
-		case VK_NEXT:
-			move_down_page(ui);
-			break;
-		case VK_HOME:
-			goto_bol(ui);
-			break;
-		case VK_END:
-			goto_eol(ui);
-			break;
-		case VK_ESCAPE:
-			ui->handle_char = handle_char_normal;
+		case MODE_REPLACE:
+			switch (wparam) {
+			case VK_ESCAPE:
+				ui->mode = MODE_NORMAL;
+				buf_replace(ui->buffer, ui->replace_start,
+					    ui->replace_buf,
+					    ui->replace_buf_len);
+				ui->replace_buf_len = 0;
+				break;
+			}
 			break;
 		}
 		return 0;
@@ -222,7 +238,7 @@ register_wndclass(void)
 	return RegisterClass(&wndclass);
 }
 
-static void
+void
 format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
 {
 #if 0
@@ -362,8 +378,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	TCHAR **argv;
 	TCHAR *filepath;
 
-	AllocConsole();
-	freopen("CON", "w", stdout);
+	//AllocConsole();
+	//freopen("CON", "w", stdout);
 
 	rinit(&rgn);
 	void *top = rgn.cur;
@@ -398,6 +414,10 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "__index");
 	lua_pushcfunction(L, api_buffer_peek);
 	lua_setfield(L, -2, "peek");
+	lua_pushcfunction(L, api_buffer_peeku16);
+	lua_setfield(L, -2, "peeku16");
+	lua_pushcfunction(L, api_buffer_peeku32);
+	lua_setfield(L, -2, "peeku32");
 	lua_pushcfunction(L, api_buffer_peekstr);
 	lua_setfield(L, -2, "peekstr");
 	lua_pushcfunction(L, api_buffer_tree);
@@ -431,7 +451,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	ui->lua = L;
 	ui->buffer = b;
 	ui->instance = instance;
-	ui->handle_char = handle_char_normal;
+	ui->replace_buf_cap = 16;
+	ui->replace_buf = malloc(ui->replace_buf_cap);
 
 	return start_gui(show, ui, filepath);
 }
@@ -451,7 +472,8 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 				p[i] = ' ';
 			}
 		} else {
-			uint8_t *data = buf_get_data(b, addr);
+			uint8_t data[16];
+			buf_read(b, data, addr, 16);
 			_wsprintf(p, TEXT("%08llx:"), addr);
 			p += 9;
 			int end = 0;
@@ -816,7 +838,8 @@ handle_char_normal(UI *ui, int c)
 		move_next_field(ui);
 		break;
 	case 'R':
-		ui->handle_char = handle_char_replace;
+		ui->mode = MODE_REPLACE;
+		ui->replace_start = cursor_pos(ui);
 		break;
 	}
 }
@@ -836,16 +859,24 @@ handle_char_replace(UI *ui, int c)
 	int cy = ui->cursor_y;
 	int cx = ui->cursor_x;
 	long long pos = cursor_pos(ui);
-	uint8_t b = buf_getbyte(ui->buffer, pos);
+	uint8_t b;
 	if (ui->cursor_at_low_nibble) {
+		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
-		buf_setbyte(ui->buffer, pos, val);
+		ui->replace_buf[ui->replace_buf_len-1] = val;
 		ui->med_buffer[N_COL_CHAR*cy + (11+cx*3)] = c|32;
 		ui->cursor_at_low_nibble = 0;
 		move_forward(ui);
 	} else {
+		b = buf_getbyte(ui->buffer, pos);
 		val = val<<4 | (b&0x0f);
-		buf_setbyte(ui->buffer, pos, val);
+		if (ui->replace_buf_len == ui->replace_buf_cap) {
+			ui->replace_buf = realloc(ui->replace_buf,
+						  ui->replace_buf_cap*2);
+			ui->replace_buf_cap *= 2;
+		}
+		ui->replace_buf_len++;
+		ui->replace_buf[ui->replace_buf_len-1] = val;
 		ui->med_buffer[N_COL_CHAR*cy + (10+cx*3)] = c|32;
 		ui->cursor_at_low_nibble = 1;
 		SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS, 11+cx*3, cy);
@@ -1014,7 +1045,16 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		}
 		return 0;
 	case WM_CHAR:
-		ui->handle_char(ui, wparam);
+		switch (ui->mode) {
+		case MODE_NORMAL:
+			handle_char_normal(ui, wparam);
+			break;
+		case MODE_REPLACE:
+			handle_char_replace(ui, wparam);
+			break;
+		default:
+			assert(0);
+		}
 		return 0;
 	case WM_COMMAND:
 		idc = LOWORD(wparam);

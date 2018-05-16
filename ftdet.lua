@@ -11,6 +11,7 @@ return function(buf, ext)
       elseif magic == 'NE' then
         return 'NewEXE'
       end
+      return 'DOS_EXE'
     end
   end
 end

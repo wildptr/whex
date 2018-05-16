@@ -135,6 +135,7 @@ return function(buf, pos)
   end
 
   local function data(n)
+    if n<0 then error('negative data size') end
     return function(name)
       local t = Node(name, pos, n)
       current_node:append_node(t)
@@ -148,7 +149,7 @@ return function(buf, pos)
       local t = Node(name, pos)
       local saved_current_node = current_node
       current_node = t
-      proc(t.value, function() return pos - t.start end)
+      proc(t.value, function() return pos end)
       current_node = saved_current_node
       t.size = pos - t.start
       if current_node then

@@ -23,35 +23,7 @@ return function(buf)
   bp(buf)()
   local rva = newtype(u32, {name='rva', format=format_rva})
 
-  local dos_header = record(function()
-    local magic = u16 'e_magic'
-    if magic ~= 0x5a4d then
-      error(string.format('invalid DOS executable magic: 0x%04x', magic))
-    end
-    u16 'e_cblp'
-    u16 'e_cp'
-    u16 'e_crlc'
-    u16 'e_cparhdr'
-    u16 'e_minalloc'
-    u16 'e_maxalloc'
-    u16 'e_ss'
-    u16 'e_sp'
-    u16 'e_csum'
-    u16 'e_ip'
-    u16 'e_cs'
-    u16 'e_lfarlc'
-    u16 'e_ovno'
-    data(8) 'e_res'
-    u16 'e_oemid'
-    u16 'e_oeminfo'
-    data(20) 'e_res2'
-    u32 'e_lfanew'
-  end)
-
-  local dos_exe = record(function(self, dot)
-    dos_header 'dos_header'
-    data( self.dos_header.e_lfanew - dot() ) 'data'
-  end)
+  local dos_exe = require('dos_exe')()
 
   local data_directory = record(function()
     rva 'rva'
@@ -136,12 +108,12 @@ return function(buf)
     end)
   end
 
-  local pe = record(function(self, dot)
+  local pe = record(function(self, pos)
     dos_exe 'dos_exe'
     pe_header 'pe_header'
     array(section_header, self.pe_header.num_sections) 'section_headers'
     foreach(self.section_headers, function(h)
-      return section(h.raw_data_offset - dot(), h.raw_data_size)
+      return section(h.raw_data_offset - pos(), h.raw_data_size)
     end) 'sections'
   end)
 

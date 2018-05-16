@@ -12,7 +12,7 @@ local function rva2off(buf, rva)
       return s.raw_data_offset + voff
     end
   end
-  return -- not found
+  -- returns nil if not found
 end
 
 local function find_section(pe, name)
@@ -21,15 +21,6 @@ local function find_section(pe, name)
       return i
     end
   end
-end
-
-local function info(buf)
-  local pe = buf:tree()
-  local w = Window{text='PE Info'}
-  local oh = pe.pe_header.optional_header
-  local osver = Label{parent=w, pos={8,8}, size={128,16},
-    text=string.format('OS version: %d.%d', oh.major_os_version, oh.minor_os_version)}
-  w:show()
 end
 
 local function section_table(buf)
@@ -218,18 +209,20 @@ local function export_table(buf)
   local edata_off =
     rva2off(buf, pe.pe_header.optional_header.data_directories[1].rva)
   local edt = parse_edt(buf, edata_off)
-  local name_off = rva2off(buf, edt.name_table_rva)
-  local ord_off = rva2off(buf, edt.ordinal_table_rva)
-  local addr_table_off = rva2off(buf, edt.address_table_rva)
   local exp_table = {}
-  for i=1,edt.num_names do
-    local name_rva = buf:peeku32(name_off)
-    name_off = name_off + 4
-    local ord = buf:peeku16(ord_off)
-    ord_off = ord_off + 2
-    local addr = buf:peeku32(addr_table_off + ord*4)
-    local name = getcstr(buf, rva2off(buf, name_rva))
-    exp_table[i] = {name, ord, string.format('0x%x', addr)}
+  if edt.name_table_rva ~= 0 then
+    local name_off = rva2off(buf, edt.name_table_rva)
+    local ord_off = rva2off(buf, edt.ordinal_table_rva)
+    local addr_table_off = rva2off(buf, edt.address_table_rva)
+    for i=1,edt.num_names do
+      local name_rva = buf:peeku32(name_off)
+      name_off = name_off + 4
+      local ord = buf:peeku16(ord_off)
+      ord_off = ord_off + 2
+      local addr = buf:peeku32(addr_table_off + ord*4)
+      local name = getcstr(buf, rva2off(buf, name_rva))
+      exp_table[i] = {name, ord, string.format('0x%x', addr)}
+    end
   end
   local w = Window{text='Export table', size={640,480}}
   local lv = ListView{parent=w, pos={0,0}}
@@ -249,9 +242,8 @@ return {
   name = 'PE',
   parser = require 'pe',
   functions = {
-    {info, 'PE Info...'},
-    {section_table, 'Section table...'},
-    {import_table, 'Import table...'},
-    {export_table, 'Export table...'},
+    {section_table, 'Section Table...'},
+    {import_table, 'Import Table...'},
+    {export_table, 'Export Table...'},
   }
 }

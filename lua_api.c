@@ -78,19 +78,20 @@ convert_tree(Region *r, lua_State *L)
 	tree->parent = 0;
 
 	lua_getfield(L, -1, "name");
-	if (!lua_isstring(L, -1)) {
-		lua_pop(L, 1);
-		return 0;
+	if (lua_isstring(L, -1)) {
+		const char *name = lua_tostring(L, -1);
+		int name_len1 = strlen(name)+1;
+		tree->name = ralloc(r, name_len1);
+		memcpy(tree->name, name, name_len1);
+	} else {
+		tree->name = "<anonymous>";
 	}
-	const char *name = lua_tostring(L, -1);
-	int name_len1 = strlen(name)+1;
-	tree->name = ralloc(r, name_len1);
-	memcpy(tree->name, name, name_len1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, -1, "start");
 	if (!lua_isinteger(L, -1)) {
 		lua_pop(L, 1);
+		asm("int3");
 		return 0;
 	}
 	tree->start = lua_tointeger(L, -1);
@@ -99,6 +100,7 @@ convert_tree(Region *r, lua_State *L)
 	lua_getfield(L, -1, "size");
 	if (!lua_isinteger(L, -1)) {
 		lua_pop(L, 1);
+		asm("int3");
 		return 0;
 	}
 	tree->len = lua_tointeger(L, -1);
@@ -141,6 +143,7 @@ convert_tree(Region *r, lua_State *L)
 		Tree *child = convert_tree(r, L);
 		if (!child) {
 			lua_pop(L, 2);
+			asm("int3");
 			return 0;
 		}
 		child->parent = tree;

@@ -21,9 +21,7 @@ api_buffer_peek(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
-	if (addr < 0 || addr >= b->file_size) {
-		return luaL_error(L, "address out of bounds");
-	}
+	if (addr < 0 || addr >= b->file_size) return 0;
 	lua_pushinteger(L, buf_getbyte(b, addr));
 	return 1;
 }
@@ -33,6 +31,7 @@ api_buffer_peeku16(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
+	if (addr < 0 || addr+2 > b->file_size) return 0;
 	union {
 		uint16_t i;
 		uint8_t b[2];
@@ -47,6 +46,7 @@ api_buffer_peeku32(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
+	if (addr < 0 || addr+4 > b->file_size) return 0;
 	union {
 		uint32_t i;
 		uint8_t b[4];
@@ -62,9 +62,7 @@ api_buffer_peekstr(lua_State *L)
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
 	long n = luaL_checkinteger(L, 3);
-	if (addr < 0 || addr+n > b->file_size) {
-		return luaL_error(L, "address out of bounds");
-	}
+	if (addr < 0 || addr+n > b->file_size) return 0;
 	uint8_t *s = malloc(n+1);
 	buf_read(b, s, addr, n);
 	s[n] = 0;

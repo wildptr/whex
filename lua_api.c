@@ -61,16 +61,14 @@ api_buffer_peekstr(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
-	int n = luaL_checkinteger(L, 3);
+	long n = luaL_checkinteger(L, 3);
 	if (addr < 0 || addr+n > b->file_size) {
 		return luaL_error(L, "address out of bounds");
 	}
-	char *s = malloc(n+1);
-	for (int i=0; i<n; i++) {
-		s[i] = buf_getbyte(b, addr+i);
-	}
+	uint8_t *s = malloc(n+1);
+	buf_read(b, s, addr, n);
 	s[n] = 0;
-	lua_pushstring(L, s);
+	lua_pushlstring(L, (char *) s, n);
 	free(s);
 	return 1;
 }
@@ -168,5 +166,13 @@ api_buffer_tree(lua_State *L)
 	lua_getuservalue(L, 1);
 	lua_getfield(L, -1, "value");
 	lua_remove(L, -2);
+	return 1;
+}
+
+int
+api_buffer_size(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	lua_pushinteger(L, b->file_size);
 	return 1;
 }

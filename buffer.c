@@ -95,6 +95,7 @@ buf_getbyte(Buffer *b, long long addr)
 	default:
 		assert(0);
 	}
+	return 0; // placate compiler
 }
 
 #if 0

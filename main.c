@@ -49,7 +49,6 @@ TCHAR mydir[MAX_PATH];
 int mydir_len;
 
 char *strdup(const char *);
-void register_lua_globals(lua_State *L);
 
 #if 0
 static bool
@@ -124,6 +123,7 @@ int api_buffer_peeku16(lua_State *L);
 int api_buffer_peeku32(lua_State *L);
 int api_buffer_peekstr(lua_State *L);
 int api_buffer_tree(lua_State *L);
+int api_buffer_size(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
 int init_luatk(lua_State *L);
@@ -422,6 +422,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "peekstr");
 	lua_pushcfunction(L, api_buffer_tree);
 	lua_setfield(L, -2, "tree");
+	lua_pushcfunction(L, api_buffer_size);
+	lua_setfield(L, -2, "size");
 	lua_pop(L, 1);
 
 	if (init_luatk(L)) return -1;
@@ -1480,6 +1482,7 @@ load_plugin(UI *ui, const char *path)
 
 	if (luaL_dofile(L, path)) {
 		luaerrorbox(ui->hwnd, L);
+		lua_pop(L, 1);
 		return -1;
 	}
 
@@ -1491,12 +1494,14 @@ load_plugin(UI *ui, const char *path)
 	getluaobj(L, "buffer");
 	if (lua_pcall(L, 1, 1, 0)) {
 		luaerrorbox(ui->hwnd, L);
+		lua_pop(L, 1);
 		return -1;
 	}
 
 	/* Get the internal node */
 	if (lua_pcall(L, 0, 1, 0)) {
 		luaerrorbox(ui->hwnd, L);
+		lua_pop(L, 1);
 		return -1;
 	}
 
@@ -1594,9 +1599,11 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
 det:
 	L = ui->lua;
 	getluaobj(L, "ftdet");
+	getluaobj(L, "buffer");
 	lua_pushstring(L, path+i);
-	if (lua_pcall(L, 1, 1, 0)) {
-		// error
+	if (lua_pcall(L, 2, 1, 0)) {
+		luaerrorbox(ui->hwnd, L);
+		lua_pop(L, 1);
 		return -1;
 	}
 	const char *ft = 0;

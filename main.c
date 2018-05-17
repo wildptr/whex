@@ -35,7 +35,9 @@ enum {
 	IDM_FILE_SAVE,
 	IDM_FILE_SAVEAS,
 	IDM_FILE_CLOSE,
+	IDM_FILE_EXIT,
 	IDM_TOOLS_LOAD_PLUGIN,
+	IDM_TOOLS_RUN_LUA_SCRIPT,
 	IDM_PLUGIN_0,
 };
 
@@ -121,9 +123,11 @@ int load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
 int api_buffer_peeku16(lua_State *L);
 int api_buffer_peeku32(lua_State *L);
-int api_buffer_peekstr(lua_State *L);
+int api_buffer_read(lua_State *L);
 int api_buffer_tree(lua_State *L);
 int api_buffer_size(lua_State *L);
+int api_buffer_replace(lua_State *L);
+int api_buffer_insert(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
 int init_luatk(lua_State *L);
@@ -151,7 +155,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				bool lownib = (cx-10)%3;
 				cx = (cx-10)/3;
 				long long pos = ((ui->current_line + cy) << LOG2_N_COL) + cx;
-				if (pos < ui->buffer->file_size) {
+				if (pos < ui->buffer->buffer_size) {
 					ui->cursor_x = cx;
 					ui->cursor_y = cy;
 					ui->cursor_at_low_nibble = lownib;
@@ -274,10 +278,14 @@ create_menu(void)
 	AppendMenu(m, MF_STRING, IDM_FILE_SAVE, TEXT("Save"));
 	AppendMenu(m, MF_STRING, IDM_FILE_SAVEAS, TEXT("Save As..."));
 	AppendMenu(m, MF_STRING, IDM_FILE_CLOSE, TEXT("Close"));
+	AppendMenu(m, MF_SEPARATOR, 0, 0);
+	AppendMenu(m, MF_STRING, IDM_FILE_EXIT, TEXT("Exit"));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
 
 	m = CreateMenu();
 	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load Plugin..."));
+	AppendMenu(m, MF_STRING, IDM_TOOLS_RUN_LUA_SCRIPT,
+		   TEXT("Run Lua Script..."));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
 	/* appearance will be overridden by update_ui() */
@@ -308,8 +316,10 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 				 menu,
 				 ui->instance,
 				 ui); // window-creation data
-	open_file(ui, filepath);
-	free(filepath);
+	if (filepath) {
+		open_file(ui, filepath);
+		free(filepath);
+	}
 	ShowWindow(hwnd, show);
 	update_ui(ui);
 	MSG msg;
@@ -336,7 +346,11 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 		q = p;
 		if (*q == '"') {
 			p++;
-			do q++; while (*q && *q != '"');
+			/* This causes trouble with vim's auto-indenter. */
+			/* TODO: fix vim. */
+			/* do q++; while (*q && *q != '"'); */
+			do q++;
+			while (*q && *q != '"');
 			/* argument between p and q */
 			n = q-p;
 			if (*q) q++;
@@ -353,12 +367,12 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 		p = q;
 		while (isspace(*p)) p++;
 	} while (*p);
-			int i=0;
-			TCHAR **argv = ralloc(r, (narg+1) * sizeof *argv);
-			FOREACH(head.next, arg) argv[i++] = arg;
-			argv[narg] = 0;
-			*argc = narg;
-			return argv;
+	int i=0;
+	TCHAR **argv = ralloc(r, (narg+1) * sizeof *argv);
+	FOREACH(head.next, arg) argv[i++] = arg;
+	argv[narg] = 0;
+	*argc = narg;
+	return argv;
 }
 
 TCHAR *
@@ -378,20 +392,35 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	TCHAR **argv;
 	TCHAR *filepath;
 
-	//AllocConsole();
-	//freopen("CON", "w", stdout);
-
 	rinit(&rgn);
 	void *top = rgn.cur;
 	argv = cmdline_to_argv(&rgn, GetCommandLine(), &argc);
 
+	int i = 1;
+	while (i < argc) {
+		TCHAR *arg = argv[i];
+		if (arg[0] == '-') {
+			switch (arg[1]) {
+			case 'd':
+				AllocConsole();
+				freopen("CON", "w", stdout);
+				break;
+			}
+			i++;
+		} else break;
+	}
+	argc -= i;
+	argv += i;
+
 	/* parse command line arguments */
-	if (argc == 1) {
-		if (file_chooser_dialog(0, openfilename, BUFSIZE))
-			return 1;
-		filepath = openfilename;
-	} else if (argc == 2) {
-		filepath = argv[1];
+	if (argc == 0) {
+		if (file_chooser_dialog(0, openfilename, BUFSIZE)) {
+			filepath = 0;
+		} else {
+			filepath = openfilename;
+		}
+	} else if (argc == 1) {
+		filepath = argv[0];
 	} else {
 		return 1;
 	}
@@ -403,7 +432,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 		mydir_len--;
 	mydir[mydir_len] = 0;
 
-	filepath = lstrdup(filepath);
+	if (filepath) filepath = lstrdup(filepath);
 	rfree(&rgn, top);
 
 	lua_State *L = luaL_newstate();
@@ -418,12 +447,16 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "peeku16");
 	lua_pushcfunction(L, api_buffer_peeku32);
 	lua_setfield(L, -2, "peeku32");
-	lua_pushcfunction(L, api_buffer_peekstr);
-	lua_setfield(L, -2, "peekstr");
+	lua_pushcfunction(L, api_buffer_read);
+	lua_setfield(L, -2, "read");
 	lua_pushcfunction(L, api_buffer_tree);
 	lua_setfield(L, -2, "tree");
 	lua_pushcfunction(L, api_buffer_size);
 	lua_setfield(L, -2, "size");
+	lua_pushcfunction(L, api_buffer_replace);
+	lua_setfield(L, -2, "replace");
+	lua_pushcfunction(L, api_buffer_insert);
+	lua_setfield(L, -2, "insert");
 	lua_pop(L, 1);
 
 	if (init_luatk(L)) return -1;
@@ -480,7 +513,7 @@ update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
 			p += 9;
 			int end = 0;
 			if (abs_line+1 >= ui->total_lines) {
-				end = b->file_size & (N_COL-1);
+				end = b->buffer_size & (N_COL-1);
 			}
 			if (!end) {
 				end = N_COL;
@@ -596,7 +629,7 @@ goto_address(UI *ui, long long addr)
 {
 	long long line = addr >> LOG2_N_COL;
 	int col = addr & (N_COL-1);
-	assert(addr >= 0 && addr < ui->buffer->file_size);
+	assert(addr >= 0 && addr < ui->buffer->buffer_size);
 	ui->cursor_x = col;
 	if (line >= ui->current_line && line < ui->current_line + ui->nrow) {
 		ui->cursor_y = line - ui->current_line;
@@ -645,7 +678,7 @@ scroll_up_line(UI *ui)
 void
 scroll_down_line(UI *ui)
 {
-	if (cursor_pos(ui) + N_COL < ui->buffer->file_size) {
+	if (cursor_pos(ui) + N_COL < ui->buffer->buffer_size) {
 		ui->current_line++;
 		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, 1);
 		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR, N_COL_CHAR*(ui->nrow-1)*sizeof(TCHAR));
@@ -671,7 +704,7 @@ move_up(UI *ui)
 void
 move_down(UI *ui)
 {
-	long long filesize = ui->buffer->file_size;
+	long long filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL && cursor_pos(ui) < filesize - N_COL) {
 		if (ui->cursor_y < ui->nrow-1) {
 			ui->cursor_y++;
@@ -699,7 +732,7 @@ move_right(UI *ui)
 {
 	if (!ui->cursor_at_low_nibble) {
 		ui->cursor_at_low_nibble = 1;
-	} else if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->buffer->file_size) {
+	} else if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->buffer->buffer_size) {
 		ui->cursor_x++;
 		ui->cursor_at_low_nibble = 0;
 	} else return;
@@ -757,7 +790,7 @@ move_up_page(UI *ui)
 void
 move_down_page(UI *ui)
 {
-	long long filesize = ui->buffer->file_size;
+	long long filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL*ui->nrow && cursor_pos(ui) < filesize - N_COL*ui->nrow) {
 		scroll_down_page(ui);
 	}
@@ -804,7 +837,7 @@ handle_char_normal(UI *ui, int c)
 		text = inputbox(ui, TEXT("Go to address"));
 		if (text) {
 			if (parse_addr(text, &addr)) {
-				if (addr >= 0 && addr < ui->buffer->file_size) {
+				if (addr >= 0 && addr < ui->buffer->buffer_size) {
 					goto_address(ui, addr);
 				} else {
 					errorbox(ui->hwnd, TEXT("Address out of range"));
@@ -1009,6 +1042,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
 	UI *ui = (UI *) GetWindowLongPtr(hwnd, 0);
 	WORD idc;
+	lua_State *L;
 
 	switch (msg) {
 	case WM_NCCREATE:
@@ -1063,7 +1097,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		{
 			int pluginfunc = idc - IDM_PLUGIN_0;
 			if (pluginfunc >= 0 && pluginfunc < ui->npluginfunc) {
-				lua_State *L = ui->lua;
+				L = ui->lua;
 				getluaobj(L, "plugin");
 				lua_geti(L, -1, 1+pluginfunc);
 				getluaobj(L, "buffer");
@@ -1092,20 +1126,22 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			close_file(ui);
 			update_ui(ui);
 			break;
+		case IDM_FILE_EXIT:
+			SendMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+			break;
 		case IDM_TOOLS_LOAD_PLUGIN:
-			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
-				char *luafilepath;
-#ifdef UNICODE
-				void *top = rgn.cur;
-				luafilepath = utf16_to_mbcs(&rgn, path);
-#else
-				luafilepath = path;
-#endif
-				load_plugin(ui, luafilepath);
-#ifdef UNICODE
-				rfree(&rgn, top);
-#endif
+			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+			load_plugin(ui, path);
+			break;
+		case IDM_TOOLS_RUN_LUA_SCRIPT:
+			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+			L = ui->lua;
+			if (luaL_dofile(L, path)) {
+				luaerrorbox(ui->hwnd, L);
+				lua_pop(L, 1);
+				break;
 			}
+			update_ui(ui);
 			break;
 		}
 		return 0;
@@ -1159,8 +1195,8 @@ open_file(UI *ui, TCHAR *path)
 		return -1;
 	}
 	ui->filepath = lstrdup(path);
-	ui->total_lines = b->file_size >> LOG2_N_COL;
-	if (b->file_size&(N_COL-1)) {
+	ui->total_lines = b->buffer_size >> LOG2_N_COL;
+	if (b->buffer_size&(N_COL-1)) {
 		ui->total_lines += 1;
 	}
 	ui->med_buffer = malloc(N_COL_CHAR*ui->nrow*sizeof(TCHAR));
@@ -1297,7 +1333,7 @@ void
 move_forward(UI *ui)
 {
 	Buffer *b = ui->buffer;
-	if (cursor_pos(ui) < b->file_size) {
+	if (cursor_pos(ui) < b->buffer_size) {
 		if (ui->cursor_x < N_COL-1) {
 			ui->cursor_at_low_nibble = 1;
 			move_right(ui);
@@ -1356,7 +1392,7 @@ move_prev_field(UI *ui)
 void
 goto_bol(UI *ui)
 {
-	if (ui->buffer->file_size > 0) {
+	if (ui->buffer->buffer_size > 0) {
 		goto_address(ui, (ui->current_line + ui->cursor_y) * N_COL);
 	}
 }
@@ -1364,7 +1400,7 @@ goto_bol(UI *ui)
 void
 goto_eol(UI *ui)
 {
-	long long filesize = ui->buffer->file_size;
+	long long filesize = ui->buffer->buffer_size;
 	if (filesize > 0) {
 		long long addr = (ui->current_line + ui->cursor_y + 1) * N_COL - 1;
 		if (addr >= filesize) {

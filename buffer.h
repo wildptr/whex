@@ -14,6 +14,7 @@ typedef struct segment Segment;
 typedef struct {
 	HANDLE file;
 	long long file_size;
+	long long buffer_size;
 	Segment *firstseg;
 	struct cache_entry *cache;
 	uint8_t *cache_data;

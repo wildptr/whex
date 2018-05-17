@@ -10,7 +10,7 @@ local function dump_resources(buf)
       local offset = res.offset << shift
       local size = res.size << shift
       f = io.open(filename, 'wb')
-      local data = buf:peekstr(offset, size)
+      local data = buf:read(offset, size)
       f:write(data)
       f:close()
     end
@@ -18,7 +18,7 @@ local function dump_resources(buf)
 end
 
 return {
-  name = 'NewEXE',
+  name = 'New EXE',
   parser = require 'newexe',
   functions = {
     {dump_resources, 'Dump Resources'}

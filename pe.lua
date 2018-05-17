@@ -3,7 +3,7 @@ local bp = require('binparse')
 local function rva2off(pe, rva)
   for i,s in pairs(pe.section_headers) do
     local voff = rva - s.virtual_address
-    if voff >= 0 and voff < s.virtual_size then
+    if voff >= 0 and voff < s.raw_data_size then
       return s.raw_data_offset + voff
     end
   end
@@ -101,19 +101,21 @@ return function(buf)
     u32 'flags'
   end)
 
-  local section = function(pad_len, data_len)
-    return record(function()
-      data(pad_len) 'pad'
-      data(data_len) 'data'
+  local section = function(offset, size)
+    return record(function(self, pos)
+      if (offset ~= 0) then
+        skip(offset - pos())
+        data(size) 'data'
+      end
     end)
   end
 
-  local pe = record(function(self, pos)
+  local pe = record(function(self)
     dos_exe 'dos_exe'
     pe_header 'pe_header'
     array(section_header, self.pe_header.num_sections) 'section_headers'
     foreach(self.section_headers, function(h)
-      return section(h.raw_data_offset - pos(), h.raw_data_size)
+      return section(h.raw_data_offset, h.raw_data_size)
     end) 'sections'
   end)
 

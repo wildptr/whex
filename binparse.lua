@@ -16,8 +16,8 @@ local function Node(name, start, size, value)
   end
   o.append_node = function(self, child)
     local index = #self.children+1
-    self.children[index] = child
     if child.name ~= nil then
+      self.children[index] = child
       self.value[child.name] = child.value
     end
   end
@@ -79,21 +79,6 @@ return function(buf, pos)
     return value
   end
 
-  local function u64(name)
-    value = string.byte(pos)
-          | string.byte(pos+1) <<  8
-          | string.byte(pos+2) << 16
-          | string.byte(pos+3) << 24
-          | string.byte(pos+4) << 32
-          | string.byte(pos+5) << 40
-          | string.byte(pos+6) << 48
-          | string.byte(pos+7) << 56
-    local t = Node(name, pos, 8, value)
-    current_node:append_node(t)
-    pos = pos+8
-    return value
-  end
-
   local function array(proc, n)
     return function(name)
       local t = Node(name, pos)
@@ -111,7 +96,7 @@ return function(buf, pos)
 
   local function ascii(n)
     return function(name)
-      local bytes = buf:peekstr(pos, n)
+      local bytes = buf:read(pos, n)
       local t = Node(name, pos, n, bytes)
       current_node:append_node(t)
       pos = pos+n
@@ -142,6 +127,11 @@ return function(buf, pos)
       pos = pos+n
       return t.value
     end
+  end
+
+  local function skip(n)
+    if n<0 then error('negative skip size') end
+    pos = pos+n
   end
 
   local function record(proc)
@@ -179,6 +169,7 @@ return function(buf, pos)
     array   = array,
     ascii   = ascii,
     data    = data,
+    skip    = skip,
     foreach = foreach,
     record  = record,
     newtype = newtype

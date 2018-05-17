@@ -57,7 +57,7 @@ api_buffer_peeku32(lua_State *L)
 }
 
 int
-api_buffer_peekstr(lua_State *L)
+api_buffer_read(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
@@ -176,4 +176,26 @@ api_buffer_size(lua_State *L)
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	lua_pushinteger(L, b->file_size);
 	return 1;
+}
+
+int
+api_buffer_replace(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	long long addr = luaL_checkinteger(L, 2);
+	size_t len;
+	const uint8_t *data = (const uint8_t *) lua_tolstring(L, 3, &len);
+	buf_replace(b, addr, data, len);
+	return 0;
+}
+
+int
+api_buffer_insert(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	long long addr = luaL_checkinteger(L, 2);
+	size_t len;
+	const uint8_t *data = (const uint8_t *) lua_tolstring(L, 3, &len);
+	buf_insert(b, addr, data, len);
+	return 0;
 }

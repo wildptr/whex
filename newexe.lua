@@ -58,7 +58,7 @@ return function(buf)
     while true do
       local ent = entry(i)
       if buf:peeku16(pos()) == 0 then
-        data(2)()
+        skip(2)
         break
       end
       i=i+1
@@ -75,7 +75,7 @@ return function(buf)
     while true do
       local str = counted_string(i)
       if buf:peek(pos()) == 0 then
-        data(1)()
+        skip(1)
         break
       end
       i=i+1
@@ -86,9 +86,9 @@ return function(buf)
     dos_exe 'dos_exe'
     local hdrstart = pos()
     local hdr = ne_header 'ne_header'
-    data(pos() - (hdrstart + hdr.segment_table_offset))()
+    skip(pos() - (hdrstart + hdr.segment_table_offset))
     array(segment_table_entry, hdr.num_segments) 'segment_table'
-    data(pos() - (hdrstart + hdr.resource_table_offset))()
+    skip(pos() - (hdrstart + hdr.resource_table_offset))
     u16 'resource_alignment'
     resource_table 'resource_table'
     resource_strings 'resource_strings'

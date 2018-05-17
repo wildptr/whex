@@ -101,12 +101,7 @@ local function getcstr(buf, pos)
     if b == 0 then break end
     pos = pos+1
   end
-  return buf:peekstr(start, pos-start)
-end
-
-local function getpascalstr(buf, pos)
-  local n = buf:peek(pos)
-  return buf:peekstr(pos+1, n)
+  return buf:read(start, pos-start)
 end
 
 local function make_ilt(buf, idt, pe32plus)

@@ -51,7 +51,7 @@ enum {
 Region rgn;
 /* GetOpenFileName() changes directory, so remember working directory when
    program starts */
-TCHAR *workdir;
+char *workdir;
 int wdlen;
 
 #if 0
@@ -119,7 +119,7 @@ void move_prev_field(UI *);
 TCHAR *inputbox(UI *, TCHAR *title);
 bool parse_addr(TCHAR *, long long *);
 void errorbox(HWND, TCHAR *);
-void msgbox(HWND, const char *, ...);
+void msgbox(HWND, const TCHAR *, ...);
 Tree *convert_tree(Region *, lua_State *);
 int load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
@@ -394,12 +394,12 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	TCHAR **argv;
 	TCHAR *filepath;
 
-	workdir = malloc(BUFSIZE * sizeof *workdir);
-	wdlen = GetCurrentDirectory(BUFSIZE, workdir);
+	workdir = malloc(BUFSIZE);
+	wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
 	if (wdlen > BUFSIZE) {
 		free(workdir);
-		workdir = malloc(wdlen * sizeof *workdir);
-		wdlen = GetCurrentDirectory(BUFSIZE, workdir);
+		workdir = malloc(wdlen);
+		wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
 	}
 	if (!wdlen) return 1;
 
@@ -444,8 +444,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
 	/* set Lua search path */
 	lua_getglobal(L, "package");
-	TCHAR *luapath = malloc((wdlen+6+1) * sizeof *luapath);
-	_wsprintf(luapath, "%s/?.lua", workdir);
+	char *luapath = malloc(wdlen + 6 + 1);
+	sprintf(luapath, "%s/?.lua", workdir);
 	lua_pushstring(L, luapath);
 	free(luapath);
 	lua_setfield(L, -2, "path");
@@ -482,8 +482,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_newtable(L);
 	lua_setfield(L, -2, "customtype");
 
-	TCHAR *ftdet_path = malloc((wdlen+1+9+1) * sizeof *ftdet_path);
-	_wsprintf(ftdet_path, "%s/ftdet.lua", workdir);
+	char *ftdet_path = malloc(wdlen+1+9+1);
+	sprintf(ftdet_path, "%s/ftdet.lua", workdir);
 	if (luaL_dofile(L, ftdet_path)) {
 		luaerrorbox(0, L);
 		lua_pop(L, 1);
@@ -583,7 +583,7 @@ update_status_text(UI *ui, Tree *leaf)
 		path = tree_path(&rgn, leaf);
 		SendMessage(sb, SB_SETTEXT, 1, (LPARAM) typename);
 		SendMessage(sb, SB_SETTEXT, 2, (LPARAM) valuerepr);
-		SendMessage(sb, SB_SETTEXT, 3, (LPARAM) path);
+		SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
 		rfree(&rgn, top);
 	} else {
 		SendMessage(sb, SB_SETTEXT, 1, 0);
@@ -1117,6 +1117,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		}
 		switch (idc) {
 			TCHAR path[BUFSIZE];
+			char *path_mbcs;
+			int ret;
 		case IDM_FILE_OPEN:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
 				if (ui->filepath) close_file(ui);
@@ -1138,12 +1140,29 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			break;
 		case IDM_TOOLS_LOAD_PLUGIN:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
-			load_plugin(ui, path);
+#ifdef UNICODE
+			path_mbcs = utf16_to_mbcs(path);
+#else
+			path_mbcs = path;
+#endif
+			load_plugin(ui, path_mbcs);
+#ifdef UNICODE
+			free(path_mbcs);
+#endif
 			break;
 		case IDM_TOOLS_RUN_LUA_SCRIPT:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+#ifdef UNICODE
+			path_mbcs = utf16_to_mbcs(path);
+#else
+			path_mbcs = path;
+#endif
 			L = ui->lua;
-			if (luaL_dofile(L, path)) {
+			ret = luaL_dofile(L, path_mbcs);
+#ifdef UNICODE
+			free(path_mbcs);
+#endif
+			if (ret) {
 				luaerrorbox(ui->hwnd, L);
 				lua_pop(L, 1);
 				break;
@@ -1499,15 +1518,15 @@ luaerrorbox(HWND hwnd, lua_State *L)
 }
 
 void
-msgbox(HWND hwnd, const char *fmt, ...)
+msgbox(HWND hwnd, const TCHAR *fmt, ...)
 {
-	char msg[BUFSIZE];
+	TCHAR msg[BUFSIZE];
 	va_list ap;
 
 	va_start(ap, fmt);
-	vsprintf(msg, fmt, ap);
+	_wvsprintf(msg, fmt, ap);
 	va_end(ap);
-	MessageBoxA(hwnd, msg, "WHEX", MB_OK);
+	MessageBox(hwnd, msg, TEXT("WHEX"), MB_OK);
 }
 
 void
@@ -1647,8 +1666,7 @@ det:
 		return -1;
 	}
 	getluaobj(L, "buffer");
-	lua_pushstring(L, path+i);
-	if (lua_pcall(L, 2, 1, 0)) {
+	if (lua_pcall(L, 1, 1, 0)) {
 		luaerrorbox(ui->hwnd, L);
 		lua_pop(L, 1);
 		return -1;
@@ -1660,7 +1678,7 @@ det:
 	int ret;
 	if (ft) {
 		char *buf = malloc(wdlen+8+strlen(ft)+4+1);
-		_wsprintf(buf, TEXT("%s/plugin_%s.lua"), workdir, ft);
+		sprintf(buf, "%s/plugin_%s.lua", workdir, ft);
 		ret = load_plugin(ui, buf);
 		free(buf);
 	} else {
@@ -1683,10 +1701,17 @@ addtotree(HWND treeview, HTREEITEM parent, Tree *tree)
 	tvins.hParent = parent;
 	tvins.hInsertAfter = TVI_LAST;
 	tvins.item.mask = TVIF_TEXT;
+#ifdef UNICODE
+	tvins.item.pszText = mbcs_to_utf16(tree->name);
+#else
 	tvins.item.pszText = tree->name;
+#endif
 	HTREEITEM item = (HTREEITEM)
 		SendMessage(treeview, TVM_INSERTITEM,
 			    0, (LPARAM) &tvins);
+#ifdef UNICODE
+	free(tvins.item.pszText);
+#endif
 	for (int i=0; i<tree->n_child; i++)
 		addtotree(treeview, item, tree->children[i]);
 }
@@ -1774,7 +1799,11 @@ format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
 		return 0;
 	case F_CUSTOM:
 		L = ui->lua;
+#ifdef UNICODE
+		*ptypename = mbcs_to_utf16_r(&rgn, t->custom_type_name);
+#else
 		*ptypename = t->custom_type_name;
+#endif
 		getluaobj(L, "customtype");
 		assert(!lua_isnil(L, -1));
 		lua_getfield(L, -1, t->custom_type_name);
@@ -1794,9 +1823,14 @@ format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
 			size_t n;
 			const char *vr = luaL_tolstring(L, -1, &n);
 			n += 1;
-			char *vrdup = ralloc(&rgn, n);
+			TCHAR *vrdup;
+#ifdef UNICODE
+			vrdup = mbcs_to_utf16_r(&rgn, vr);
+#else
+			vrdup = ralloc(&rgn, n);
 			memcpy(vrdup, vr, n);
 			*pvaluerepr = vrdup;
+#endif
 			vrlen = n;
 		}
 		lua_pop(L, 3);

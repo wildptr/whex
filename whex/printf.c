@@ -31,7 +31,8 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include <tchar.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 
 #include "printf.h"
 
@@ -59,7 +60,7 @@ union u {
 		TCHAR *p = buf;\
 		if (neg) v = -v;\
 		do {\
-			int d = v % 10;\
+			int d = (unsigned TYPE) v % 10; \
 			*p++ = '0'+d;\
 			v = (unsigned TYPE) v / 10;\
 		} while (v);\
@@ -208,8 +209,8 @@ spec:
 
 		case 's' :
 			s = va_arg(va, TCHAR *);
-			n = strlen(s);
-			memcpy(p, s, n);
+			n = lstrlen(s);
+			memcpy(p, s, n*sizeof(TCHAR));
 			p += n;
 			break;
 

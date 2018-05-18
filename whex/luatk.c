@@ -54,7 +54,7 @@ typedef struct {
 	HWND parent;
 } Config;
 
-static const TCHAR luatk_class[] = TEXT("LUATK");
+static const char luatk_class[] = "LuaTk";
 static lua_State *lua;
 
 void luaerrorbox(HWND hwnd, lua_State *L);
@@ -103,7 +103,7 @@ register_window(lua_State *L, Window *w)
 }
 
 void
-init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle,
+init_window(lua_State *L, Window *w, const char *wndclass, DWORD wndstyle,
 	    int cfgindex)
 {
 	Config c = {0};
@@ -134,7 +134,7 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle,
 
 	HWND hwnd;
 	/* sets w->hwnd */
-	hwnd = CreateWindow(wndclass,
+	hwnd = CreateWindowA(wndclass,
 			    c.text,
 			    wndstyle,
 			    x, y, wid, hei,
@@ -147,7 +147,7 @@ init_window(lua_State *L, Window *w, const TCHAR *wndclass, DWORD wndstyle,
 	if (wndclass != luatk_class) {
 		w->hwnd = hwnd;
 		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) w);
-		SendMessage(hwnd, WM_SETFONT,
+		SendMessageA(hwnd, WM_SETFONT,
 			    (WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);
 	}
 	register_window(L, w);
@@ -169,7 +169,7 @@ api_button(lua_State *L)
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Button");
 	w->kind = BUTTON;
-	init_window(L, w, WC_BUTTON, WS_CHILD | WS_VISIBLE, 1);
+	init_window(L, w, "Button", WS_CHILD | WS_VISIBLE, 1);
 	return 1;
 }
 
@@ -195,9 +195,9 @@ int
 window_get_text(lua_State *L, Window *w)
 {
 	HWND hwnd = w->hwnd;
-	int n = GetWindowTextLength(hwnd)+1;
+	int n = GetWindowTextLengthA(hwnd)+1;
 	char *buf = malloc(n);
-	GetWindowText(hwnd, buf, n);
+	GetWindowTextA(hwnd, buf, n);
 	lua_pushstring(L, buf);
 	free(buf);
 	return 1;
@@ -258,7 +258,7 @@ api_window__newindex(lua_State *L)
 		if (!strcmp(field, "text")) {
 			Window *w = lua_touserdata(L, 1);
 			const char *text = luaL_checkstring(L, 3);
-			SetWindowText(w->hwnd, text);
+			SetWindowTextA(w->hwnd, text);
 			return 0;
 		}
 		break;
@@ -358,7 +358,7 @@ init_luatk(lua_State *L)
 static ATOM
 register_wndclass(void)
 {
-	WNDCLASS wndclass = {0};
+	WNDCLASSA wndclass = {0};
 
 	wndclass.lpfnWndProc = luatk_wndproc;
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
@@ -367,7 +367,7 @@ register_wndclass(void)
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 	wndclass.lpszClassName = luatk_class;
-	return RegisterClass(&wndclass);
+	return RegisterClassA(&wndclass);
 }
 
 void
@@ -389,7 +389,7 @@ button_cmd(lua_State *L, Window *w)
 		lua_pop(L, 1); /* remove uservalue */
 		if (lua_pcall(L, 1, 0, 0)) {
 			const char *err = lua_tostring(L, -1);
-			MessageBoxA(hwnd, err, "luatk", MB_OK | MB_ICONERROR);
+			MessageBoxA(hwnd, err, "LuaTk", MB_OK | MB_ICONERROR);
 		}
 	} else {
 		lua_pop(L, 3);
@@ -427,7 +427,7 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return 0;
 #if 0
 	case WM_NOTIFY:
-		MessageBoxA(hwnd, "WM_NOTIFY", "luatk", MB_OK);
+		MessageBoxA(hwnd, "WM_NOTIFY", "LuaTk", MB_OK);
 		return 0;
 #endif
 	case WM_COMMAND:
@@ -443,7 +443,7 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				switch (HIWORD(wparam)) {
 					int sel;
 				case LBN_SELCHANGE:
-					sel = SendMessage(ctl, LB_GETCURSEL, 0, 0);
+					sel = SendMessageA(ctl, LB_GETCURSEL, 0, 0);
 					if (sel < 0) {
 						return 0;
 					}
@@ -538,7 +538,7 @@ api_window_configure(lua_State *L)
 	Config c = {0};
 	parse_config(L, 2, &c);
 	if (c.text) {
-		SetWindowText(hwnd, c.text);
+		SetWindowTextA(hwnd, c.text);
 		free(c.text);
 	}
 	if (c.has_pos || c.has_size) {
@@ -561,7 +561,7 @@ api_label(lua_State *L)
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "Window");
 	w->kind = LABEL;
-	init_window(L, w, WC_STATIC, WS_CHILD | WS_VISIBLE, 1);
+	init_window(L, w, "Static", WS_CHILD | WS_VISIBLE, 1);
 	return 1;
 }
 
@@ -571,7 +571,7 @@ api_listview(lua_State *L)
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "ListView");
 	w->kind = LISTVIEW;
-	init_window(L, w, WC_LISTVIEW, WS_CHILD | WS_VISIBLE | LVS_REPORT, 1);
+	init_window(L, w, WC_LISTVIEWA, WS_CHILD | WS_VISIBLE | LVS_REPORT, 1);
 	return 1;
 }
 
@@ -620,7 +620,7 @@ api_listview_insert_column(lua_State *L)
 	long col = (long) luaL_checkinteger(L, 2);
 	char *colname = _strdup(luaL_checkstring(L, 3));
 
-	LVCOLUMN lvc;
+	LVCOLUMNA lvc;
 	lvc.mask = LVCF_TEXT;
 	lvc.pszText = colname;
 
@@ -634,7 +634,7 @@ api_listview_insert_column(lua_State *L)
 		lua_pop(L, -1);
 	}
 	
-	long ret = SendMessage(w->hwnd, LVM_INSERTCOLUMN, col, (LPARAM) &lvc);
+	long ret = SendMessageA(w->hwnd, LVM_INSERTCOLUMNA, col, (LPARAM) &lvc);
 	free(colname);
 	assert(ret == col);
 
@@ -655,13 +655,13 @@ api_listview_insert_item(lua_State *L)
 
 	lua_pop(L, 1);
 
-	LV_ITEM lvi;
+	LVITEMA lvi;
 	lvi.iItem = row;
 	lvi.iSubItem = 0;
 	lvi.mask = LVIF_TEXT;
 	lvi.pszText = itemname;
 
-	int ret = SendMessage(w->hwnd, LVM_INSERTITEM, 0, (LPARAM) &lvi);
+	int ret = SendMessageA(w->hwnd, LVM_INSERTITEMA, 0, (LPARAM) &lvi);
 	free(itemname);
 	assert(ret == row);
 	for (int i=1; i<n; i++) {
@@ -670,7 +670,7 @@ api_listview_insert_item(lua_State *L)
 		lua_pop(L, 1);
 		lvi.iSubItem = i;
 		lvi.pszText = itemname;
-		ret = SendMessage(w->hwnd, LVM_SETITEM, 0, (LPARAM) &lvi);
+		ret = SendMessageA(w->hwnd, LVM_SETITEMA, 0, (LPARAM) &lvi);
 		free(itemname);
 		assert(ret == TRUE);
 	}
@@ -742,7 +742,7 @@ int
 api_msgbox(lua_State *L)
 {
 	const char *msg = luaL_checkstring(L, 1);
-	MessageBoxA(0, msg, "luatk", MB_OK);
+	MessageBoxA(0, msg, "LuaTk", MB_OK);
 	return 0;
 }
 
@@ -752,7 +752,7 @@ api_listbox(lua_State *L)
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "ListBox");
 	w->kind = LISTBOX;
-	init_window(L, w, WC_LISTBOX, WS_CHILD | WS_VISIBLE | LBS_NOTIFY, 1);
+	init_window(L, w, WC_LISTBOXA, WS_CHILD | WS_VISIBLE | LBS_NOTIFY, 1);
 	return 1;
 }
 
@@ -809,7 +809,7 @@ api_listbox_insert_item(lua_State *L)
 	long row = (long) luaL_checkinteger(L, 2);
 	char *text = _strdup(luaL_checkstring(L, 3));
 
-	SendMessage(w->hwnd, LB_INSERTSTRING, row, (LPARAM) text);
+	SendMessageA(w->hwnd, LB_INSERTSTRING, row, (LPARAM) text);
 	free(text);
 
 	return 0;
@@ -819,7 +819,7 @@ int
 api_listbox_clear(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	SendMessage(w->hwnd, LB_RESETCONTENT, 0, 0);
+	SendMessageA(w->hwnd, LB_RESETCONTENT, 0, 0);
 	return 0;
 }
 
@@ -827,6 +827,6 @@ int
 api_listview_clear(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	SendMessage(w->hwnd, LVM_DELETEALLITEMS, 0, 0);
+	SendMessageA(w->hwnd, LVM_DELETEALLITEMS, 0, 0);
 	return 0;
 }

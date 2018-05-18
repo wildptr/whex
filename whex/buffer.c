@@ -6,6 +6,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <tchar.h>
 
 #include "util.h"
 #include "buffer.h"
@@ -232,7 +233,7 @@ buf_init(Buffer *b, HANDLE file)
 		if (err) {
 			TCHAR errmsg[512];
 			format_error_code(errmsg, NELEM(errmsg), err);
-			puts(errmsg);
+			_tprintf(TEXT("%s\n"), errmsg);
 			return -1;
 		}
 	}

@@ -61,9 +61,11 @@ api_buffer_read(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
-	long n = luaL_checkinteger(L, 3);
-	if (addr < 0 || addr+n > b->file_size) return 0;
-	uint8_t *s = malloc(n+1);
+	long n = (long) luaL_checkinteger(L, 3);
+	uint8_t *s;
+
+	if (addr < 0 || addr + n > b->file_size) return 0;
+	s = malloc(n+1);
 	buf_read(b, s, addr, n);
 	s[n] = 0;
 	lua_pushlstring(L, (char *) s, n);
@@ -91,7 +93,6 @@ convert_tree(Region *r, lua_State *L)
 	lua_getfield(L, -1, "start");
 	if (!lua_isinteger(L, -1)) {
 		lua_pop(L, 1);
-		asm("int3");
 		return 0;
 	}
 	tree->start = lua_tointeger(L, -1);
@@ -100,7 +101,6 @@ convert_tree(Region *r, lua_State *L)
 	lua_getfield(L, -1, "size");
 	if (!lua_isinteger(L, -1)) {
 		lua_pop(L, 1);
-		asm("int3");
 		return 0;
 	}
 	tree->len = lua_tointeger(L, -1);
@@ -111,7 +111,7 @@ convert_tree(Region *r, lua_State *L)
 	switch (lua_type(L, -1)) {
 	case LUA_TNUMBER:
 		tree->type = F_UINT;
-		tree->intvalue = lua_tointeger(L, -1);
+		tree->intvalue = (long) lua_tointeger(L, -1);
 		break;
 	case LUA_TSTRING:
 		tree->type = F_ASCII;
@@ -124,7 +124,7 @@ convert_tree(Region *r, lua_State *L)
 	lua_getfield(L, -1, "type");
 	if (!lua_isnil(L, -1)) {
 		const char *typename = luaL_checkstring(L, -1);
-		tree->custom_type_name = strdup(typename);
+		tree->custom_type_name = _strdup(typename);
 		tree->type = F_CUSTOM;
 	} else {
 		tree->custom_type_name = 0;
@@ -143,7 +143,6 @@ convert_tree(Region *r, lua_State *L)
 		Tree *child = convert_tree(r, L);
 		if (!child) {
 			lua_pop(L, 2);
-			asm("int3");
 			return 0;
 		}
 		child->parent = tree;

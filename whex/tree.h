@@ -10,7 +10,7 @@ typedef struct tree {
 	long long start;
 	long long len;
 	char *name;
-	int intvalue;
+	long intvalue;
 	int n_child;
 	struct tree **children;
 	enum field_type type;

@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2013
+VisualStudioVersion = 12.0.21005.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "whex", "whex\whex.vcxproj", "{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "lua", "lua\lua.vcxproj", "{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Debug|Win32.ActiveCfg = Debug|Win32
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Debug|Win32.Build.0 = Debug|Win32
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Release|Win32.ActiveCfg = Release|Win32
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Release|Win32.Build.0 = Release|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug|Win32.ActiveCfg = Debug|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug|Win32.Build.0 = Debug|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release|Win32.ActiveCfg = Release|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

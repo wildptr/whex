@@ -34,7 +34,7 @@ struct segment {
 static int
 seek(HANDLE file, long long offset)
 {
-	long lo = offset;
+	long lo = (long) offset;
 	long hi = offset >> 32;
 	if (SetFilePointer(file, lo, &hi, FILE_BEGIN) != lo) {
 		printf("seek(%I64x) failed\n", offset);
@@ -139,14 +139,21 @@ kmp_table(int *T, const uint8_t *pat, int len)
 long long
 buf_kmp_search(Buffer *b, const uint8_t *pat, int len, long long start)
 {
+	int *T;
+	long long m;
+	int i;
+
 	assert(len);
-	int T[len];
+	T = malloc(len * sizeof *T);
 	kmp_table(T, pat, len);
-	long long m = start; // start of potential match
-	int i = 0;
+	m = start; // start of potential match
+	i = 0;
 	while (m+i < b->buffer_size) {
 		if (pat[i] == buf_getbyte(b, m+i)) {
-			if (i == len-1) return m; // match found
+			if (i == len - 1) {
+				free(T);
+				return m; // match found
+			}
 			i++;
 		} else {
 			// current character does not match
@@ -159,6 +166,7 @@ buf_kmp_search(Buffer *b, const uint8_t *pat, int len, long long start)
 		}
 	}
 	/* no match */
+	free(T);
 	return b->buffer_size;
 }
 
@@ -170,19 +178,29 @@ buf_kmp_search(Buffer *b, const uint8_t *pat, int len, long long start)
 long long
 buf_kmp_search_backward(Buffer *b, const uint8_t *pat, int len, long long start)
 {
+	int *T;
+	uint8_t *revpat;
+	long long m;
+	int i;
+
 	assert(len);
-	int T[len];
-	uint8_t revpat[len];
-	for (int i=0; i<len; i++) {
+	T = malloc(len * sizeof *T);
+	revpat = malloc(len);
+	
+	for (i=0; i<len; i++) {
 		revpat[i] = pat[len-1-i];
 	}
 	pat = revpat;
 	kmp_table(T, pat, len);
-	long long m = start;
-	int i = 0;
+	m = start;
+	i = 0;
 	while (m+i < b->buffer_size) {
 		if (pat[i] == buf_getbyte(b, b->buffer_size-1-(m+i))) {
-			if (i == len-1) return b->buffer_size-(m+len);
+			if (i == len - 1) {
+				free(T);
+				free(revpat);
+				return b->buffer_size - (m + len);
+			}
 			i++;
 		} else {
 			if (i) {
@@ -194,6 +212,8 @@ buf_kmp_search_backward(Buffer *b, const uint8_t *pat, int len, long long start)
 		}
 	}
 	/* no match */
+	free(T);
+	free(revpat);
 	return b->buffer_size;
 }
 
@@ -297,7 +317,7 @@ buf_save(Buffer *b)
 			if (s->start == file_offset) {
 				s->filedata = 0;
 			} else {
-				long len = s->end - s->start;
+				long len = (long)(s->end - s->start);
 				s->filedata = malloc(len);
 				/* TODO: cleanup on failure */
 				if (!s->filedata) {
@@ -321,17 +341,18 @@ buf_save(Buffer *b)
 	}
 	s = b->firstseg;
 	while (s) {
+		long seglen = (long)(s->end - s->start);
 		switch (s->kind) {
 			DWORD nwritten;
 		case SEG_MEM:
 			seek(b->file, s->start);
-			WriteFile(b->file, s->data, s->end - s->start,
+			WriteFile(b->file, s->data, seglen,
 				  &nwritten, 0);
 			break;
 		case SEG_FILE:
 			if (!s->filedata) break;
 			seek(b->file, s->start);
-			WriteFile(b->file, s->filedata, s->end - s->start,
+			WriteFile(b->file, s->filedata, seglen,
 				  &nwritten, 0);
 			free(s->filedata);
 			break;
@@ -379,7 +400,7 @@ buf_replace(Buffer *b, long long addr, const uint8_t *data, long len)
 		case SEG_MEM:
 			{
 				/* in-place modification */
-				long off = addr - before->start;
+				long off = (long)(addr - before->start);
 				memcpy(before->data + off, data, len);
 			}
 			break;
@@ -407,30 +428,29 @@ buf_replace(Buffer *b, long long addr, const uint8_t *data, long len)
 		/* before != after */
 		Segment *tobefreed;
 		Segment *newseg;
-		if (after) {
-			if (after->start != end) {
-				long newseglen;
-				long delta;
-				switch (after->kind) {
-				case SEG_MEM:
-					/* coalesce */
-					newseglen = after->end - addr;
-					newseg = newmemseg(addr, newseglen);
-					delta = addr + len - after->start;
-					memcpy(newseg->data, data, len);
-					memcpy(newseg->data+len,
-					       after->data + delta,
-					       newseglen - len);
-					newseg->next = after->next;
-					break;
-				case SEG_FILE:
-					newseg = newmemseg(addr, len);
-					memcpy(newseg->data, data, len);
-					newseg->next = after;
-					break;
-				default:
-					assert(0);
-				}
+		if (after && after->start != end) {
+			long newseglen;
+			long delta;
+			switch (after->kind) {
+			case SEG_MEM:
+				/* coalesce */
+				newseglen = (long)(after->end - addr);
+				newseg = newmemseg(addr, newseglen);
+				delta = (long)(addr - after->start) + len;
+				memcpy(newseg->data, data, len);
+				memcpy(newseg->data+len,
+					after->data + delta,
+					newseglen - len);
+				newseg->next = after->next;
+				break;
+			case SEG_FILE:
+				newseg = newmemseg(addr, len);
+				memcpy(newseg->data, data, len);
+				newseg->next = after;
+				break;
+			default:
+				assert(0);
+				newseg = 0;
 			}
 		} else {
 			newseg = newmemseg(addr, len);
@@ -474,7 +494,7 @@ buf_insert(Buffer *b, long long addr, const uint8_t *data, long len)
 			after = before->next;
 		} else {
 			/* split 'before' at 'addr' */
-			long delta = addr - before->start;
+			long delta = (long)(addr - before->start);
 			switch (before->kind) {
 				long rest;
 			case SEG_FILE:
@@ -491,6 +511,7 @@ buf_insert(Buffer *b, long long addr, const uint8_t *data, long len)
 				break;
 			default:
 				assert(0);
+				after = 0;
 			}
 			before->end = addr;
 		}
@@ -526,7 +547,7 @@ buf_read(Buffer *b, uint8_t *dst, long long addr, long n)
 	long long segoff = addr - s->start;
 	assert(segoff >= 0 && segoff < s->end - s->start);
 	for (;;) {
-		long n1 = s->end - addr;
+		long n1 = (long)(s->end - addr);
 		if (n1 > n) n1 = n;
 		switch (s->kind) {
 		case SEG_FILE:

@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -183,7 +185,7 @@ int
 fielderr(lua_State *L, const char *cls, const char *field)
 {
 	char buf[512];
-	snprintf(buf, sizeof buf, "class %s has no member named %s",
+	_snprintf(buf, sizeof buf, "class %s has no member named %s",
 		 cls, field);
 	lua_pushstring(L, buf);
 	return lua_error(L);
@@ -512,8 +514,8 @@ int
 api_window_move(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	int x = luaL_checkinteger(L, 2);
-	int y = luaL_checkinteger(L, 3);
+	int x = (int) luaL_checkinteger(L, 2);
+	int y = (int) luaL_checkinteger(L, 3);
 	SetWindowPos(w->hwnd, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 	return 0;
 }
@@ -522,8 +524,8 @@ int
 api_window_resize(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	int wid = luaL_checkinteger(L, 2);
-	int hei = luaL_checkinteger(L, 3);
+	int wid = (int) luaL_checkinteger(L, 2);
+	int hei = (int) luaL_checkinteger(L, 3);
 	SetWindowPos(w->hwnd, 0, 0, 0, wid, hei, SWP_NOMOVE | SWP_NOZORDER);
 	return 0;
 }
@@ -615,8 +617,8 @@ int
 api_listview_insert_column(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	int col = luaL_checkinteger(L, 2);
-	char *colname = strdup(luaL_checkstring(L, 3));
+	long col = (long) luaL_checkinteger(L, 2);
+	char *colname = _strdup(luaL_checkstring(L, 3));
 
 	LVCOLUMN lvc;
 	lvc.mask = LVCF_TEXT;
@@ -627,12 +629,12 @@ api_listview_insert_column(lua_State *L)
 		lua_gettable(L, 4);
 		if (!lua_isnil(L, -1)) {
 			lvc.mask |= LVCF_WIDTH;
-			lvc.cx = luaL_checkinteger(L, -1);
+			lvc.cx = (int) luaL_checkinteger(L, -1);
 		}
 		lua_pop(L, -1);
 	}
-
-	int ret = SendMessage(w->hwnd, LVM_INSERTCOLUMN, col, (LPARAM) &lvc);
+	
+	long ret = SendMessage(w->hwnd, LVM_INSERTCOLUMN, col, (LPARAM) &lvc);
 	free(colname);
 	assert(ret == col);
 
@@ -643,12 +645,12 @@ int
 api_listview_insert_item(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	int row = luaL_checkinteger(L, 2);
+	int row = (int) luaL_checkinteger(L, 2);
 	lua_len(L, 3);
-	int n = luaL_checkinteger(L, -1);
+	int n = (int) luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
 	lua_geti(L, 3, 1);
-	char *itemname = strdup(luaL_checkstring(L, -1));
+	char *itemname = _strdup(luaL_checkstring(L, -1));
 	assert(itemname);
 
 	lua_pop(L, 1);
@@ -664,7 +666,7 @@ api_listview_insert_item(lua_State *L)
 	assert(ret == row);
 	for (int i=1; i<n; i++) {
 		lua_geti(L, 3, 1+i);
-		itemname = strdup(luaL_checkstring(L, -1));
+		itemname = _strdup(luaL_checkstring(L, -1));
 		lua_pop(L, 1);
 		lvi.iSubItem = i;
 		lvi.pszText = itemname;
@@ -692,7 +694,7 @@ parse_config(lua_State *L, int index, Config *c)
 	if (!lua_isnil(L, -1)) {
 		const char *text = luaL_checkstring(L, -1);
 		if (text) {
-			c->text = strdup(text);
+			c->text = _strdup(text);
 		}
 	}
 	lua_pop(L, 1);
@@ -703,10 +705,10 @@ parse_config(lua_State *L, int index, Config *c)
 	if (!lua_isnil(L, -1)) {
 		c->has_pos = true;
 		lua_geti(L, -1, 1);
-		c->x = luaL_checkinteger(L, -1);
+		c->x = (int) luaL_checkinteger(L, -1);
 		lua_pop(L, 1);
 		lua_geti(L, -1, 2);
-		c->y = luaL_checkinteger(L, -1);
+		c->y = (int) luaL_checkinteger(L, -1);
 		lua_pop(L, 1);
 	}
 	lua_pop(L, 1);
@@ -717,10 +719,10 @@ parse_config(lua_State *L, int index, Config *c)
 	if (!lua_isnil(L, -1)) {
 		c->has_size = true;
 		lua_geti(L, -1, 1);
-		c->w = luaL_checkinteger(L, -1);
+		c->w = (int) luaL_checkinteger(L, -1);
 		lua_pop(L, 1);
 		lua_geti(L, -1, 2);
-		c->h = luaL_checkinteger(L, -1);
+		c->h = (int) luaL_checkinteger(L, -1);
 		lua_pop(L, 1);
 	}
 	lua_pop(L, 1);
@@ -804,8 +806,8 @@ int
 api_listbox_insert_item(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
-	int row = luaL_checkinteger(L, 2);
-	char *text = strdup(luaL_checkstring(L, 3));
+	long row = (long) luaL_checkinteger(L, 2);
+	char *text = _strdup(luaL_checkstring(L, 3));
 
 	SendMessage(w->hwnd, LB_INSERTSTRING, row, (LPARAM) text);
 	free(text);

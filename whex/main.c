@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdbool.h>
@@ -47,10 +49,10 @@ enum {
 };
 
 Region rgn;
-TCHAR mydir[MAX_PATH];
-int mydir_len;
-
-char *strdup(const char *);
+/* GetOpenFileName() changes directory, so remember working directory when
+   program starts */
+TCHAR *workdir;
+int wdlen;
 
 #if 0
 static bool
@@ -392,6 +394,15 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	TCHAR **argv;
 	TCHAR *filepath;
 
+	workdir = malloc(BUFSIZE * sizeof *workdir);
+	wdlen = GetCurrentDirectory(BUFSIZE, workdir);
+	if (wdlen > BUFSIZE) {
+		free(workdir);
+		workdir = malloc(wdlen * sizeof *workdir);
+		wdlen = GetCurrentDirectory(BUFSIZE, workdir);
+	}
+	if (!wdlen) return 1;
+
 	rinit(&rgn);
 	void *top = rgn.cur;
 	argv = cmdline_to_argv(&rgn, GetCommandLine(), &argc);
@@ -425,18 +436,19 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 		return 1;
 	}
 
-	HMODULE thisexe = GetModuleHandle(0);
-	GetModuleFileName(thisexe, mydir, NELEM(mydir));
-	mydir_len = lstrlen(mydir);
-	while (mydir_len >= 1 && mydir[mydir_len-1] != '\\')
-		mydir_len--;
-	mydir[mydir_len] = 0;
-
 	if (filepath) filepath = lstrdup(filepath);
 	rfree(&rgn, top);
 
 	lua_State *L = luaL_newstate();
 	luaL_openlibs(L);
+
+	/* set Lua search path */
+	lua_getglobal(L, "package");
+	TCHAR *luapath = malloc((wdlen+6+1) * sizeof *luapath);
+	_wsprintf(luapath, "%s/?.lua", workdir);
+	lua_pushstring(L, luapath);
+	free(luapath);
+	lua_setfield(L, -2, "path");
 
 	luaL_newmetatable(L, "buffer");
 	lua_pushvalue(L, -1);
@@ -470,8 +482,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_newtable(L);
 	lua_setfield(L, -2, "customtype");
 
-	TCHAR *ftdet_path = malloc((mydir_len + 11) * sizeof *ftdet_path);
-	_wsprintf(ftdet_path, TEXT("%sftdet.lua"), mydir);
+	TCHAR *ftdet_path = malloc((wdlen+1+9+1) * sizeof *ftdet_path);
+	_wsprintf(ftdet_path, "%s/ftdet.lua", workdir);
 	if (luaL_dofile(L, ftdet_path)) {
 		luaerrorbox(0, L);
 		lua_pop(L, 1);
@@ -632,7 +644,7 @@ goto_address(UI *ui, long long addr)
 	assert(addr >= 0 && addr < ui->buffer->buffer_size);
 	ui->cursor_x = col;
 	if (line >= ui->current_line && line < ui->current_line + ui->nrow) {
-		ui->cursor_y = line - ui->current_line;
+		ui->cursor_y = (int)(line - ui->current_line);
 		update_cursor_pos(ui);
 	} else {
 		long long line1;
@@ -641,7 +653,7 @@ goto_address(UI *ui, long long addr)
 		} else {
 			line1 = 0;
 		}
-		ui->cursor_y = line - line1;
+		ui->cursor_y = (int)(line - line1);
 		set_current_line(ui, line1);
 	}
 }
@@ -749,7 +761,7 @@ scroll_up_page(UI *ui)
 		update_cursor_pos(ui);
 		InvalidateRect(ui->monoedit, 0, FALSE);
 	} else {
-		long long delta = ui->current_line;
+		int delta = (int) ui->current_line;
 		ui->current_line = 0;
 		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, -delta);
 		memmove(ui->med_buffer+N_COL_CHAR*delta, ui->med_buffer, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
@@ -769,7 +781,7 @@ scroll_down_page(UI *ui)
 		update_cursor_pos(ui);
 		InvalidateRect(ui->monoedit, 0, FALSE);
 	} else {
-		long long delta = ui->total_lines - ui->current_line;
+		int delta = (int)(ui->total_lines - ui->current_line);
 		ui->current_line = ui->total_lines;
 		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, delta);
 		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR*delta, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
@@ -1050,11 +1062,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		ui->hwnd = hwnd;
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) ui);
 		break;
-	case WM_NCDESTROY:
-		if (ui) {
-			free(ui);
-		}
-		return 0;
 	case WM_CREATE:
 		handle_wm_create(ui, (LPCREATESTRUCT) lparam);
 		return 0;
@@ -1253,10 +1260,10 @@ update_monoedit_tags(UI *ui)
 {
 	long long start = ui->hl_start;
 	long long len = ui->hl_len;
-	long long view_start = ui->current_line * N_COL;
-	long long view_end = (ui->current_line + ui->nrow) * N_COL;
-	long long start_clamp = clamp(start, view_start, view_end) - view_start;
-	long long end_clamp = clamp(start + len, view_start, view_end) - view_start;
+	long long view_start = ui->current_line << LOG2_N_COL;
+	long long view_end = (ui->current_line + ui->nrow) << LOG2_N_COL;
+	int start_clamp = (int)(clamp(start, view_start, view_end) - view_start);
+	int end_clamp = (int)(clamp(start + len, view_start, view_end) - view_start);
 	HWND w1 = ui->monoedit;
 	SendMessage(w1, MED_WM_CLEAR_TAGS, 0, 0);
 	if (end_clamp > start_clamp) {
@@ -1558,7 +1565,7 @@ load_plugin(UI *ui, const char *path)
 #ifdef UNICODE
 	tplugin_name = mbcs_to_utf16(plugin_name);
 #else
-	tplugin_name = strdup(plugin_name);
+	tplugin_name = _strdup(plugin_name);
 #endif
 	lua_pop(L, 1);
 	if (ui->plugin_name) {
@@ -1570,7 +1577,7 @@ load_plugin(UI *ui, const char *path)
 	lua_pushstring(L, "functions");
 	lua_gettable(L, -3);
 	luaL_checktype(L, -1, LUA_TTABLE);
-	int n = luaL_len(L, -1);
+	int n = (int) luaL_len(L, -1);
 	ui->npluginfunc = n;
 	ui->plugin_funcname = malloc(n * sizeof *ui->plugin_funcname);
 	for (int i=0; i<n; i++) {
@@ -1583,7 +1590,7 @@ load_plugin(UI *ui, const char *path)
 #ifdef UNICODE
 		tfuncname = mbcs_to_utf16(funcname);
 #else
-		tfuncname = strdup(funcname);
+		tfuncname = _strdup(funcname);
 #endif
 		lua_pop(L, 2);
 		ui->plugin_funcname[i] = tfuncname;
@@ -1635,6 +1642,10 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
 det:
 	L = ui->lua;
 	getluaobj(L, "ftdet");
+	if (lua_isnil(L, -1)) {
+		lua_pop(L, 1);
+		return -1;
+	}
 	getluaobj(L, "buffer");
 	lua_pushstring(L, path+i);
 	if (lua_pcall(L, 2, 1, 0)) {
@@ -1648,8 +1659,8 @@ det:
 	}
 	int ret;
 	if (ft) {
-		char *buf = malloc(mydir_len+8+strlen(ft)+4+1);
-		_wsprintf(buf, TEXT("%splugin_%s.lua"), mydir, ft);
+		char *buf = malloc(wdlen+8+strlen(ft)+4+1);
+		_wsprintf(buf, TEXT("%s/plugin_%s.lua"), workdir, ft);
 		ret = load_plugin(ui, buf);
 		free(buf);
 	} else {
@@ -1781,7 +1792,6 @@ format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
 			puts(lua_tostring(L, -1));
 		} else {
 			size_t n;
-			vrlen = n;
 			const char *vr = luaL_tolstring(L, -1, &n);
 			n += 1;
 			char *vrdup = ralloc(&rgn, n);

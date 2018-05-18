@@ -1,3 +1,7 @@
 *.exe
 *.o
-/config.mk
+*.sdf
+*.suo
+Debug/
+Release/
+doc/

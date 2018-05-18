@@ -30,7 +30,7 @@ med_paint(Med *w, HWND hwnd)
 
 	GetClientRect(hwnd, &r);
 	if (w->buffer) {
-		HGDIOBJ old_font;
+		HGDIOBJ old_font = 0; // intial value not used, just to placate compiler
 		COLORREF old_bkcolor;
 		if (w->font) {
 			old_font = SelectObject(hdc, w->font);

@@ -56,8 +56,8 @@ union u {
 	{\
 		TYPE v = value->FIELD;\
 		bool neg = (f & F_SIGNED) && v < 0;\
-		if (neg) v = -v;\
 		TCHAR *p = buf;\
+		if (neg) v = -v;\
 		do {\
 			int d = v % 10;\
 			*p++ = '0'+d;\

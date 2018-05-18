@@ -17,7 +17,7 @@ void *
 ralloc(Region *r, int size)
 {
 	// align
-	size = (size+PTR_SIZE-1)&(-PTR_SIZE);
+	size = (size+PTR_SIZE-1)&(~PTR_SIZE+1);
 	if (r->cur + size > r->limit) {
 		int malloc_size =
 			size > CHUNK_SIZE-PTR_SIZE ? PTR_SIZE+size : CHUNK_SIZE;

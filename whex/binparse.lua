@@ -79,6 +79,14 @@ return function(buf, pos)
     return value
   end
 
+  local function u64(name)
+    value = buf:peeku64(pos)
+    local t = Node(name, pos, 8, value)
+    current_node:append_node(t)
+    pos = pos+8
+    return value
+  end
+
   local function array(proc, n)
     return function(name)
       local t = Node(name, pos)

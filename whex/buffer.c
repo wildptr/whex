@@ -417,8 +417,8 @@ buf_replace(Buffer *b, long long addr, const uint8_t *data, long len)
 					*after = *before;
 					before->next = newseg;
 				}
-				after->start = end;
 				after->file_offset += end - before->start;
+				after->start = end;
 				newseg->next = after;
 			}
 			break;
@@ -431,13 +431,12 @@ buf_replace(Buffer *b, long long addr, const uint8_t *data, long len)
 		Segment *newseg;
 		if (after && after->start != end) {
 			long newseglen;
-			long delta;
+			long delta = (long)(end - after->start);
 			switch (after->kind) {
 			case SEG_MEM:
 				/* coalesce */
 				newseglen = (long)(after->end - addr);
 				newseg = newmemseg(addr, newseglen);
-				delta = (long)(addr - after->start) + len;
 				memcpy(newseg->data, data, len);
 				memcpy(newseg->data+len,
 					after->data + delta,
@@ -448,11 +447,13 @@ buf_replace(Buffer *b, long long addr, const uint8_t *data, long len)
 				newseg = newmemseg(addr, len);
 				memcpy(newseg->data, data, len);
 				newseg->next = after;
+				after->file_offset += delta;
 				break;
 			default:
 				assert(0);
 				newseg = 0;
 			}
+			after->start = end;
 		} else {
 			newseg = newmemseg(addr, len);
 			memcpy(newseg->data, data, len);

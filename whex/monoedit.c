@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,186 +10,210 @@ typedef struct {
 	/* in characters */
 	int ncol;
 	int nrow;
-	TCHAR *buffer;
+	MedLine *buffer;
 	HFONT font;
 	int cursorx;
 	int cursory;
 	int charwidth;
 	int charheight;
-	MedTag *tags;
-	int tag_len;
+	MedGetLineProc getline;
+	void *getline_arg;
+	long long lineno;
+	TCHAR *textbuf; /* (ncol * nrow) characters */
+	MedTag *tagbuf;
+	int ntag;
 	int tag_cap;
 } Med;
 
+typedef struct {
+	int len, next;
+} FreeList;
+
+static void set_source(Med *w, MedGetLineProc proc, void *arg);
+static TCHAR *alloc_text(Med *w, int nch);
+static void free_text(Med *w, TCHAR *text, int nch);
+static void free_line(Med *w, MedLine *l);
+static void init_textbuf(Med *w, int len);
+static void update_buffer(Med *w);
+static void scroll(Med *w, HWND hwnd, int delta);
+
 static void
-med_paint(Med *w, HWND hwnd)
+paint_row(Med *w, HWND hwnd, HDC dc, int row, int clientwidth, HBRUSH bgbrush)
+{
+	assert(row >= 0 && row < w->nrow);
+	MedLine *line = &w->buffer[row];
+	int ntag = 0;
+	MedTag *t = line->tags;
+	while (t) {
+		ntag++;
+		t = t->next;
+	}
+	int maxnseg = ntag*2+1;
+	MedTag *segments = malloc(maxnseg * sizeof *segments);
+	int nextstart;
+	t = line->tags;
+	int s = 0;
+	int prev_end = 0;
+	for (;;) {
+		if (t) {
+			nextstart = t->start;
+		} else {
+			nextstart = line->textlen;
+		}
+		/* untagged segment */
+		int len = nextstart - prev_end;
+		if (len) {
+			segments[s].start = prev_end;
+			segments[s].len = len;
+			segments[s].attr = 0;
+			s++;
+		}
+		if (!t) break;
+		/* tagged segment */
+		segments[s++] = *t;
+		prev_end = t->start + t->len;
+		t = t->next;
+	}
+	int y = row * w->charheight;
+	for (int i=0; i<s; i++) {
+		MedTag *seg = &segments[i];
+		COLORREF old_bkcolor;
+		if (seg->attr) {
+			old_bkcolor = SetBkColor
+				(dc, RGB(204, 204, 204));
+		}
+		assert(seg->start + seg->len <= line->textlen);
+		TextOut(dc,
+			seg->start * w->charwidth,
+			y,
+			line->text + seg->start,
+			seg->len);
+		if (seg->attr) {
+			SetBkColor(dc, old_bkcolor);
+		}
+	}
+	free(segments);
+	/* fill right margin */
+	RECT r;
+	r.left = w->charwidth * line->textlen;
+	r.right = clientwidth;
+	r.top = y;
+	r.bottom = y + w->charheight;
+	FillRect(dc, &r, bgbrush);
+}
+
+static void
+paint(Med *w, HWND hwnd)
 {
 	PAINTSTRUCT paint;
-	HDC hdc = BeginPaint(hwnd, &paint);
+	HDC dc = BeginPaint(hwnd, &paint);
 	HBRUSH bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 	RECT r;
 
 	GetClientRect(hwnd, &r);
 	if (w->buffer) {
-		HGDIOBJ old_font = 0; // intial value not used, just to placate compiler
-		COLORREF old_bkcolor;
+		/* initial value not used, just to placate compiler */
+		HGDIOBJ old_font = 0;
 		if (w->font) {
-			old_font = SelectObject(hdc, w->font);
+			old_font = SelectObject(dc, w->font);
 		}
-		MedTag *segments =
-			malloc((w->nrow + 2*w->tag_len) * sizeof *segments);
-		int n_seg = 0;
-		int next_tag_i = 0;
-		int line = 0;
-		int col = 0;
-		while (line < w->nrow) {
-			segments[n_seg].line = line;
-			segments[n_seg].start = col;
-			segments[n_seg].attr = 0;
-			if (next_tag_i < w->tag_len &&
-			    w->tags[next_tag_i].line == line) {
-				MedTag *next_tag = &w->tags[next_tag_i];
-				// untagged segment
-				segments[n_seg++].len = next_tag->start - col;
-				// tagged segment
-				segments[n_seg++] = *next_tag;
-				next_tag_i++;
-				col = next_tag->start + next_tag->len;
-			} else {
-				segments[n_seg++].len = w->ncol - col;
-				col = w->ncol;
-			}
-			if (col == w->ncol) {
-				line++;
-				col = 0;
-			}
+		for (int i=0; i<w->nrow; i++) {
+			paint_row(w, hwnd, dc, i, r.right, bgbrush);
 		}
-		const TCHAR *pbuf = w->buffer;
-		for (int i=0; i<n_seg; i++) {
-			MedTag *seg = &segments[i];
-#if 0
-			printf("seg[%d].line = %d\n", i, seg->line);
-			printf("seg[%d].start = %d\n", i, seg->start);
-			printf("seg[%d].len = %d\n", i, seg->len);
-			printf("seg[%d].attr = %u\n", i, seg->attr);
-#endif
-			if (seg->attr) {
-				old_bkcolor = SetBkColor
-					(hdc, RGB(204, 204, 204));
-			}
-			TextOut(hdc,
-				seg->start * w->charwidth,
-				seg->line * w->charheight,
-				pbuf,
-				seg->len);
-			pbuf += seg->len;
-			if (seg->attr) {
-				SetBkColor(hdc, old_bkcolor);
-			}
-		}
-		free(segments);
 		if (w->font) {
-			SelectObject(hdc, old_font);
+			SelectObject(dc, old_font);
 		}
-		int textw = w->ncol * w->charwidth;
-		int texth = w->nrow * w->charheight;
-		r.left += textw;
-		FillRect(hdc, &r, bgbrush);
-		r.left = 0;
-		r.right = textw;
-		r.top = texth;
-		FillRect(hdc, &r, bgbrush);
-	} else {
-		FillRect(hdc, &r, bgbrush);
+		r.top = w->nrow * w->charheight;
 	}
+	FillRect(dc, &r, bgbrush);
 
 	EndPaint(hwnd, &paint);
 }
 
-void
-med_clear_tags(Med *w)
+static void
+clear_tags(Med *w)
 {
-	w->tag_len = 0;
+	for (int i=0; i<w->nrow; i++) {
+		MedLine *line = &w->buffer[i];
+		line->tags = 0;
+	}
+	w->ntag = 0;
+}
+
+static void
+add_tag(Med *w, int lineno, MedTag *tag)
+{
+	if (!(lineno >= 0 && lineno < w->nrow)) {
+		abort();
+	}
+	MedLine *line = &w->buffer[lineno];
+	assert(line);
+
+	if (w->ntag == w->tag_cap) {
+		if (w->tagbuf) {
+			w->tag_cap *= 2;
+			w->tagbuf = realloc(w->tagbuf, w->tag_cap *
+					    sizeof *w->tagbuf);
+		} else {
+			w->tag_cap = 16;
+			w->tagbuf = malloc(w->tag_cap * sizeof *w->tagbuf);
+		}
+	}
+	MedTag *newtag = w->tagbuf + w->ntag++;
+	newtag->start = tag->start;
+	newtag->len = tag->len;
+	newtag->attr = tag->attr;
+
+	MedTag *before = 0;
+	MedTag *next = line->tags;
+	while (next && next->start < newtag->start) {
+		before = next;
+		next = before->next;
+	}
+	newtag->next = next;
+	if (before) {
+		before->next = newtag;
+	} else {
+		line->tags = newtag;
+	}
 }
 
 void
-med_add_tag(Med *w, MedTag *tag)
+default_getline(long long ln, MedLine *line, void *_arg)
 {
-#if 0
-	printf("med_add_tag() line=%d start=%d len=%d attr=%u\n",
-	       tag->line, tag->start, tag->len, tag->attr);
-#endif
-	if (w->tag_len == w->tag_cap) {
-		if (w->tags) {
-			w->tag_cap *= 2;
-			w->tags = realloc(w->tags, w->tag_cap * sizeof *w->tags);
-		} else {
-			w->tag_cap = 4;
-			w->tags = malloc(w->tag_cap * sizeof *w->tags);
-		}
-	}
-	w->tags[w->tag_len++] = *tag;
+	memset(line, 0, sizeof *line);
 }
 
 static LRESULT CALLBACK
-med_wndproc(HWND hwnd,
+wndproc(HWND hwnd,
 		 UINT message,
 		 WPARAM wparam,
 		 LPARAM lparam)
 {
-	Med *w = (void *) GetWindowLongPtr(hwnd, 0);
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	switch (message) {
 	case WM_NCCREATE:
 		w = calloc(1, sizeof *w);
 		if (!w) {
 			return FALSE;
 		}
+		init_textbuf(w, 0x4000);
+		w->getline = default_getline;
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
 	case WM_NCDESTROY:
+		/* This check is necessary, since we reach here even
+		   when WM_NCCREATE returns FALSE (which means we failed to
+		   allocate 'w'). */
 		if (w) {
-			/* This check is necessary, since we reach here even
-			   when WM_NCCREATE returns FALSE (which means we
-			   failed to allocate w). */
+			free(w->buffer);
+			free(w->textbuf);
+			free(w->tagbuf);
 			free(w);
 		}
 		return 0;
 	case WM_PAINT:
-		med_paint(w, hwnd);
-		return 0;
-	case MED_WM_SCROLL:
-		{
-			int delta = (int) lparam;
-			RECT scroll_rect = {
-			       	0,
-				0,
-				w->charwidth * w->ncol,
-				w->charheight * w->nrow
-			};
-			ScrollWindow(hwnd, 0, -delta*w->charheight,
-				     &scroll_rect, &scroll_rect);
-		}
-		return 0;
-	case MED_WM_SET_BUFFER:
-		w->buffer = (void *) lparam;
-		return 0;
-	case MED_WM_SET_CSIZE:
-		{
-			int ncol  = (int) wparam;
-			int nrow = (int) lparam;
-			if (ncol >= 0) {
-				w->ncol = ncol;
-			}
-			if (nrow >= 0) {
-				w->nrow = nrow;
-			}
-		}
-		return 0;
-	case MED_WM_CLEAR_TAGS:
-		med_clear_tags(w);
-		return 0;
-	case MED_WM_ADD_TAG:
-		med_add_tag(w, (MedTag *) lparam);
+		paint(w, hwnd);
 		return 0;
 	case WM_SETFONT:
 		{
@@ -211,22 +236,10 @@ med_wndproc(HWND hwnd,
 		HideCaret(hwnd);
 		DestroyCaret();
 		return 0;
-	case MED_WM_SET_CURSOR_POS:
-		{
-			int cx = (int) wparam;
-			int cy = (int) lparam;
-			w->cursorx = cx;
-			w->cursory = cy;
-			SetCaretPos(cx*w->charwidth, cy*w->charheight);
-		}
-		return 0;
 	case WM_CHAR:
-		{
-			/* forward WM_CHAR to parent */
-			HWND parent = GetParent(hwnd);
-			SendMessage(parent, WM_CHAR, wparam, lparam);
-			return 0;
-		}
+		/* forward WM_CHAR to parent */
+		SendMessage(GetParent(hwnd), WM_CHAR, wparam, lparam);
+		return 0;
 	case WM_ERASEBKGND:
 		/* pretend that the background has been erased in order to
 		   prevent flickering */
@@ -240,11 +253,234 @@ med_register_class(void)
 {
 	WNDCLASS wndclass = {0};
 	wndclass.style = CS_GLOBALCLASS;
-	wndclass.lpfnWndProc = med_wndproc;
+	wndclass.lpfnWndProc = wndproc;
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
 	//CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 	wndclass.lpszClassName = TEXT("MonoEdit");
 	return RegisterClass(&wndclass);
+}
+
+void
+med_set_current_line(HWND hwnd, long long ln)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	w->lineno = ln;
+	update_buffer(w);
+}
+
+long long
+med_get_current_line(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	return w->lineno;
+}
+
+static void
+set_source(Med *w, MedGetLineProc proc, void *arg)
+{
+	w->getline = proc;
+	w->getline_arg = arg;
+}
+
+void
+med_set_source(HWND hwnd, MedGetLineProc proc, void *arg)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	set_source(w, proc, arg);
+}
+
+static TCHAR *
+alloc_text(Med *w, int nch)
+{
+	int len = nch * sizeof(TCHAR);
+	len = (len+7)&-8;
+	FreeList *f = (FreeList *) w->textbuf;
+	FreeList *prev = 0;
+	for (;;) {
+		if (f->len > len) {
+			int newlen = f->len - len;
+			f->len = newlen;
+			return (TCHAR *)((char *) f + newlen);
+		}
+		if (f->len == len && prev) {
+			prev->next = f->next;
+			return (TCHAR *) f;
+		}
+		if (f->next == 0) return 0;
+		prev = f;
+		f = (FreeList *)((char *) w->textbuf + f->next);
+	}
+}
+
+static void
+free_text(Med *w, TCHAR *text, int nch)
+{
+	if (!text) return;
+	int len = nch * sizeof(TCHAR);
+	len = (len+7)&-8;
+	char *start = (char *) w->textbuf;
+	char *cur = start;
+	char *next;
+	FreeList *before, *after, *newf;
+loop:
+	before = (FreeList *) cur;
+	next = start + before->next;
+	if (next <= (char *) text) {
+		cur = next;
+		goto loop;
+	}
+
+	char *textend = (char *) text + len;
+	after = (FreeList *) next;
+	newf = (FreeList *) text;
+	if (textend == next) {
+		newf->len = len + after->len;
+		newf->next = after->next;
+	} else {
+		newf->len = len;
+		newf->next = before->next;
+	}
+	before->next = (char *) newf - start;
+}
+
+TCHAR *
+med_alloc_text(HWND hwnd, int nch)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	return alloc_text(w, nch);
+}
+
+static void
+free_line(Med *w, MedLine *l)
+{
+	free_text(w, l->text, l->textlen);
+}
+
+static void
+init_textbuf(Med *w, int len)
+{
+	w->textbuf = malloc(len);
+	FreeList *f = (FreeList *) w->textbuf;
+	f->len = len;
+	f->next = len+8;
+}
+
+static void
+update_buffer(Med *w)
+{
+	for (int i=0; i<w->nrow; i++) {
+		MedLine *l = &w->buffer[i];
+		free_line(w, l);
+		w->getline(w->lineno + i, l, w->getline_arg);
+	}
+}
+
+void
+med_update_buffer(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	update_buffer(w);
+}
+
+static void
+scroll(Med *w, HWND hwnd, int delta)
+{
+	RECT scroll_rect = {
+		0,
+		0,
+		w->charwidth * w->ncol,
+		w->charheight * w->nrow
+	};
+	ScrollWindow(hwnd, 0, delta*w->charheight,
+		     &scroll_rect, &scroll_rect);
+	w->lineno -= delta;
+	if (delta > 0) {
+		if (delta > w->nrow) delta = w->nrow;
+		int d = w->nrow-1;
+		int s = d - delta;
+		for (int i=w->nrow-delta; i<w->nrow; i++) {
+			free_line(w, &w->buffer[i]);
+		}
+		while (s >= 0) {
+			w->buffer[d--] = w->buffer[s--];
+		}
+		for (int i=0; i<delta; i++) {
+			w->getline(w->lineno + i, &w->buffer[i],
+				   w->getline_arg);
+		}
+	} else if (delta < 0) {
+		delta = -delta;
+		if (delta > w->nrow) delta = w->nrow;
+		int d = 0;
+		int s = delta;
+		for (int i=0; i<delta; i++) {
+			free_line(w, &w->buffer[i]);
+		}
+		while (s < w->nrow) {
+			w->buffer[d++] = w->buffer[s++];
+		}
+		for (int i=w->nrow-delta; i<w->nrow; i++) {
+			w->getline(w->lineno + i, &w->buffer[i],
+				   w->getline_arg);
+		}
+	}
+}
+
+void
+med_scroll(HWND hwnd, int delta)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	scroll(w, hwnd, delta);
+}
+
+void
+med_add_tag(HWND hwnd, int ln, MedTag *tag)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	add_tag(w, ln, tag);
+}
+
+void
+med_clear_tags(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	clear_tags(w);
+}
+
+static void
+set_cursor_pos(Med *w, HWND hwnd, int y, int x)
+{
+	w->cursory = y;
+	w->cursorx = x;
+	SetCaretPos(x*w->charwidth, y*w->charheight);
+}
+
+void
+med_set_cursor_pos(HWND hwnd, int y, int x)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	set_cursor_pos(w, hwnd, y, x);
+}
+
+static void
+set_size(Med *w, int nrow, int ncol)
+{
+	assert(nrow > 0);
+	assert(ncol > 0);
+	w->ncol = ncol;
+	w->buffer = realloc(w->buffer, nrow * sizeof *w->buffer);
+	if (nrow > w->nrow) {
+		memset(&w->buffer[w->nrow], 0,
+		       (nrow - w->nrow) * sizeof w->buffer[0]);
+	}
+	w->nrow = nrow;
+}
+
+void
+med_set_size(HWND hwnd, int nrow, int ncol)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	set_size(w, nrow, ncol);
 }

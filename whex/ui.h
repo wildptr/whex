@@ -19,8 +19,8 @@ typedef struct ui {
 	HWND status_bar;
 	HINSTANCE instance;
 	int npluginfunc;
-	TCHAR *plugin_name;
-	TCHAR **plugin_funcname;
+	char *plugin_name;
+	char **plugin_funcname;
 	uint8_t mode;
 	bool cursor_at_low_nibble;
 	bool readonly;

@@ -138,8 +138,7 @@ void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
 int save_file(UI *);
 void populate_treeview(UI *);
-int format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR
-		      **pvaluerepr);
+int format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -532,19 +531,19 @@ update_status_text(UI *ui, Tree *leaf)
 	_wsprintf(buf, TEXT("%llx"), pos);
 	SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
 	if (leaf) {
-		TCHAR *typename;
-		TCHAR *valuerepr;
+		char *typename;
+		char *valuerepr;
 		void *top = rgn.cur;
 		format_leaf_value(ui, leaf, &typename, &valuerepr);
 		path = tree_path(&rgn, leaf);
-		SendMessage(sb, SB_SETTEXT, 1, (LPARAM) typename);
-		SendMessage(sb, SB_SETTEXT, 2, (LPARAM) valuerepr);
+		SendMessage(sb, SB_SETTEXTA, 1, (LPARAM) typename);
+		SendMessage(sb, SB_SETTEXTA, 2, (LPARAM) valuerepr);
 		SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
 		rfree(&rgn, top);
 	} else {
-		SendMessage(sb, SB_SETTEXT, 1, 0);
-		SendMessage(sb, SB_SETTEXT, 2, 0);
-		SendMessage(sb, SB_SETTEXT, 3, 0);
+		SendMessage(sb, SB_SETTEXTA, 1, 0);
+		SendMessage(sb, SB_SETTEXTA, 2, 0);
+		SendMessage(sb, SB_SETTEXTA, 3, 0);
 	}
 }
 
@@ -624,17 +623,7 @@ goto_address(UI *ui, long long addr)
 void
 error_prompt(UI *ui, const char *errmsg)
 {
-	const TCHAR *terrmsg;
-#ifdef UNICODE
-	void *top = rgn.cur;
-	terrmsg = mbcs_to_utf16_r(&rgn, errmsg);
-#else
-	terrmsg = errmsg;
-#endif
-	MessageBox(ui->hwnd, terrmsg, TEXT("Error"), MB_ICONERROR);
-#ifdef UNICODE
-	rfree(&rgn, top);
-#endif
+	MessageBoxA(ui->hwnd, errmsg, "Error", MB_ICONERROR);
 }
 
 void
@@ -1548,18 +1537,12 @@ load_plugin(UI *ui, const char *path)
 	b->tree = tree;
 
 	lua_getfield(L, -1, "name"); /* plugin.name */
-	const char *plugin_name = luaL_checkstring(L, -1);
-	TCHAR *tplugin_name;
-#ifdef UNICODE
-	tplugin_name = mbcs_to_utf16(plugin_name);
-#else
-	tplugin_name = _strdup(plugin_name);
-#endif
+	char *plugin_name = _strdup(luaL_checkstring(L, -1));
 	lua_pop(L, 1);
 	if (ui->plugin_name) {
 		free(ui->plugin_name);
 	}
-	ui->plugin_name = tplugin_name;
+	ui->plugin_name = plugin_name;
 
 	getluaobj(L, "plugin");
 	lua_pushstring(L, "functions");
@@ -1573,15 +1556,9 @@ load_plugin(UI *ui, const char *path)
 		lua_geti(L, -1, 1); /* push func */
 		lua_seti(L, -4, 1+i);
 		lua_geti(L, -1, 2); /* push funcname */
-		const char *funcname = luaL_checkstring(L, -1);
-		TCHAR *tfuncname;
-#ifdef UNICODE
-		tfuncname = mbcs_to_utf16(funcname);
-#else
-		tfuncname = _strdup(funcname);
-#endif
+		char *funcname = _strdup(luaL_checkstring(L, -1));
 		lua_pop(L, 2);
-		ui->plugin_funcname[i] = tfuncname;
+		ui->plugin_funcname[i] = funcname;
 	}
 	lua_pop(L, 3);
 
@@ -1596,14 +1573,14 @@ update_plugin_menu(UI *ui)
 	if (ui->plugin_name) {
 		HMENU plugin_menu = CreateMenu();
 		for (int i=0; i<ui->npluginfunc; i++) {
-			AppendMenu(plugin_menu, MF_STRING, IDM_PLUGIN_0+i,
-				   ui->plugin_funcname[i]);
+			AppendMenuA(plugin_menu, MF_STRING, IDM_PLUGIN_0+i,
+				    ui->plugin_funcname[i]);
 		}
-		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
-			   (UINT_PTR) plugin_menu, ui->plugin_name);
+		ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
+			    (UINT_PTR) plugin_menu, ui->plugin_name);
 	} else {
-		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_STRING | MF_GRAYED,
-			   0, TEXT("Plugin"));
+		ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_STRING | MF_GRAYED,
+			    0, "Plugin");
 	}
 
 	DrawMenuBar(ui->hwnd);
@@ -1665,21 +1642,15 @@ save_file(UI *ui)
 static void
 addtotree(HWND treeview, HTREEITEM parent, Tree *tree)
 {
-	TVINSERTSTRUCT tvins;
+	TVINSERTSTRUCTA tvins;
 	tvins.hParent = parent;
 	tvins.hInsertAfter = TVI_LAST;
 	tvins.item.mask = TVIF_TEXT;
-#ifdef UNICODE
-	tvins.item.pszText = mbcs_to_utf16(tree->name);
-#else
 	tvins.item.pszText = tree->name;
-#endif
+
 	HTREEITEM item = (HTREEITEM)
-		SendMessage(treeview, TVM_INSERTITEM,
+		SendMessage(treeview, TVM_INSERTITEMA,
 			    0, (LPARAM) &tvins);
-#ifdef UNICODE
-	free(tvins.item.pszText);
-#endif
 	for (int i=0; i<tree->n_child; i++)
 		addtotree(treeview, item, tree->children[i]);
 }
@@ -1692,86 +1663,62 @@ populate_treeview(UI *ui)
 }
 
 int
-format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
+format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 {
 	*ptypename = 0;
 	*pvaluerepr = 0;
-	TCHAR *buf;
+	char *buf;
 
 	switch (t->type) {
 		lua_State *L;
 		long ival;
 	case F_RAW:
-		*ptypename = TEXT("raw");
+		*ptypename = "raw";
 		return 0;
 	case F_UINT:
 		ival = t->intvalue;
-		buf = ralloc(&rgn, 24 * sizeof *buf);
+		buf = ralloc(&rgn, 24);
 		switch (t->len) {
 		case 1:
-			*ptypename = TEXT("uint8");
+			*ptypename = "uint8";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%u (%02x)"), ival, ival);
+			return sprintf(buf, "%u (%02x)", ival, ival);
 		case 2:
-			*ptypename = TEXT("uint16");
+			*ptypename = "uint16";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%u (%04x)"), ival, ival);
+			return sprintf(buf, "%u (%04x)", ival, ival);
 		case 4:
-			*ptypename = TEXT("uint32");
+			*ptypename = "uint32";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%u (%08x)"), ival, ival);
+			return sprintf(buf, "%u (%08x)", ival, ival);
 		}
-		*ptypename = TEXT("uint");
+		*ptypename = "uint";
 		return 0;
 	case F_INT:
 		ival = t->intvalue;
-		buf = ralloc(&rgn, 12 * sizeof *buf);
+		buf = ralloc(&rgn, 12);
 		switch (t->len) {
 		case 1:
-			*ptypename = TEXT("int8");
+			*ptypename = "int8";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%d"), ival);
+			return sprintf(buf, "%d", ival);
 		case 2:
-			*ptypename = TEXT("int16");
+			*ptypename = "int16";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%d"), ival);
+			return sprintf(buf, "%d", ival);
 		case 4:
-			*ptypename = TEXT("int32");
+			*ptypename = "int32";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%d"), ival);
+			return sprintf(buf, "%d", ival);
 		}
-		*ptypename = TEXT("int");
+		*ptypename = "int";
 		return 0;
 	case F_ASCII:
-		*ptypename = TEXT("ascii");
-#if 0
-		p = value_buf;
-		int n = t->len;
-		if (n > 16) n = 16;
-		*p++ = '"';
-		for (int i=0; i<n; i++) {
-			uint8_t c = buf_getbyte(b, t->start + i);
-			if (c >= 0x20 && c < 0x7f) {
-				*p++ = c;
-			} else {
-				_wsprintf(p, TEXT("\\x%02x"), c);
-				p += 4;
-			}
-		}
-		*p++ = '"';
-		if (n < t->len) {
-			_wsprintf(p, TEXT("..."));
-		}
-#endif
-		/* TODO */
+		*ptypename = "ascii";
 		return 0;
 	case F_CUSTOM:
 		L = ui->lua;
-#ifdef UNICODE
-		*ptypename = mbcs_to_utf16_r(&rgn, t->custom_type_name);
-#else
 		*ptypename = t->custom_type_name;
-#endif
 		getluaobj(L, "customtype");
 		assert(!lua_isnil(L, -1));
 		lua_getfield(L, -1, t->custom_type_name);
@@ -1791,14 +1738,9 @@ format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
 			size_t n;
 			const char *vr = luaL_tolstring(L, -1, &n);
 			n += 1;
-			TCHAR *vrdup;
-#ifdef UNICODE
-			vrdup = mbcs_to_utf16_r(&rgn, vr);
-#else
-			vrdup = ralloc(&rgn, n);
+			char *vrdup = ralloc(&rgn, n);
 			memcpy(vrdup, vr, n);
 			*pvaluerepr = vrdup;
-#endif
 			vrlen = n;
 		}
 		lua_pop(L, 3);

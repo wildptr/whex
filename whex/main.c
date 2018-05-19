@@ -85,14 +85,14 @@ static ATOM register_wndclass(void);
 void format_error_code(TCHAR *, size_t, DWORD);
 int file_chooser_dialog(HWND, TCHAR *, int);
 static int start_gui(int, UI *, TCHAR *);
-void update_monoedit_buffer(UI *, int, int);
-void set_current_line(UI *, long long);
+void set_current_line(UI *, offset);
 static void update_window_title(UI *ui);
 void update_status_text(UI *, Tree *);
 void update_field_info(UI *);
 void update_cursor_pos(UI *);
-long long cursor_pos(UI *);
-void goto_address(UI *, long long);
+offset cursor_pos(UI *);
+offset current_line(UI *);
+void goto_address(UI *, offset);
 void error_prompt(UI *, const char *);
 void scroll_up_line(UI *);
 void scroll_down_line(UI *);
@@ -117,7 +117,7 @@ void move_backward(UI *);
 void move_next_field(UI *);
 void move_prev_field(UI *);
 TCHAR *inputbox(UI *, TCHAR *title);
-bool parse_addr(TCHAR *, long long *);
+bool parse_addr(TCHAR *, offset *);
 void errorbox(HWND, TCHAR *);
 void msgbox(HWND, const TCHAR *, ...);
 Tree *convert_tree(Region *, lua_State *);
@@ -125,6 +125,7 @@ int load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
 int api_buffer_peeku16(lua_State *L);
 int api_buffer_peeku32(lua_State *L);
+int api_buffer_peeku64(lua_State *L);
 int api_buffer_read(lua_State *L);
 int api_buffer_tree(lua_State *L);
 int api_buffer_size(lua_State *L);
@@ -137,8 +138,7 @@ void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
 int save_file(UI *);
 void populate_treeview(UI *);
-int format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR
-		      **pvaluerepr);
+int format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -147,22 +147,21 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 
 	switch (msg) {
 	case WM_LBUTTONDOWN:
-		if (ui->mode == MODE_NORMAL) {
-			int x = LOWORD(lparam);
-			int y = HIWORD(lparam);
-			int cx = x / ui->charwidth;
-			int cy = y / ui->charheight;
-			SetFocus(hwnd);
-			if (cx >= 10 && cx < 10+N_COL*3 && cy < ui->nrow) {
-				bool lownib = (cx-10)%3;
-				cx = (cx-10)/3;
-				long long pos = ((ui->current_line + cy) << LOG2_N_COL) + cx;
-				if (pos < ui->buffer->buffer_size) {
-					ui->cursor_x = cx;
-					ui->cursor_y = cy;
-					ui->cursor_at_low_nibble = lownib;
-					update_cursor_pos(ui);
-				}
+		if (ui->mode != MODE_NORMAL) return 0;
+		int x = LOWORD(lparam);
+		int y = HIWORD(lparam);
+		int cx = x / ui->charwidth;
+		int cy = y / ui->charheight;
+		SetFocus(hwnd);
+		if (cx >= 10 && cx < 10+N_COL*3 && cy < ui->nrow) {
+			bool lownib = (cx-10)%3;
+			cx = (cx-10)/3;
+			offset pos = ((current_line(ui) + cy) << LOG2_N_COL) + cx;
+			if (pos < ui->buffer->buffer_size) {
+				ui->cursor_x = cx;
+				ui->cursor_y = cy;
+				ui->cursor_at_low_nibble = lownib;
+				update_cursor_pos(ui);
 			}
 		}
 		return 0;
@@ -189,10 +188,18 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				move_down_page(ui);
 				break;
 			case VK_HOME:
-				goto_bol(ui);
+				if (GetKeyState(VK_CONTROL) < 0) {
+					goto_address(ui, 0);
+				} else {
+					goto_bol(ui);
+				}
 				break;
 			case VK_END:
-				goto_eol(ui);
+				if (GetKeyState(VK_CONTROL) < 0) {
+					goto_address(ui, ui->buffer->buffer_size-1);
+				} else {
+					goto_eol(ui);
+				}
 				break;
 			}
 			break;
@@ -210,7 +217,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		}
 		return 0;
 	case WM_MOUSEWHEEL:
-		{
+		if (ui->mode == MODE_NORMAL) {
 			int delta = (short) HIWORD(wparam);
 			if (delta > 0) {
 				int n = delta / WHEEL_DELTA;
@@ -303,9 +310,11 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 	InitCommonControls();
 	if (!med_register_class()) return 1;
 	if (!register_wndclass()) return 1;
+	if (filepath) {
+		open_file(ui, filepath);
+		free(filepath);
+	}
 	init_font(ui);
-	//RECT rect = { 0, 0, ui->charwidth*N_COL_CHAR, ui->charheight*(INITIAL_N_ROW+1) };
-	//AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 	HMENU menu = create_menu();
 	HWND hwnd = CreateWindow(TEXT("WHEX"), // class name
 				 0, // window title
@@ -318,10 +327,6 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 				 menu,
 				 ui->instance,
 				 ui); // window-creation data
-	if (filepath) {
-		open_file(ui, filepath);
-		free(filepath);
-	}
 	ShowWindow(hwnd, show);
 	update_ui(ui);
 	MSG msg;
@@ -459,6 +464,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "peeku16");
 	lua_pushcfunction(L, api_buffer_peeku32);
 	lua_setfield(L, -2, "peeku32");
+	lua_pushcfunction(L, api_buffer_peeku64);
+	lua_setfield(L, -2, "peeku64");
 	lua_pushcfunction(L, api_buffer_read);
 	lua_setfield(L, -2, "read");
 	lua_pushcfunction(L, api_buffer_tree);
@@ -505,62 +512,10 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 }
 
 void
-update_monoedit_buffer(UI *ui, int buffer_line, int num_lines)
-{
-	Buffer *b = ui->buffer;
-	long long abs_line = ui->current_line + buffer_line;
-	long long abs_line_end = abs_line + num_lines;
-	while (abs_line < abs_line_end) {
-		TCHAR *line = ui->med_buffer + buffer_line*N_COL_CHAR;
-		TCHAR *p = line;
-		long long addr = abs_line << LOG2_N_COL;
-		if (abs_line >= ui->total_lines) {
-			for (int i=0; i<N_COL_CHAR; i++) {
-				p[i] = ' ';
-			}
-		} else {
-			uint8_t data[16];
-			buf_read(b, data, addr, 16);
-			_wsprintf(p, TEXT("%08llx:"), addr);
-			p += 9;
-			int end = 0;
-			if (abs_line+1 >= ui->total_lines) {
-				end = b->buffer_size & (N_COL-1);
-			}
-			if (!end) {
-				end = N_COL;
-			}
-			for (int j=0; j<end; j++) {
-				//*p++ = j && !(j&7) ? '-' : ' ';
-				_wsprintf(p, TEXT(" %02x"), data[j]);
-				p += 3;
-			}
-			for (int j=end; j<N_COL; j++) {
-				_wsprintf(p, TEXT("   "));
-				p += 3;
-			}
-			_wsprintf(p, TEXT("  "));
-			p += 2;
-			for (int j=0; j<end; j++) {
-				uint8_t c = data[j];
-				*p++ = c < 0x20 || c > 0x7e ? '.' : c;
-			}
-			// fill the rest of the line with spaces
-			for (int j = p-line; j < N_COL_CHAR; j++) {
-				line[j] = ' ';
-			}
-		}
-		buffer_line++;
-		abs_line++;
-	}
-}
-
-void
-set_current_line(UI *ui, long long line)
+set_current_line(UI *ui, offset line)
 {
 	assert(line <= ui->total_lines);
-	ui->current_line = line;
-	update_monoedit_buffer(ui, 0, ui->nrow);
+	med_set_current_line(ui->monoedit, line);
 	update_monoedit_tags(ui);
 	update_cursor_pos(ui);
 	InvalidateRect(ui->monoedit, 0, FALSE);
@@ -572,23 +527,23 @@ update_status_text(UI *ui, Tree *leaf)
 	TCHAR buf[17];
 	char *path = 0;
 	HWND sb = ui->status_bar;
-	long long pos = cursor_pos(ui);
+	offset pos = cursor_pos(ui);
 	_wsprintf(buf, TEXT("%llx"), pos);
 	SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
 	if (leaf) {
-		TCHAR *typename;
-		TCHAR *valuerepr;
+		char *typename;
+		char *valuerepr;
 		void *top = rgn.cur;
 		format_leaf_value(ui, leaf, &typename, &valuerepr);
 		path = tree_path(&rgn, leaf);
-		SendMessage(sb, SB_SETTEXT, 1, (LPARAM) typename);
-		SendMessage(sb, SB_SETTEXT, 2, (LPARAM) valuerepr);
+		SendMessage(sb, SB_SETTEXTA, 1, (LPARAM) typename);
+		SendMessage(sb, SB_SETTEXTA, 2, (LPARAM) valuerepr);
 		SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
 		rfree(&rgn, top);
 	} else {
-		SendMessage(sb, SB_SETTEXT, 1, 0);
-		SendMessage(sb, SB_SETTEXT, 2, 0);
-		SendMessage(sb, SB_SETTEXT, 3, 0);
+		SendMessage(sb, SB_SETTEXTA, 1, 0);
+		SendMessage(sb, SB_SETTEXTA, 2, 0);
+		SendMessage(sb, SB_SETTEXTA, 3, 0);
 	}
 }
 
@@ -626,28 +581,35 @@ void
 update_cursor_pos(UI *ui)
 {
 	int cx = 10+ui->cursor_x*3 + ui->cursor_at_low_nibble;
-	SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS, cx, ui->cursor_y);
+	med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
 	update_field_info(ui);
 }
 
-long long
+offset
 cursor_pos(UI *ui)
 {
-	return ((ui->current_line + ui->cursor_y) << LOG2_N_COL) + ui->cursor_x;
+	return ((current_line(ui) + ui->cursor_y) << LOG2_N_COL) + ui->cursor_x;
+}
+
+offset
+current_line(UI *ui)
+{
+	return med_get_current_line(ui->monoedit);
 }
 
 void
-goto_address(UI *ui, long long addr)
+goto_address(UI *ui, offset addr)
 {
-	long long line = addr >> LOG2_N_COL;
+	offset line = addr >> LOG2_N_COL;
 	int col = addr & (N_COL-1);
 	assert(addr >= 0 && addr < ui->buffer->buffer_size);
 	ui->cursor_x = col;
-	if (line >= ui->current_line && line < ui->current_line + ui->nrow) {
-		ui->cursor_y = (int)(line - ui->current_line);
+	offset curline = current_line(ui);
+	if (line >= curline && line < curline + ui->nrow) {
+		ui->cursor_y = (int)(line - curline);
 		update_cursor_pos(ui);
 	} else {
-		long long line1;
+		offset line1;
 		if (line >= ui->nrow >> 1) {
 			line1 = line - (ui->nrow >> 1);
 		} else {
@@ -661,27 +623,14 @@ goto_address(UI *ui, long long addr)
 void
 error_prompt(UI *ui, const char *errmsg)
 {
-	const TCHAR *terrmsg;
-#ifdef UNICODE
-	void *top = rgn.cur;
-	terrmsg = mbcs_to_utf16_r(&rgn, errmsg);
-#else
-	terrmsg = errmsg;
-#endif
-	MessageBox(ui->hwnd, terrmsg, TEXT("Error"), MB_ICONERROR);
-#ifdef UNICODE
-	rfree(&rgn, top);
-#endif
+	MessageBoxA(ui->hwnd, errmsg, "Error", MB_ICONERROR);
 }
 
 void
 scroll_up_line(UI *ui)
 {
-	if (ui->current_line) {
-		ui->current_line--;
-		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, -1);
-		memmove(ui->med_buffer+N_COL_CHAR, ui->med_buffer, N_COL_CHAR*(ui->nrow-1)*sizeof(TCHAR));
-		update_monoedit_buffer(ui, 0, 1);
+	if (current_line(ui)) {
+		med_scroll(ui->monoedit, 1);
 		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 	}
@@ -691,10 +640,7 @@ void
 scroll_down_line(UI *ui)
 {
 	if (cursor_pos(ui) + N_COL < ui->buffer->buffer_size) {
-		ui->current_line++;
-		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, 1);
-		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR, N_COL_CHAR*(ui->nrow-1)*sizeof(TCHAR));
-		update_monoedit_buffer(ui, ui->nrow-1, 1);
+		med_scroll(ui->monoedit, -1);
 		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 	}
@@ -716,7 +662,7 @@ move_up(UI *ui)
 void
 move_down(UI *ui)
 {
-	long long filesize = ui->buffer->buffer_size;
+	offset filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL && cursor_pos(ui) < filesize - N_COL) {
 		if (ui->cursor_y < ui->nrow-1) {
 			ui->cursor_y++;
@@ -754,41 +700,31 @@ move_right(UI *ui)
 void
 scroll_up_page(UI *ui)
 {
-	if (ui->current_line >= ui->nrow) {
-		ui->current_line -= ui->nrow;
-		update_monoedit_buffer(ui, 0, ui->nrow);
-		update_monoedit_tags(ui);
-		update_cursor_pos(ui);
-		InvalidateRect(ui->monoedit, 0, FALSE);
+	offset curline = current_line(ui);
+	int delta;
+	if (curline >= ui->nrow) {
+		delta = ui->nrow;
 	} else {
-		int delta = (int) ui->current_line;
-		ui->current_line = 0;
-		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, -delta);
-		memmove(ui->med_buffer+N_COL_CHAR*delta, ui->med_buffer, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
-		update_monoedit_buffer(ui, 0, delta);
-		update_monoedit_tags(ui);
-		update_cursor_pos(ui);
+		delta = (int) curline;
 	}
+	med_scroll(ui->monoedit, delta);
+	update_monoedit_tags(ui);
+	update_cursor_pos(ui);
 }
 
 void
 scroll_down_page(UI *ui)
 {
-	if (ui->current_line + ui->nrow <= ui->total_lines) {
-		ui->current_line += ui->nrow;
-		update_monoedit_buffer(ui, 0, ui->nrow);
-		update_monoedit_tags(ui);
-		update_cursor_pos(ui);
-		InvalidateRect(ui->monoedit, 0, FALSE);
+	offset curline = current_line(ui);
+	int delta;
+	if (curline + ui->nrow <= ui->total_lines) {
+		delta = ui->nrow;
 	} else {
-		int delta = (int)(ui->total_lines - ui->current_line);
-		ui->current_line = ui->total_lines;
-		SendMessage(ui->monoedit, MED_WM_SCROLL, 0, delta);
-		memmove(ui->med_buffer, ui->med_buffer+N_COL_CHAR*delta, N_COL_CHAR*(ui->nrow-delta)*sizeof(TCHAR));
-		update_monoedit_buffer(ui, ui->nrow-delta, delta);
-		update_monoedit_tags(ui);
-		update_cursor_pos(ui);
+		delta = (int)(ui->total_lines - curline);
 	}
+	med_scroll(ui->monoedit, -delta);
+	update_monoedit_tags(ui);
+	update_cursor_pos(ui);
 }
 
 void
@@ -802,7 +738,7 @@ move_up_page(UI *ui)
 void
 move_down_page(UI *ui)
 {
-	long long filesize = ui->buffer->buffer_size;
+	offset filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL*ui->nrow && cursor_pos(ui) < filesize - N_COL*ui->nrow) {
 		scroll_down_page(ui);
 	}
@@ -812,7 +748,7 @@ void
 handle_char_normal(UI *ui, int c)
 {
 	TCHAR *text;
-	long long addr;
+	offset addr;
 
 	switch (c) {
 	case 8: // backspace
@@ -905,13 +841,12 @@ handle_char_replace(UI *ui, int c)
 
 	int cy = ui->cursor_y;
 	int cx = ui->cursor_x;
-	long long pos = cursor_pos(ui);
+	offset pos = cursor_pos(ui);
 	uint8_t b;
 	if (ui->cursor_at_low_nibble) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
-		ui->med_buffer[N_COL_CHAR*cy + (11+cx*3)] = c|32;
 		ui->cursor_at_low_nibble = 0;
 		move_forward(ui);
 	} else {
@@ -924,9 +859,8 @@ handle_char_replace(UI *ui, int c)
 		}
 		ui->replace_buf_len++;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
-		ui->med_buffer[N_COL_CHAR*cy + (10+cx*3)] = c|32;
 		ui->cursor_at_low_nibble = 1;
-		SendMessage(ui->monoedit, MED_WM_SET_CURSOR_POS, 11+cx*3, cy);
+		med_set_cursor_pos(ui->monoedit, cy, 11+cx*3);
 		/* TODO this is inefficient */
 		InvalidateRect(ui->monoedit, 0, FALSE);
 	}
@@ -956,6 +890,52 @@ init_font(UI *ui)
 }
 
 void
+med_getline(offset ln, MedLine *line, void *arg)
+{
+	assert(ln >= 0);
+	UI *ui = (UI *) arg;
+	TCHAR *text = med_alloc_text(ui->monoedit, N_COL_CHAR);
+	line->text = text;
+	line->textlen = N_COL_CHAR;
+	line->tags = 0;
+
+	uint8_t data[N_COL];
+	Buffer *b = ui->buffer;
+	offset addr = ln << LOG2_N_COL;
+	int end;
+	TCHAR *p = text;
+	if (ln < ui->total_lines) {
+		if (ln+1 == ui->total_lines) {
+			end = b->buffer_size & (N_COL-1);
+			if (end == 0) end = N_COL;
+		} else {
+			end = N_COL;
+		}
+		buf_read(b, data, addr, end);
+		_wsprintf(p, TEXT("%08llx:"), addr);
+		p += 9;
+		for (int j=0; j<end; j++) {
+			_wsprintf(p, TEXT(" %02x"), data[j]);
+			p += 3;
+		}
+		for (int j=end; j<N_COL; j++) {
+			_wsprintf(p, TEXT("   "));
+			p += 3;
+		}
+		_wsprintf(p, TEXT("  "));
+		p += 2;
+		for (int j=0; j<end; j++) {
+			uint8_t c = data[j];
+			*p++ = c < 0x20 || c > 0x7e ? '.' : c;
+		}
+	}
+	/* fill the rest of the line with spaces */
+	for (int j = p-text; j < N_COL_CHAR; j++) {
+		text[j] = ' ';
+	}
+}
+
+void
 handle_wm_create(UI *ui, LPCREATESTRUCT create)
 {
 	HWND hwnd = ui->hwnd;
@@ -969,21 +949,13 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 				WS_CHILD | WS_VISIBLE,
 				0, 0, 0, 0,
 				hwnd, 0, instance, 0);
+	med_set_source(monoedit, med_getline, ui);
 	ui->monoedit = monoedit;
 	ui->nrow = INITIAL_N_ROW;
-	ui->med_buffer = malloc(N_COL_CHAR*INITIAL_N_ROW*sizeof(TCHAR));
-	ui->med_buffer_nrow = INITIAL_N_ROW;
-	for (int i=0; i<N_COL_CHAR*INITIAL_N_ROW; i++)
-		ui->med_buffer[i] = ' ';
-	SendMessage(monoedit, MED_WM_SET_CSIZE, N_COL_CHAR, INITIAL_N_ROW);
-	SendMessage(monoedit, MED_WM_SET_BUFFER, 0, (LPARAM) ui->med_buffer);
 	SendMessage(monoedit, WM_SETFONT, (WPARAM) ui->mono_font, 0);
-	update_monoedit_buffer(ui, 0, INITIAL_N_ROW);
 	/* subclass monoedit window */
 	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) ui);
 	ui->med_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
-	SetFocus(monoedit);
-	update_cursor_pos(ui);
 
 	/* create tree view */
 	HWND treeview;
@@ -1021,6 +993,8 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 		     rect.bottom - rect.top,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
 
+	SetFocus(monoedit);
+	update_cursor_pos(ui);
 	update_window_title(ui);
 }
 
@@ -1028,24 +1002,11 @@ void
 resize_monoedit(UI *ui, int width, int height)
 {
 	int new_nrow = height/ui->charheight;
-	if (ui->filepath && new_nrow > ui->nrow) {
-		if (new_nrow > ui->med_buffer_nrow) {
-			ui->med_buffer = realloc(ui->med_buffer, N_COL_CHAR*new_nrow*sizeof(TCHAR));
-			ui->med_buffer_nrow = new_nrow;
-			SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0, (LPARAM) ui->med_buffer);
-		}
-		update_monoedit_buffer(ui, ui->nrow, new_nrow - ui->nrow);
-		update_monoedit_tags(ui);
-	}
 	ui->nrow = new_nrow;
-	SendMessage(ui->monoedit, MED_WM_SET_CSIZE, -1, height/ui->charheight);
-	SetWindowPos(ui->monoedit,
-		     0,
-		     0,
-		     0,
-		     width,
-		     height,
+	med_set_size(ui->monoedit, height/ui->charheight, width/ui->charwidth);
+	SetWindowPos(ui->monoedit, 0, 0, 0, width, height,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
+	med_update_buffer(ui->monoedit);
 	InvalidateRect(ui->monoedit, 0, FALSE);
 }
 
@@ -1073,14 +1034,22 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			/* will crash if we continue */
 			if (wparam == SIZE_MINIMIZED) return 0;
 			int wid = LOWORD(lparam);
-			// adjust status bar geometry automatically
-			SendMessage(ui->status_bar, WM_SIZE, 0, 0);
-			RECT status_bar_rect;
-			GetWindowRect(ui->status_bar, &status_bar_rect);
-			// translate top-left from screen to client
-			ScreenToClient(hwnd, (LPPOINT) &status_bar_rect);
 			int med_wid = 80*ui->charwidth;
-			int med_hei = status_bar_rect.top;
+			int med_hei;
+			RECT r;
+			if (ui->status_bar) {
+				/* adjust status bar geometry automatically */
+				SendMessage(ui->status_bar, WM_SIZE, 0, 0);
+				GetWindowRect(ui->status_bar, &r);
+				/* translate top-left from screen to client */
+				ScreenToClient(hwnd, (LPPOINT) &r);
+				med_hei = r.top;
+			} else {
+				GetClientRect(hwnd, &r);
+				med_hei = r.bottom;
+			}
+			assert(med_wid > 0);
+			assert(med_hei > 0);
 			resize_monoedit(ui, med_wid, med_hei);
 			SetWindowPos(ui->treeview, 0,
 				     med_wid, 0, wid - med_wid, med_hei,
@@ -1149,6 +1118,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 #ifdef UNICODE
 			free(path_mbcs);
 #endif
+			populate_treeview(ui);
+			update_plugin_menu(ui);
 			break;
 		case IDM_TOOLS_RUN_LUA_SCRIPT:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
@@ -1225,10 +1196,6 @@ open_file(UI *ui, TCHAR *path)
 	if (b->buffer_size&(N_COL-1)) {
 		ui->total_lines += 1;
 	}
-	ui->med_buffer = malloc(N_COL_CHAR*ui->nrow*sizeof(TCHAR));
-	ui->med_buffer_nrow = ui->nrow;
-	SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0,
-		    (LPARAM) ui->med_buffer);
 	ui->readonly = readonly;
 
 	load_filetype_plugin(ui, path);
@@ -1240,13 +1207,10 @@ void
 close_file(UI *ui)
 {
 	buf_finalize(ui->buffer);
-	free(ui->med_buffer);
-	ui->med_buffer = 0;
-	ui->med_buffer_nrow = 0;
 	free(ui->filepath);
 	ui->filepath = 0;
 	ui->total_lines = 0;
-	ui->current_line = 0;
+	/* TODO: set current line to 0 */
 	ui->cursor_y = 0;
 	ui->cursor_x = 0;
 	ui->hl_start = 0;
@@ -1262,12 +1226,10 @@ close_file(UI *ui)
 		free(ui->plugin_funcname);
 		ui->plugin_funcname = 0;
 	}
-
-	SendMessage(ui->monoedit, MED_WM_SET_BUFFER, 0, 0);
 }
 
-static long long
-clamp(long long x, long long min, long long max)
+static offset
+clamp(offset x, offset min, offset max)
 {
 	if (x < min) return min;
 	if (x > max) return max;
@@ -1277,14 +1239,15 @@ clamp(long long x, long long min, long long max)
 void
 update_monoedit_tags(UI *ui)
 {
-	long long start = ui->hl_start;
-	long long len = ui->hl_len;
-	long long view_start = ui->current_line << LOG2_N_COL;
-	long long view_end = (ui->current_line + ui->nrow) << LOG2_N_COL;
+	offset start = ui->hl_start;
+	offset len = ui->hl_len;
+	offset curline = current_line(ui);
+	offset view_start = curline << LOG2_N_COL;
+	offset view_end = (curline + ui->nrow) << LOG2_N_COL;
 	int start_clamp = (int)(clamp(start, view_start, view_end) - view_start);
 	int end_clamp = (int)(clamp(start + len, view_start, view_end) - view_start);
-	HWND w1 = ui->monoedit;
-	SendMessage(w1, MED_WM_CLEAR_TAGS, 0, 0);
+	HWND med = ui->monoedit;
+	med_clear_tags(med);
 	if (end_clamp > start_clamp) {
 		MedTag tag;
 		tag.attr = 1;
@@ -1295,26 +1258,22 @@ update_monoedit_tags(UI *ui)
 			end_x = N_COL;
 		}
 		if (tag_last_line > tag_first_line) {
-			tag.line = tag_first_line;
 			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
 			tag.len = (N_COL - (start_clamp & (N_COL-1))) * 3 - 1;
-			SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
+			med_add_tag(med, tag_first_line, &tag);
 			for (int i=tag_first_line+1; i<tag_last_line; i++) {
-				tag.line = i;
 				tag.start = 10;
 				tag.len = N_COL*3-1;
-				SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
+				med_add_tag(med, i, &tag);
 			}
-			tag.line = tag_last_line;
 			tag.start = 10;
 			tag.len = end_x * 3 - 1;
-			SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
+			med_add_tag(med, tag_last_line, &tag);
 		} else {
 			// single line
-			tag.line = tag_first_line;
 			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
 			tag.len = (end_x - (start_clamp & (N_COL-1))) * 3 - 1;
-			SendMessage(w1, MED_WM_ADD_TAG, 0, (LPARAM) &tag);
+			med_add_tag(med, tag_first_line, &tag);
 		}
 	}
 }
@@ -1336,7 +1295,6 @@ update_ui(UI *ui)
 	update_window_title(ui);
 	if (ui->filepath) {
 		ShowWindow(ui->monoedit, SW_SHOW);
-		update_monoedit_buffer(ui, 0, ui->nrow);
 		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 		mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
@@ -1391,7 +1349,7 @@ move_next_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
 	if (b->tree) {
-		long long cur = cursor_pos(ui);
+		offset cur = cursor_pos(ui);
 		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			goto_address(ui, leaf->start + leaf->len);
@@ -1404,7 +1362,7 @@ move_prev_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
 	if (b->tree) {
-		long long cur = cursor_pos(ui);
+		offset cur = cursor_pos(ui);
 		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			Tree *prev_leaf = tree_lookup(b->tree, cur-1);
@@ -1419,16 +1377,16 @@ void
 goto_bol(UI *ui)
 {
 	if (ui->buffer->buffer_size > 0) {
-		goto_address(ui, (ui->current_line + ui->cursor_y) * N_COL);
+		goto_address(ui, (current_line(ui) + ui->cursor_y) * N_COL);
 	}
 }
 
 void
 goto_eol(UI *ui)
 {
-	long long filesize = ui->buffer->buffer_size;
+	offset filesize = ui->buffer->buffer_size;
 	if (filesize > 0) {
-		long long addr = (ui->current_line + ui->cursor_y + 1) * N_COL - 1;
+		offset addr = (current_line(ui) + ui->cursor_y + 1) * N_COL - 1;
 		if (addr >= filesize) {
 			addr = filesize-1;
 		}
@@ -1483,9 +1441,9 @@ inputbox(UI *ui, TCHAR *title)
 }
 
 bool
-parse_addr(TCHAR *s, long long *addr)
+parse_addr(TCHAR *s, offset *addr)
 {
-	long long n = 0;
+	offset n = 0;
 	if (!*s) return 0;
 	do {
 		TCHAR c = *s++;
@@ -1537,6 +1495,7 @@ getluaobj(lua_State *L, const char *name)
 	lua_remove(L, -2);
 }
 
+/* does not update UI */
 int
 load_plugin(UI *ui, const char *path)
 {
@@ -1579,18 +1538,12 @@ load_plugin(UI *ui, const char *path)
 	b->tree = tree;
 
 	lua_getfield(L, -1, "name"); /* plugin.name */
-	const char *plugin_name = luaL_checkstring(L, -1);
-	TCHAR *tplugin_name;
-#ifdef UNICODE
-	tplugin_name = mbcs_to_utf16(plugin_name);
-#else
-	tplugin_name = _strdup(plugin_name);
-#endif
+	char *plugin_name = _strdup(luaL_checkstring(L, -1));
 	lua_pop(L, 1);
 	if (ui->plugin_name) {
 		free(ui->plugin_name);
 	}
-	ui->plugin_name = tplugin_name;
+	ui->plugin_name = plugin_name;
 
 	getluaobj(L, "plugin");
 	lua_pushstring(L, "functions");
@@ -1604,20 +1557,12 @@ load_plugin(UI *ui, const char *path)
 		lua_geti(L, -1, 1); /* push func */
 		lua_seti(L, -4, 1+i);
 		lua_geti(L, -1, 2); /* push funcname */
-		const char *funcname = luaL_checkstring(L, -1);
-		TCHAR *tfuncname;
-#ifdef UNICODE
-		tfuncname = mbcs_to_utf16(funcname);
-#else
-		tfuncname = _strdup(funcname);
-#endif
+		char *funcname = _strdup(luaL_checkstring(L, -1));
 		lua_pop(L, 2);
-		ui->plugin_funcname[i] = tfuncname;
+		ui->plugin_funcname[i] = funcname;
 	}
 	lua_pop(L, 3);
 
-	populate_treeview(ui);
-	update_plugin_menu(ui);
 	return 0;
 }
 
@@ -1629,19 +1574,20 @@ update_plugin_menu(UI *ui)
 	if (ui->plugin_name) {
 		HMENU plugin_menu = CreateMenu();
 		for (int i=0; i<ui->npluginfunc; i++) {
-			AppendMenu(plugin_menu, MF_STRING, IDM_PLUGIN_0+i,
-				   ui->plugin_funcname[i]);
+			AppendMenuA(plugin_menu, MF_STRING, IDM_PLUGIN_0+i,
+				    ui->plugin_funcname[i]);
 		}
-		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
-			   (UINT_PTR) plugin_menu, ui->plugin_name);
+		ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
+			    (UINT_PTR) plugin_menu, ui->plugin_name);
 	} else {
-		ModifyMenu(mainmenu, 2, MF_BYPOSITION | MF_STRING | MF_GRAYED,
-			   0, TEXT("Plugin"));
+		ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_STRING | MF_GRAYED,
+			    0, "Plugin");
 	}
 
 	DrawMenuBar(ui->hwnd);
 }
 
+/* does not update UI */
 int
 load_filetype_plugin(UI *ui, const TCHAR *path)
 {
@@ -1697,21 +1643,15 @@ save_file(UI *ui)
 static void
 addtotree(HWND treeview, HTREEITEM parent, Tree *tree)
 {
-	TVINSERTSTRUCT tvins;
+	TVINSERTSTRUCTA tvins;
 	tvins.hParent = parent;
 	tvins.hInsertAfter = TVI_LAST;
 	tvins.item.mask = TVIF_TEXT;
-#ifdef UNICODE
-	tvins.item.pszText = mbcs_to_utf16(tree->name);
-#else
 	tvins.item.pszText = tree->name;
-#endif
+
 	HTREEITEM item = (HTREEITEM)
-		SendMessage(treeview, TVM_INSERTITEM,
+		SendMessage(treeview, TVM_INSERTITEMA,
 			    0, (LPARAM) &tvins);
-#ifdef UNICODE
-	free(tvins.item.pszText);
-#endif
 	for (int i=0; i<tree->n_child; i++)
 		addtotree(treeview, item, tree->children[i]);
 }
@@ -1724,86 +1664,62 @@ populate_treeview(UI *ui)
 }
 
 int
-format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
+format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 {
 	*ptypename = 0;
 	*pvaluerepr = 0;
-	TCHAR *buf;
+	char *buf;
 
 	switch (t->type) {
 		lua_State *L;
-		int ival;
+		long ival;
 	case F_RAW:
-		*ptypename = TEXT("raw");
+		*ptypename = "raw";
 		return 0;
 	case F_UINT:
 		ival = t->intvalue;
-		buf = ralloc(&rgn, 24 * sizeof *buf);
+		buf = ralloc(&rgn, 24);
 		switch (t->len) {
 		case 1:
-			*ptypename = TEXT("uint8");
+			*ptypename = "uint8";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%u (%02x)"), ival, ival);
+			return sprintf(buf, "%u (%02x)", ival, ival);
 		case 2:
-			*ptypename = TEXT("uint16");
+			*ptypename = "uint16";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%u (%04x)"), ival, ival);
+			return sprintf(buf, "%u (%04x)", ival, ival);
 		case 4:
-			*ptypename = TEXT("uint32");
+			*ptypename = "uint32";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%u (%08x)"), ival, ival);
+			return sprintf(buf, "%u (%08x)", ival, ival);
 		}
-		*ptypename = TEXT("uint");
+		*ptypename = "uint";
 		return 0;
 	case F_INT:
 		ival = t->intvalue;
-		buf = ralloc(&rgn, 12 * sizeof *buf);
+		buf = ralloc(&rgn, 12);
 		switch (t->len) {
 		case 1:
-			*ptypename = TEXT("int8");
+			*ptypename = "int8";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%d"), ival);
+			return sprintf(buf, "%d", ival);
 		case 2:
-			*ptypename = TEXT("int16");
+			*ptypename = "int16";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%d"), ival);
+			return sprintf(buf, "%d", ival);
 		case 4:
-			*ptypename = TEXT("int32");
+			*ptypename = "int32";
 			*pvaluerepr = buf;
-			return _wsprintf(buf, TEXT("%d"), ival);
+			return sprintf(buf, "%d", ival);
 		}
-		*ptypename = TEXT("int");
+		*ptypename = "int";
 		return 0;
 	case F_ASCII:
-		*ptypename = TEXT("ascii");
-#if 0
-		p = value_buf;
-		int n = t->len;
-		if (n > 16) n = 16;
-		*p++ = '"';
-		for (int i=0; i<n; i++) {
-			uint8_t c = buf_getbyte(b, t->start + i);
-			if (c >= 0x20 && c < 0x7f) {
-				*p++ = c;
-			} else {
-				_wsprintf(p, TEXT("\\x%02x"), c);
-				p += 4;
-			}
-		}
-		*p++ = '"';
-		if (n < t->len) {
-			_wsprintf(p, TEXT("..."));
-		}
-#endif
-		/* TODO */
+		*ptypename = "ascii";
 		return 0;
 	case F_CUSTOM:
 		L = ui->lua;
-#ifdef UNICODE
-		*ptypename = mbcs_to_utf16_r(&rgn, t->custom_type_name);
-#else
 		*ptypename = t->custom_type_name;
-#endif
 		getluaobj(L, "customtype");
 		assert(!lua_isnil(L, -1));
 		lua_getfield(L, -1, t->custom_type_name);
@@ -1823,14 +1739,9 @@ format_leaf_value(UI *ui, Tree *t, TCHAR **ptypename, TCHAR **pvaluerepr)
 			size_t n;
 			const char *vr = luaL_tolstring(L, -1, &n);
 			n += 1;
-			TCHAR *vrdup;
-#ifdef UNICODE
-			vrdup = mbcs_to_utf16_r(&rgn, vr);
-#else
-			vrdup = ralloc(&rgn, n);
+			char *vrdup = ralloc(&rgn, n);
 			memcpy(vrdup, vr, n);
 			*pvaluerepr = vrdup;
-#endif
 			vrlen = n;
 		}
 		lua_pop(L, 3);

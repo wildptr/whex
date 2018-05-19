@@ -57,6 +57,21 @@ api_buffer_peeku32(lua_State *L)
 }
 
 int
+api_buffer_peeku64(lua_State *L)
+{
+	Buffer *b = luaL_checkudata(L, 1, "buffer");
+	long long addr = luaL_checkinteger(L, 2);
+	if (addr < 0 || addr+8 > b->file_size) return 0;
+	union {
+		uint64_t i;
+		uint8_t b[8];
+	} u;
+	buf_read(b, u.b, addr, 8);
+	lua_pushinteger(L, u.i);
+	return 1;
+}
+
+int
 api_buffer_read(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");

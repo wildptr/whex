@@ -306,9 +306,9 @@ buf_save(Buffer *b)
 {
 	Segment *s = b->firstseg;
 	while (s) {
+		offset file_offset;
 		printf("%I64x--%I64x ", s->start, s->end);
 		switch (s->kind) {
-			offset file_offset;
 		case SEG_MEM:
 			printf("MEM\n");
 			break;
@@ -318,7 +318,11 @@ buf_save(Buffer *b)
 			if (s->start == file_offset) {
 				s->filedata = 0;
 			} else {
-				size_t len = (size_t)(s->end - s->start);
+				offset full_len = s->end - s->start;
+				size_t len = (size_t) full_len;
+				if (len != full_len) {
+					return -1;
+				}
 				s->filedata = malloc(len);
 				/* TODO: cleanup on failure */
 				if (!s->filedata) {
@@ -342,9 +346,13 @@ buf_save(Buffer *b)
 	}
 	s = b->firstseg;
 	while (s) {
-		size_t seglen = (size_t)(s->end - s->start);
+		offset full_seglen = s->end - s->start;
+		size_t seglen = (size_t) full_seglen;
+		if (seglen != full_seglen) {
+			return -1;
+		}
+		DWORD nwritten;
 		switch (s->kind) {
-			DWORD nwritten;
 		case SEG_MEM:
 			seek(b->file, s->start);
 			WriteFile(b->file, s->data, seglen,
@@ -431,7 +439,8 @@ buf_replace(Buffer *b, offset addr, const uint8_t *data, size_t len)
 		Segment *newseg;
 		if (after && after->start != end) {
 			size_t newseglen;
-			size_t delta = (size_t)(end - after->start);
+			offset full_delta = end - after->start;
+			size_t delta = (size_t) full_delta;
 			switch (after->kind) {
 			case SEG_MEM:
 				/* coalesce */
@@ -447,7 +456,7 @@ buf_replace(Buffer *b, offset addr, const uint8_t *data, size_t len)
 				newseg = newmemseg(addr, len);
 				memcpy(newseg->data, data, len);
 				newseg->next = after;
-				after->file_offset += delta;
+				after->file_offset += full_delta;
 				break;
 			default:
 				assert(0);
@@ -496,15 +505,16 @@ buf_insert(Buffer *b, offset addr, const uint8_t *data, size_t len)
 			after = before->next;
 		} else {
 			/* split 'before' at 'addr' */
-			size_t delta = (size_t)(addr - before->start);
+			offset full_delta = addr - after->start;
+			size_t delta = (size_t) full_delta;
+			size_t rest;
 			switch (before->kind) {
-				size_t rest;
 			case SEG_FILE:
 				after = malloc(sizeof *after);
 				*after = *before;
 				/* start and end will be adjusted later */
 				after->start = addr;
-				after->file_offset += delta;
+				after->file_offset += full_delta;
 				break;
 			case SEG_MEM:
 				rest = len - delta;

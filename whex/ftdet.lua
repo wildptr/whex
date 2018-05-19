@@ -1,4 +1,4 @@
-return function(buf, ext)
+return function(buf)
   local size = buf:size()
   if size >= 0x40 then
     if buf:read(0, 2) == 'MZ' then

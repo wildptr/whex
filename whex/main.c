@@ -85,14 +85,14 @@ static ATOM register_wndclass(void);
 void format_error_code(TCHAR *, size_t, DWORD);
 int file_chooser_dialog(HWND, TCHAR *, int);
 static int start_gui(int, UI *, TCHAR *);
-void set_current_line(UI *, long long);
+void set_current_line(UI *, offset);
 static void update_window_title(UI *ui);
 void update_status_text(UI *, Tree *);
 void update_field_info(UI *);
 void update_cursor_pos(UI *);
-long long cursor_pos(UI *);
-long long current_line(UI *);
-void goto_address(UI *, long long);
+offset cursor_pos(UI *);
+offset current_line(UI *);
+void goto_address(UI *, offset);
 void error_prompt(UI *, const char *);
 void scroll_up_line(UI *);
 void scroll_down_line(UI *);
@@ -117,7 +117,7 @@ void move_backward(UI *);
 void move_next_field(UI *);
 void move_prev_field(UI *);
 TCHAR *inputbox(UI *, TCHAR *title);
-bool parse_addr(TCHAR *, long long *);
+bool parse_addr(TCHAR *, offset *);
 void errorbox(HWND, TCHAR *);
 void msgbox(HWND, const TCHAR *, ...);
 Tree *convert_tree(Region *, lua_State *);
@@ -156,7 +156,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		if (cx >= 10 && cx < 10+N_COL*3 && cy < ui->nrow) {
 			bool lownib = (cx-10)%3;
 			cx = (cx-10)/3;
-			long long pos = ((current_line(ui) + cy) << LOG2_N_COL) + cx;
+			offset pos = ((current_line(ui) + cy) << LOG2_N_COL) + cx;
 			if (pos < ui->buffer->buffer_size) {
 				ui->cursor_x = cx;
 				ui->cursor_y = cy;
@@ -512,7 +512,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 }
 
 void
-set_current_line(UI *ui, long long line)
+set_current_line(UI *ui, offset line)
 {
 	assert(line <= ui->total_lines);
 	med_set_current_line(ui->monoedit, line);
@@ -527,7 +527,7 @@ update_status_text(UI *ui, Tree *leaf)
 	TCHAR buf[17];
 	char *path = 0;
 	HWND sb = ui->status_bar;
-	long long pos = cursor_pos(ui);
+	offset pos = cursor_pos(ui);
 	_wsprintf(buf, TEXT("%llx"), pos);
 	SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
 	if (leaf) {
@@ -585,31 +585,31 @@ update_cursor_pos(UI *ui)
 	update_field_info(ui);
 }
 
-long long
+offset
 cursor_pos(UI *ui)
 {
 	return ((current_line(ui) + ui->cursor_y) << LOG2_N_COL) + ui->cursor_x;
 }
 
-long long
+offset
 current_line(UI *ui)
 {
 	return med_get_current_line(ui->monoedit);
 }
 
 void
-goto_address(UI *ui, long long addr)
+goto_address(UI *ui, offset addr)
 {
-	long long line = addr >> LOG2_N_COL;
+	offset line = addr >> LOG2_N_COL;
 	int col = addr & (N_COL-1);
 	assert(addr >= 0 && addr < ui->buffer->buffer_size);
 	ui->cursor_x = col;
-	long long curline = current_line(ui);
+	offset curline = current_line(ui);
 	if (line >= curline && line < curline + ui->nrow) {
 		ui->cursor_y = (int)(line - curline);
 		update_cursor_pos(ui);
 	} else {
-		long long line1;
+		offset line1;
 		if (line >= ui->nrow >> 1) {
 			line1 = line - (ui->nrow >> 1);
 		} else {
@@ -662,7 +662,7 @@ move_up(UI *ui)
 void
 move_down(UI *ui)
 {
-	long long filesize = ui->buffer->buffer_size;
+	offset filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL && cursor_pos(ui) < filesize - N_COL) {
 		if (ui->cursor_y < ui->nrow-1) {
 			ui->cursor_y++;
@@ -700,7 +700,7 @@ move_right(UI *ui)
 void
 scroll_up_page(UI *ui)
 {
-	long long curline = current_line(ui);
+	offset curline = current_line(ui);
 	int delta;
 	if (curline >= ui->nrow) {
 		delta = ui->nrow;
@@ -715,7 +715,7 @@ scroll_up_page(UI *ui)
 void
 scroll_down_page(UI *ui)
 {
-	long long curline = current_line(ui);
+	offset curline = current_line(ui);
 	int delta;
 	if (curline + ui->nrow <= ui->total_lines) {
 		delta = ui->nrow;
@@ -738,7 +738,7 @@ move_up_page(UI *ui)
 void
 move_down_page(UI *ui)
 {
-	long long filesize = ui->buffer->buffer_size;
+	offset filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL*ui->nrow && cursor_pos(ui) < filesize - N_COL*ui->nrow) {
 		scroll_down_page(ui);
 	}
@@ -748,7 +748,7 @@ void
 handle_char_normal(UI *ui, int c)
 {
 	TCHAR *text;
-	long long addr;
+	offset addr;
 
 	switch (c) {
 	case 8: // backspace
@@ -841,7 +841,7 @@ handle_char_replace(UI *ui, int c)
 
 	int cy = ui->cursor_y;
 	int cx = ui->cursor_x;
-	long long pos = cursor_pos(ui);
+	offset pos = cursor_pos(ui);
 	uint8_t b;
 	if (ui->cursor_at_low_nibble) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
@@ -890,7 +890,7 @@ init_font(UI *ui)
 }
 
 void
-med_getline(long long ln, MedLine *line, void *arg)
+med_getline(offset ln, MedLine *line, void *arg)
 {
 	assert(ln >= 0);
 	UI *ui = (UI *) arg;
@@ -901,12 +901,13 @@ med_getline(long long ln, MedLine *line, void *arg)
 
 	uint8_t data[N_COL];
 	Buffer *b = ui->buffer;
-	long long addr = ln << LOG2_N_COL;
+	offset addr = ln << LOG2_N_COL;
 	int end;
 	TCHAR *p = text;
 	if (ln < ui->total_lines) {
 		if (ln+1 == ui->total_lines) {
 			end = b->buffer_size & (N_COL-1);
+			if (end == 0) end = N_COL;
 		} else {
 			end = N_COL;
 		}
@@ -1227,8 +1228,8 @@ close_file(UI *ui)
 	}
 }
 
-static long long
-clamp(long long x, long long min, long long max)
+static offset
+clamp(offset x, offset min, offset max)
 {
 	if (x < min) return min;
 	if (x > max) return max;
@@ -1238,11 +1239,11 @@ clamp(long long x, long long min, long long max)
 void
 update_monoedit_tags(UI *ui)
 {
-	long long start = ui->hl_start;
-	long long len = ui->hl_len;
-	long long curline = current_line(ui);
-	long long view_start = curline << LOG2_N_COL;
-	long long view_end = (curline + ui->nrow) << LOG2_N_COL;
+	offset start = ui->hl_start;
+	offset len = ui->hl_len;
+	offset curline = current_line(ui);
+	offset view_start = curline << LOG2_N_COL;
+	offset view_end = (curline + ui->nrow) << LOG2_N_COL;
 	int start_clamp = (int)(clamp(start, view_start, view_end) - view_start);
 	int end_clamp = (int)(clamp(start + len, view_start, view_end) - view_start);
 	HWND med = ui->monoedit;
@@ -1348,7 +1349,7 @@ move_next_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
 	if (b->tree) {
-		long long cur = cursor_pos(ui);
+		offset cur = cursor_pos(ui);
 		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			goto_address(ui, leaf->start + leaf->len);
@@ -1361,7 +1362,7 @@ move_prev_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
 	if (b->tree) {
-		long long cur = cursor_pos(ui);
+		offset cur = cursor_pos(ui);
 		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			Tree *prev_leaf = tree_lookup(b->tree, cur-1);
@@ -1383,9 +1384,9 @@ goto_bol(UI *ui)
 void
 goto_eol(UI *ui)
 {
-	long long filesize = ui->buffer->buffer_size;
+	offset filesize = ui->buffer->buffer_size;
 	if (filesize > 0) {
-		long long addr = (current_line(ui) + ui->cursor_y + 1) * N_COL - 1;
+		offset addr = (current_line(ui) + ui->cursor_y + 1) * N_COL - 1;
 		if (addr >= filesize) {
 			addr = filesize-1;
 		}
@@ -1440,9 +1441,9 @@ inputbox(UI *ui, TCHAR *title)
 }
 
 bool
-parse_addr(TCHAR *s, long long *addr)
+parse_addr(TCHAR *s, offset *addr)
 {
-	long long n = 0;
+	offset n = 0;
 	if (!*s) return 0;
 	do {
 		TCHAR c = *s++;

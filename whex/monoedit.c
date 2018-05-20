@@ -19,10 +19,12 @@ typedef struct {
 	MedGetLineProc getline;
 	void *getline_arg;
 	long long lineno;
-	TCHAR *textbuf; /* (ncol * nrow) characters */
 	MedTag *tagbuf;
 	int ntag;
 	int tag_cap;
+	int clientwidth;
+	int clientheight;
+	HBRUSH bgbrush;
 } Med;
 
 typedef struct {
@@ -30,15 +32,18 @@ typedef struct {
 } FreeList;
 
 static void set_source(Med *w, MedGetLineProc proc, void *arg);
+#if 0
 static TCHAR *alloc_text(Med *w, int nch);
 static void free_text(Med *w, TCHAR *text, int nch);
-static void free_line(Med *w, MedLine *l);
 static void init_textbuf(Med *w, int len);
+static void free_line(Med *w, MedLine *l);
+#endif
 static void update_buffer(Med *w);
 static void scroll(Med *w, HWND hwnd, int delta);
+static void set_size(Med *w, int nrow, int ncol);
 
 static void
-paint_row(Med *w, HWND hwnd, HDC dc, int row, int clientwidth, HBRUSH bgbrush)
+paint_row(Med *w, HWND hwnd, HDC dc, int row)
 {
 	assert(row >= 0 && row < w->nrow);
 	MedLine *line = &w->buffer[row];
@@ -96,10 +101,10 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row, int clientwidth, HBRUSH bgbrush)
 	/* fill right margin */
 	RECT r;
 	r.left = w->charwidth * line->textlen;
-	r.right = clientwidth;
+	r.right = w->clientwidth;
 	r.top = y;
 	r.bottom = y + w->charheight;
-	FillRect(dc, &r, bgbrush);
+	FillRect(dc, &r, w->bgbrush);
 }
 
 static void
@@ -107,25 +112,16 @@ paint(Med *w, HWND hwnd)
 {
 	PAINTSTRUCT paint;
 	HDC dc = BeginPaint(hwnd, &paint);
-	HBRUSH bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
-	RECT r;
+	RECT r = { 0, 0, w->clientwidth, w->clientheight };
 
-	GetClientRect(hwnd, &r);
 	if (w->buffer) {
-		/* initial value not used, just to placate compiler */
-		HGDIOBJ old_font = 0;
-		if (w->font) {
-			old_font = SelectObject(dc, w->font);
-		}
+		if (w->font) SelectObject(dc, w->font);
 		for (int i=0; i<w->nrow; i++) {
-			paint_row(w, hwnd, dc, i, r.right, bgbrush);
-		}
-		if (w->font) {
-			SelectObject(dc, old_font);
+			paint_row(w, hwnd, dc, i);
 		}
 		r.top = w->nrow * w->charheight;
 	}
-	FillRect(dc, &r, bgbrush);
+	FillRect(dc, &r, w->bgbrush);
 
 	EndPaint(hwnd, &paint);
 }
@@ -191,14 +187,15 @@ wndproc(HWND hwnd,
 		 LPARAM lparam)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+
 	switch (message) {
 	case WM_NCCREATE:
 		w = calloc(1, sizeof *w);
 		if (!w) {
 			return FALSE;
 		}
-		init_textbuf(w, 0x4000);
 		w->getline = default_getline;
+		w->bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
 	case WM_NCDESTROY:
@@ -207,7 +204,9 @@ wndproc(HWND hwnd,
 		   allocate 'w'). */
 		if (w) {
 			free(w->buffer);
-			free(w->textbuf);
+			for (int i=0; i<w->nrow; i++) {
+				free(w->buffer[i].text);
+			}
 			free(w->tagbuf);
 			free(w);
 		}
@@ -244,6 +243,15 @@ wndproc(HWND hwnd,
 		/* pretend that the background has been erased in order to
 		   prevent flickering */
 		return TRUE;
+	case WM_SIZE:
+		if (wparam != SIZE_MINIMIZED) {
+			int wid = LOWORD(lparam);
+			int hei = HIWORD(lparam);
+			w->clientwidth = wid;
+			w->clientheight = hei;
+			set_size(w, hei/w->charheight, wid/w->charwidth);
+		}
+		return 0;
 	}
 	return DefWindowProc(hwnd, message, wparam, lparam);
 }
@@ -291,6 +299,8 @@ med_set_source(HWND hwnd, MedGetLineProc proc, void *arg)
 	set_source(w, proc, arg);
 }
 
+#if 0
+
 static TCHAR *
 alloc_text(Med *w, int nch)
 {
@@ -323,7 +333,7 @@ free_text(Med *w, TCHAR *text, int nch)
 	char *start = (char *) w->textbuf;
 	char *cur = start;
 	char *next;
-	FreeList *before, *after, *newf;
+	FreeList *before, *after;
 loop:
 	before = (FreeList *) cur;
 	next = start + before->next;
@@ -334,15 +344,24 @@ loop:
 
 	char *textend = (char *) text + len;
 	after = (FreeList *) next;
-	newf = (FreeList *) text;
-	if (textend == next) {
-		newf->len = len + after->len;
-		newf->next = after->next;
+	if ((char *) before + before->len == (char *) text) {
+		if (textend == next) {
+			before->len += len + after->len;
+			before->next = after->next;
+		} else {
+			before->len += len;
+		}
 	} else {
-		newf->len = len;
-		newf->next = before->next;
+		FreeList *newf = (FreeList *) text;
+		if (textend == next) {
+			newf->len = len + after->len;
+			newf->next = after->next;
+		} else {
+			newf->len = len;
+			newf->next = before->next;
+		}
+		before->next = (char *) newf - start;
 	}
-	before->next = (char *) newf - start;
 }
 
 TCHAR *
@@ -367,12 +386,14 @@ init_textbuf(Med *w, int len)
 	f->next = len+8;
 }
 
+#endif
+
 static void
 update_buffer(Med *w)
 {
 	for (int i=0; i<w->nrow; i++) {
 		MedLine *l = &w->buffer[i];
-		free_line(w, l);
+		free(l->text);
 		w->getline(w->lineno + i, l, w->getline_arg);
 	}
 }
@@ -401,7 +422,7 @@ scroll(Med *w, HWND hwnd, int delta)
 		int d = w->nrow-1;
 		int s = d - delta;
 		for (int i=w->nrow-delta; i<w->nrow; i++) {
-			free_line(w, &w->buffer[i]);
+			free(w->buffer[i].text);
 		}
 		while (s >= 0) {
 			w->buffer[d--] = w->buffer[s--];
@@ -416,7 +437,7 @@ scroll(Med *w, HWND hwnd, int delta)
 		int d = 0;
 		int s = delta;
 		for (int i=0; i<delta; i++) {
-			free_line(w, &w->buffer[i]);
+			free(w->buffer[i].text);
 		}
 		while (s < w->nrow) {
 			w->buffer[d++] = w->buffer[s++];
@@ -483,4 +504,25 @@ med_set_size(HWND hwnd, int nrow, int ncol)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	set_size(w, nrow, ncol);
+}
+
+void
+med_set_char(HWND hwnd, int y, int x, TCHAR c)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	MedLine *l;
+	if (y < 0 || y >= w->nrow) return;
+	l = &w->buffer[y];
+	if (x < 0 || x >= l->textlen) return;
+	l->text[x] = c;
+}
+
+void
+med_paint_row(HWND hwnd, int row)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	HDC dc = GetDC(hwnd);
+	if (w->font) SelectObject(dc, w->font);
+	paint_row(w, hwnd, dc, row);
+	ReleaseDC(hwnd, dc);
 }

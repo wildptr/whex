@@ -516,7 +516,6 @@ set_current_line(UI *ui, offset line)
 {
 	assert(line <= ui->total_lines);
 	med_set_current_line(ui->monoedit, line);
-	update_monoedit_tags(ui);
 	update_cursor_pos(ui);
 	InvalidateRect(ui->monoedit, 0, FALSE);
 }
@@ -541,9 +540,9 @@ update_status_text(UI *ui, Tree *leaf)
 		SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
 		rfree(&rgn, top);
 	} else {
-		SendMessage(sb, SB_SETTEXTA, 1, 0);
-		SendMessage(sb, SB_SETTEXTA, 2, 0);
-		SendMessage(sb, SB_SETTEXTA, 3, 0);
+		SendMessage(sb, SB_SETTEXT, 1, 0);
+		SendMessage(sb, SB_SETTEXT, 2, 0);
+		SendMessage(sb, SB_SETTEXT, 3, 0);
 	}
 }
 
@@ -553,8 +552,9 @@ update_field_info(UI *ui)
 {
 	if (ui->filepath) {
 		Tree *tree = ui->buffer->tree;
+		Tree *leaf = 0;
 		if (tree) {
-			Tree *leaf = tree_lookup(tree, cursor_pos(ui));
+			leaf = tree_lookup(tree, cursor_pos(ui));
 			if (leaf) {
 				ui->hl_start = leaf->start;
 				ui->hl_len = leaf->len;
@@ -564,10 +564,8 @@ update_field_info(UI *ui)
 			}
 			update_monoedit_tags(ui);
 			InvalidateRect(ui->monoedit, 0, FALSE);
-			update_status_text(ui, leaf);
-		} else {
-			update_status_text(ui, 0);
 		}
+		update_status_text(ui, leaf);
 	} else {
 		HWND statusbar = ui->status_bar;
 		SendMessage(statusbar, SB_SETTEXT, 0, 0);
@@ -631,7 +629,6 @@ scroll_up_line(UI *ui)
 {
 	if (current_line(ui)) {
 		med_scroll(ui->monoedit, 1);
-		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 	}
 }
@@ -641,7 +638,6 @@ scroll_down_line(UI *ui)
 {
 	if (cursor_pos(ui) + N_COL < ui->buffer->buffer_size) {
 		med_scroll(ui->monoedit, -1);
-		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 	}
 }
@@ -708,7 +704,6 @@ scroll_up_page(UI *ui)
 		delta = (int) curline;
 	}
 	med_scroll(ui->monoedit, delta);
-	update_monoedit_tags(ui);
 	update_cursor_pos(ui);
 }
 
@@ -723,7 +718,6 @@ scroll_down_page(UI *ui)
 		delta = (int)(ui->total_lines - curline);
 	}
 	med_scroll(ui->monoedit, -delta);
-	update_monoedit_tags(ui);
 	update_cursor_pos(ui);
 }
 
@@ -848,6 +842,8 @@ handle_char_replace(UI *ui, int c)
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
 		ui->cursor_at_low_nibble = 0;
+		med_set_char(ui->monoedit, cy, 11+cx*3, c|32);
+		med_paint_row(ui->monoedit, cy);
 		move_forward(ui);
 	} else {
 		b = buf_getbyte(ui->buffer, pos);
@@ -857,12 +853,11 @@ handle_char_replace(UI *ui, int c)
 						  ui->replace_buf_cap*2);
 			ui->replace_buf_cap *= 2;
 		}
-		ui->replace_buf_len++;
-		ui->replace_buf[ui->replace_buf_len-1] = val;
+		ui->replace_buf[ui->replace_buf_len++] = val;
 		ui->cursor_at_low_nibble = 1;
 		med_set_cursor_pos(ui->monoedit, cy, 11+cx*3);
-		/* TODO this is inefficient */
-		InvalidateRect(ui->monoedit, 0, FALSE);
+		med_set_char(ui->monoedit, cy, 10+cx*3, c|32);
+		med_paint_row(ui->monoedit, cy);
 	}
 }
 
@@ -893,24 +888,25 @@ void
 med_getline(offset ln, MedLine *line, void *arg)
 {
 	assert(ln >= 0);
-	UI *ui = (UI *) arg;
-	TCHAR *text = med_alloc_text(ui->monoedit, N_COL_CHAR);
+	TCHAR *text = malloc(N_COL_CHAR * sizeof *text);
+	//med_alloc_text(ui->monoedit, N_COL_CHAR);
 	line->text = text;
-	line->textlen = N_COL_CHAR;
 	line->tags = 0;
 
 	uint8_t data[N_COL];
-	Buffer *b = ui->buffer;
+	Buffer *b = (Buffer *) arg;
 	offset addr = ln << LOG2_N_COL;
 	int end;
 	TCHAR *p = text;
-	if (ln < ui->total_lines) {
-		if (ln+1 == ui->total_lines) {
-			end = b->buffer_size & (N_COL-1);
-			if (end == 0) end = N_COL;
-		} else {
-			end = N_COL;
-		}
+	offset start = ln << LOG2_N_COL;
+	if (start + N_COL <= b->buffer_size) {
+		end = N_COL;
+	} else if (start >= b->buffer_size) {
+		end = 0;
+	} else {
+		end = (int)(b->buffer_size - start);
+	}
+	if (end) {
 		buf_read(b, data, addr, end);
 		_wsprintf(p, TEXT("%08llx:"), addr);
 		p += 9;
@@ -929,10 +925,7 @@ med_getline(offset ln, MedLine *line, void *arg)
 			*p++ = c < 0x20 || c > 0x7e ? '.' : c;
 		}
 	}
-	/* fill the rest of the line with spaces */
-	for (int j = p-text; j < N_COL_CHAR; j++) {
-		text[j] = ' ';
-	}
+	line->textlen = p-text;
 }
 
 void
@@ -949,7 +942,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 				WS_CHILD | WS_VISIBLE,
 				0, 0, 0, 0,
 				hwnd, 0, instance, 0);
-	med_set_source(monoedit, med_getline, ui);
+	med_set_source(monoedit, med_getline, ui->buffer);
 	ui->monoedit = monoedit;
 	ui->nrow = INITIAL_N_ROW;
 	SendMessage(monoedit, WM_SETFONT, (WPARAM) ui->mono_font, 0);
@@ -1003,7 +996,6 @@ resize_monoedit(UI *ui, int width, int height)
 {
 	int new_nrow = height/ui->charheight;
 	ui->nrow = new_nrow;
-	med_set_size(ui->monoedit, height/ui->charheight, width/ui->charwidth);
 	SetWindowPos(ui->monoedit, 0, 0, 0, width, height,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
 	med_update_buffer(ui->monoedit);
@@ -1295,7 +1287,6 @@ update_ui(UI *ui)
 	update_window_title(ui);
 	if (ui->filepath) {
 		ShowWindow(ui->monoedit, SW_SHOW);
-		update_monoedit_tags(ui);
 		update_cursor_pos(ui);
 		mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
 		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);

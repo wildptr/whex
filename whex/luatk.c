@@ -13,6 +13,8 @@
 #include <windows.h>
 #include <commctrl.h>
 
+#include "monoedit.h"
+
 #define BUFSIZE 512
 
 enum {
@@ -21,6 +23,7 @@ enum {
 	LABEL,
 	LISTBOX,
 	LISTVIEW,
+	MONOEDIT,
 };
 
 enum {
@@ -35,6 +38,10 @@ enum {
 
 enum {
 	F_LISTBOX_ON_SELECT = END_WINDOW,
+};
+
+enum {
+	F_MONOEDIT_SOURCE = END_WINDOW,
 };
 
 typedef unsigned char uchar;
@@ -71,6 +78,7 @@ int api_listview__index(lua_State *);
 int api_listview__newindex(lua_State *);
 int api_listview_insert_column(lua_State *L);
 int api_listview_insert_item(lua_State *L);
+int api_listview_clear(lua_State *L);
 int api_quit(lua_State *L);
 int api_msgbox(lua_State *L);
 void parse_config(lua_State *L, int index, Config *);
@@ -79,7 +87,10 @@ int api_listbox__index(lua_State *L);
 int api_listbox__newindex(lua_State *L);
 int api_listbox_insert_item(lua_State *L);
 int api_listbox_clear(lua_State *L);
-int api_listview_clear(lua_State *L);
+int api_monoedit(lua_State *L);
+int api_monoedit__index(lua_State *L);
+int api_monoedit__newindex(lua_State *L);
+int api_monoedit_update(lua_State *L);
 void msgbox(HWND, const char *, ...);
 
 /* TODO: add type checks */
@@ -100,6 +111,20 @@ register_window(lua_State *L, Window *w)
 	lua_pushlightuserdata(L, w->hwnd);
 	lua_pushvalue(L, -2);
 	lua_rawset(L, LUA_REGISTRYINDEX);
+}
+
+static void
+post_init_window(Window *w)
+{
+	switch (w->kind) {
+	case MONOEDIT:
+		SendMessage(w->hwnd, WM_SETFONT,
+			(WPARAM) GetStockObject(ANSI_FIXED_FONT), 0);
+		break;
+	default:
+		SendMessage(w->hwnd, WM_SETFONT,
+			(WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);
+	}
 }
 
 void
@@ -134,22 +159,18 @@ init_window(lua_State *L, Window *w, const char *wndclass, DWORD wndstyle,
 
 	HWND hwnd;
 	/* sets w->hwnd */
-	hwnd = CreateWindowA(wndclass,
-			    c.text,
-			    wndstyle,
-			    x, y, wid, hei,
-			    c.parent, /* might be 0 */
-			    0, /* menu */
-			    GetModuleHandle(0),
-			    w);
+	hwnd = CreateWindowA(wndclass, c.text, wndstyle,
+			     x, y, wid, hei,
+			     c.parent, /* might be 0 */
+			     0, GetModuleHandle(0), w);
 	if (c.text) free(c.text);
 	assert(hwnd);
+
 	if (wndclass != luatk_class) {
 		w->hwnd = hwnd;
 		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) w);
-		SendMessageA(hwnd, WM_SETFONT,
-			    (WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);
 	}
+	post_init_window(w);
 	register_window(L, w);
 }
 
@@ -347,6 +368,12 @@ init_luatk(lua_State *L)
 	bindfunc(L, "__index", api_listview__index);
 	bindfunc(L, "__newindex", api_listview__newindex);
 	lua_register(L, "ListView", api_listview);
+
+	/* MonoEdit */
+	luaL_newmetatable(L, "MonoEdit");
+	bindfunc(L, "__index", api_monoedit__index);
+	bindfunc(L, "__newindex", api_monoedit__newindex);
+	lua_register(L, "MonoEdit", api_monoedit);
 
 	/* Globals */
 	lua_register(L, "quit", api_quit);
@@ -828,5 +855,91 @@ api_listview_clear(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
 	SendMessageA(w->hwnd, LVM_DELETEALLITEMS, 0, 0);
+	return 0;
+}
+
+static void
+med_getline(long long ln, MedLine *line, void *arg)
+{
+	lua_State *L = lua;
+	HWND med = (HWND) arg;
+	line->tags = 0;
+	getluafield(L, med, F_MONOEDIT_SOURCE);
+	lua_pushinteger(L, ln);
+	if (lua_pcall(L, 1, 1, 0)) {
+		line->text = 0;
+		line->textlen = 0;
+		return;
+	}
+	size_t l;
+	const char *s = luaL_checklstring(L, -1, &l);
+	int textlen = (int) l;
+	line->text = malloc(textlen * sizeof(TCHAR));
+	//med_alloc_text(med, textlen);
+#ifdef UNICODE
+	MultiByteToWideChar(CP_ACP, 0, s, textlen+1, line->text, textlen+1);
+#else
+	memcpy(line->text, s, textlen+1);
+#endif
+	line->textlen = textlen;
+}
+
+int
+api_monoedit(lua_State *L)
+{
+	Window *w = lua_newuserdata(L, sizeof *w);
+	luaL_setmetatable(L, "MonoEdit");
+	lua_newtable(L);
+	lua_setuservalue(L, -2);
+	w->kind = MONOEDIT;
+	init_window(L, w, "MonoEdit", WS_CHILD | WS_VISIBLE, 1);
+	med_set_source(w->hwnd, med_getline, w->hwnd);
+	return 1;
+}
+
+int
+api_monoedit__index(lua_State *L)
+{
+	const char *field = luaL_checkstring(L, 2);
+	int len = strlen(field);
+	switch (len) {
+	case 6:
+		if (!strcmp(field, "source")) {
+			Window *w = lua_touserdata(L, 1);
+			getluafield(L, w->hwnd, F_MONOEDIT_SOURCE);
+			return 1;
+		}
+		if (!strcmp(field, "update")) {
+			lua_pushcfunction(L, api_monoedit_update);
+			return 1;
+		}
+		break;
+	}
+	return api_window__index(L);
+}
+
+int
+api_monoedit__newindex(lua_State *L)
+{
+	const char *field = luaL_checkstring(L, 2);
+	int len = strlen(field);
+	switch (len) {
+	case 6:
+		if (!strcmp(field, "source")) {
+			Window *w = lua_touserdata(L, 1);
+			setluafield(L, w->hwnd, F_MONOEDIT_SOURCE, 3);
+			lua_pop(L, 1);
+			return 0;
+		}
+		break;
+	}
+	return api_window__newindex(L);
+}
+
+int
+api_monoedit_update(lua_State *L)
+{
+	Window *w = lua_touserdata(L, 1);
+	med_update_buffer(w->hwnd);
 	return 0;
 }

@@ -505,7 +505,7 @@ buf_insert(Buffer *b, offset addr, const uint8_t *data, size_t len)
 			after = before->next;
 		} else {
 			/* split 'before' at 'addr' */
-			offset full_delta = addr - after->start;
+			offset full_delta = addr - before->start;
 			size_t delta = (size_t) full_delta;
 			size_t rest;
 			switch (before->kind) {

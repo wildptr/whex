@@ -875,9 +875,9 @@ med_getline(long long ln, MedLine *line, void *arg)
 	line->text = malloc(textlen * sizeof(TCHAR));
 	//med_alloc_text(med, textlen);
 #ifdef UNICODE
-	MultiByteToWideChar(CP_ACP, 0, s, textlen+1, line->text, textlen+1);
+	MultiByteToWideChar(CP_ACP, 0, s, textlen, line->text, textlen);
 #else
-	memcpy(line->text, s, textlen+1);
+	memcpy(line->text, s, textlen);
 #endif
 	line->textlen = textlen;
 }

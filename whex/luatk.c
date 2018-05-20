@@ -118,8 +118,6 @@ post_init_window(Window *w)
 {
 	switch (w->kind) {
 	case MONOEDIT:
-		SendMessage(w->hwnd, WM_SETFONT,
-			(WPARAM) GetStockObject(ANSI_FIXED_FONT), 0);
 		break;
 	default:
 		SendMessage(w->hwnd, WM_SETFONT,

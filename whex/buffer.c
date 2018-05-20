@@ -26,8 +26,10 @@ struct segment {
 	offset start;
 	offset end;
 	union {
-		offset file_offset;
-		uint8_t *filedata;
+		struct {
+			offset file_offset;
+			uint8_t *filedata;
+		};
 		uint8_t data[8];
 	};
 };
@@ -35,8 +37,8 @@ struct segment {
 static int
 seek(HANDLE file, offset offset)
 {
-	DWORD lo = (DWORD) offset;
-	DWORD hi = offset >> 32;
+	LONG lo = (LONG) offset;
+	LONG hi = offset >> 32;
 	if (SetFilePointer(file, lo, &hi, FILE_BEGIN) != lo) {
 		printf("seek(%I64x) failed\n", offset);
 		return -1;
@@ -187,7 +189,7 @@ buf_kmp_search_backward(Buffer *b, const uint8_t *pat, int len, offset start)
 	assert(len);
 	T = malloc(len * sizeof *T);
 	revpat = malloc(len);
-	
+
 	for (i=0; i<len; i++) {
 		revpat[i] = pat[len-1-i];
 	}
@@ -302,24 +304,23 @@ buf_finalize(Buffer *b)
 }
 
 int
-buf_save(Buffer *b)
+buf_save(Buffer *b, HANDLE dstfile)
 {
+	bool inplace = b->file == dstfile;
 	Segment *s = b->firstseg;
 	while (s) {
-		offset file_offset;
 		printf("%I64x--%I64x ", s->start, s->end);
 		switch (s->kind) {
 		case SEG_MEM:
 			printf("MEM\n");
 			break;
 		case SEG_FILE:
-			file_offset = s->file_offset;
-			printf("FILE offset=%I64x\n", file_offset);
-			if (s->start == file_offset) {
+			printf("FILE offset=%I64x\n", s->file_offset);
+			if (inplace && s->start == s->file_offset) {
 				s->filedata = 0;
 			} else {
 				offset full_len = s->end - s->start;
-				size_t len = (size_t) full_len;
+				DWORD len = (DWORD) full_len;
 				if (len != full_len) {
 					return -1;
 				}
@@ -329,7 +330,7 @@ buf_save(Buffer *b)
 					printf("malloc(%lu) failed\n", len);
 					return -1;
 				}
-				seek(b->file, file_offset);
+				seek(b->file, s->file_offset);
 				DWORD nread;
 				ReadFile(b->file, s->filedata, len, &nread, 0);
 				if (nread != len) {
@@ -347,43 +348,51 @@ buf_save(Buffer *b)
 	s = b->firstseg;
 	while (s) {
 		offset full_seglen = s->end - s->start;
-		size_t seglen = (size_t) full_seglen;
+		DWORD seglen = (DWORD) full_seglen;
 		if (seglen != full_seglen) {
 			return -1;
 		}
 		DWORD nwritten;
 		switch (s->kind) {
 		case SEG_MEM:
-			seek(b->file, s->start);
-			WriteFile(b->file, s->data, seglen,
+			seek(dstfile, s->start);
+			WriteFile(dstfile, s->data, seglen,
 				  &nwritten, 0);
 			break;
 		case SEG_FILE:
 			if (!s->filedata) break;
-			seek(b->file, s->start);
-			WriteFile(b->file, s->filedata, seglen,
+			seek(dstfile, s->start);
+			WriteFile(dstfile, s->filedata, seglen,
 				  &nwritten, 0);
 			free(s->filedata);
+			s->filedata = 0;
 			break;
 		default:
 			assert(0);
 		}
-		Segment *next = s->next;
-		free(s);
-		s = next;
+		s = s->next;
 	}
-	s = calloc(1, sizeof *s);
-	s->kind = SEG_FILE;
-	s->end = b->buffer_size;
-	b->file_size = b->buffer_size;
-	b->firstseg = s;
+	if (inplace) {
+		Segment *next;
+		s = b->firstseg;
+		while (s) {
+			next = s->next;
+			free(s);
+			s = next;
+		}
+		s = calloc(1, sizeof *s);
+		s->kind = SEG_FILE;
+		s->end = b->buffer_size;
+		b->file_size = b->buffer_size;
+		b->firstseg = s;
+	}
 	return 0;
 }
 
 static Segment *
 newmemseg(offset start, size_t len)
 {
-	int xsize = len > 8 ? len-8 : 8;
+	size_t xsize = len > 8 ? len-8 : 8;
 	Segment *newseg = calloc(1, sizeof *newseg + xsize);
 	newseg->kind = SEG_MEM;
 	newseg->start = start;

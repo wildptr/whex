@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -115,7 +117,7 @@ paint(Med *w, HWND hwnd)
 	RECT r = { 0, 0, w->clientwidth, w->clientheight };
 
 	if (w->buffer) {
-		if (w->font) SelectObject(dc, w->font);
+		SelectObject(dc, w->font);
 		for (int i=0; i<w->nrow; i++) {
 			paint_row(w, hwnd, dc, i);
 		}
@@ -180,22 +182,48 @@ default_getline(long long ln, MedLine *line, void *_arg)
 	memset(line, 0, sizeof *line);
 }
 
+static void
+set_font(Med *w, HWND hwnd, HFONT font)
+{
+	HDC dc = GetDC(hwnd);
+	SelectObject(dc, font);
+	TEXTMETRIC tm;
+	GetTextMetrics(dc, &tm);
+	ReleaseDC(hwnd, dc);
+	w->charwidth = tm.tmAveCharWidth;
+	w->charheight = tm.tmHeight;
+	w->font = font;
+}
+
 static LRESULT CALLBACK
-wndproc(HWND hwnd,
-		 UINT message,
-		 WPARAM wparam,
-		 LPARAM lparam)
+wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	CREATESTRUCT *cs;
+	bool has_font;
 
 	switch (message) {
 	case WM_NCCREATE:
 		w = calloc(1, sizeof *w);
-		if (!w) {
-			return FALSE;
-		}
+		if (!w) return FALSE;
 		w->getline = default_getline;
 		w->bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
+		cs = (CREATESTRUCT *) lparam;
+		has_font = 0;
+		if (cs) {
+			MedConfig *conf = cs->lpCreateParams;
+			if (conf->mask & MED_CONFIG_GETLINE) {
+				set_source(w, conf->getline, conf->getline_arg);
+			}
+			if (conf->mask & MED_CONFIG_FONT) {
+				has_font = 1;
+				set_font(w, hwnd, (HFONT) conf->font);
+			}
+		}
+		if (!has_font) {
+			set_font(w, hwnd,
+				 (HFONT) GetStockObject(ANSI_FIXED_FONT));
+		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
 	case WM_NCDESTROY:
@@ -203,10 +231,10 @@ wndproc(HWND hwnd,
 		   when WM_NCCREATE returns FALSE (which means we failed to
 		   allocate 'w'). */
 		if (w) {
-			free(w->buffer);
 			for (int i=0; i<w->nrow; i++) {
 				free(w->buffer[i].text);
 			}
+			free(w->buffer);
 			free(w->tagbuf);
 			free(w);
 		}
@@ -215,16 +243,7 @@ wndproc(HWND hwnd,
 		paint(w, hwnd);
 		return 0;
 	case WM_SETFONT:
-		{
-			w->font = (HFONT) wparam;
-			HDC dc = GetDC(hwnd);
-			SelectObject(dc, w->font);
-			TEXTMETRIC tm;
-			GetTextMetrics(dc, &tm);
-			ReleaseDC(hwnd, dc);
-			w->charwidth = tm.tmAveCharWidth;
-			w->charheight = tm.tmHeight;
-		}
+		set_font(w, hwnd, (HFONT) wparam);
 		return 0;
 	case WM_SETFOCUS:
 		CreateCaret(hwnd, 0, w->charwidth, w->charheight);
@@ -488,8 +507,8 @@ med_set_cursor_pos(HWND hwnd, int y, int x)
 static void
 set_size(Med *w, int nrow, int ncol)
 {
-	assert(nrow > 0);
-	assert(ncol > 0);
+	assert(nrow >= 0);
+	assert(ncol >= 0);
 	w->ncol = ncol;
 	w->buffer = realloc(w->buffer, nrow * sizeof *w->buffer);
 	if (nrow > w->nrow) {
@@ -522,7 +541,7 @@ med_paint_row(HWND hwnd, int row)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	HDC dc = GetDC(hwnd);
-	if (w->font) SelectObject(dc, w->font);
+	SelectObject(dc, w->font);
 	paint_row(w, hwnd, dc, row);
 	ReleaseDC(hwnd, dc);
 }

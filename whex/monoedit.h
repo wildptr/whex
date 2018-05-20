@@ -14,6 +14,18 @@ typedef struct {
 typedef void (*MedGetLineProc)
 	(long long ln, MedLine *line, void *arg);
 
+typedef struct {
+	unsigned char mask;
+	MedGetLineProc getline;
+	void *getline_arg;
+	HFONT font;
+} MedConfig;
+
+enum {
+	MED_CONFIG_GETLINE = 1,
+	MED_CONFIG_FONT = 2,
+};
+
 ATOM med_register_class(void);
 void med_set_current_line(HWND, long long ln);
 long long med_get_current_line(HWND);

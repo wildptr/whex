@@ -31,6 +31,6 @@ void buf_finalize(Buffer *);
 void buf_read(Buffer *, uint8_t *, offset, size_t);
 uint8_t buf_getbyte(Buffer *, offset);
 //void buf_setbyte(Buffer *, offset, uint8_t);
-int buf_save(Buffer *);
+int buf_save(Buffer *, HANDLE);
 void buf_replace(Buffer *, offset, const uint8_t *, size_t);
 void buf_insert(Buffer *, offset, const uint8_t *, size_t);

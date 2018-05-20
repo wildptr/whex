@@ -137,6 +137,7 @@ int init_luatk(lua_State *L);
 void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
 int save_file(UI *);
+int save_file_as(UI *, const TCHAR *);
 void populate_treeview(UI *);
 int format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
 
@@ -937,15 +938,18 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 
 	HINSTANCE instance = create->hInstance;
 	/* create and initialize MonoEdit */
+	MedConfig medconf;
+	medconf.mask = MED_CONFIG_GETLINE | MED_CONFIG_FONT;
+	medconf.getline = med_getline;
+	medconf.getline_arg = ui->buffer;
+	medconf.font = ui->mono_font;
 	monoedit = CreateWindow(TEXT("MonoEdit"),
 				TEXT(""),
 				WS_CHILD | WS_VISIBLE,
 				0, 0, 0, 0,
-				hwnd, 0, instance, 0);
-	med_set_source(monoedit, med_getline, ui->buffer);
+				hwnd, 0, instance, &medconf);
 	ui->monoedit = monoedit;
 	ui->nrow = INITIAL_N_ROW;
-	SendMessage(monoedit, WM_SETFONT, (WPARAM) ui->mono_font, 0);
 	/* subclass monoedit window */
 	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) ui);
 	ui->med_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
@@ -1089,6 +1093,12 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			break;
 		case IDM_FILE_SAVE:
 			if (save_file(ui)) {
+				errorbox(hwnd, TEXT("Could not save file"));
+			}
+			break;
+		case IDM_FILE_SAVEAS:
+			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+			if (save_file_as(ui, path)) {
 				errorbox(hwnd, TEXT("Could not save file"));
 			}
 			break;
@@ -1299,6 +1309,7 @@ update_ui(UI *ui)
 	for (int i=0; i<NELEM(toggle_menus); i++) {
 		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 	}
+	med_update_buffer(ui->monoedit);
 	InvalidateRect(ui->monoedit, 0, FALSE);
 	update_field_info(ui);
 	update_plugin_menu(ui);
@@ -1628,7 +1639,23 @@ det:
 int
 save_file(UI *ui)
 {
-	return buf_save(ui->buffer);
+	return buf_save(ui->buffer, ui->buffer->file);
+}
+
+int
+save_file_as(UI *ui, const TCHAR *path)
+{
+	HANDLE dstfile =
+		CreateFile(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+	if (dstfile == INVALID_HANDLE_VALUE) {
+		TCHAR errtext[BUFSIZE];
+		format_error_code(errtext, BUFSIZE, GetLastError());
+		errorbox(ui->hwnd, errtext);
+		return -1;
+	}
+	int ret = buf_save(ui->buffer, dstfile);
+	CloseHandle(dstfile);
+	return ret;
 }
 
 static void

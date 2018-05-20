@@ -8,6 +8,12 @@
 
 #define INIT_BUFSIZE 32
 
+#ifdef UNICODE
+#define _fputtc fputwc
+#else
+#define _fputtc fputc
+#endif
+
 static int
 heapbuf_grow(HeapBuf *hb, int newsize)
 {
@@ -69,7 +75,7 @@ init_heapbuf(HeapBuf *hb)
 static int
 filebuf_putc(Buf *b, TCHAR c)
 {
-	return fputc(c, ((FileBuf *) b)->fp) == c;
+	return _fputtc(c, ((FileBuf *) b)->fp) == c;
 }
 
 static int

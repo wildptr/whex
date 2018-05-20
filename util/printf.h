@@ -8,6 +8,7 @@ int vbprintfA(BufA *, const char *, va_list);
 int vbprintfW(BufW *, const wchar_t *, va_list);
 char *asprintfA(const char *, ...);
 wchar_t *asprintfW(const wchar_t *, ...);
+int _printf(const char *, ...);
 
 #ifdef UNICODE
 #define _wsprintf _wsprintfW

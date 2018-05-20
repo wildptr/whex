@@ -1385,7 +1385,7 @@ goto_eol(UI *ui)
 	}
 }
 
-BOOL CALLBACK
+INT_PTR CALLBACK
 inputbox_dlgproc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam)
 {
 	InputBoxConfig *conf;
@@ -1674,15 +1674,15 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		case 1:
 			*ptypename = "uint8";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%u (%02x)", ival, ival);
+			return sprintf(buf, "%lu (%02lx)", ival, ival);
 		case 2:
 			*ptypename = "uint16";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%u (%04x)", ival, ival);
+			return sprintf(buf, "%lu (%04lx)", ival, ival);
 		case 4:
 			*ptypename = "uint32";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%u (%08x)", ival, ival);
+			return sprintf(buf, "%lu (%08lx)", ival, ival);
 		}
 		*ptypename = "uint";
 		return 0;
@@ -1693,15 +1693,15 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		case 1:
 			*ptypename = "int8";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%d", ival);
+			return sprintf(buf, "%ld", ival);
 		case 2:
 			*ptypename = "int16";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%d", ival);
+			return sprintf(buf, "%ld", ival);
 		case 4:
 			*ptypename = "int32";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%d", ival);
+			return sprintf(buf, "%ld", ival);
 		}
 		*ptypename = "int";
 		return 0;

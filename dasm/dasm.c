@@ -2,9 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <tchar.h>
 
-#include "util.h"
+#include "types.h"
+#include "buf.h"
 #include "inst.h"
+#include "region.h"
+#include "util.h"
 #include "dasm.h"
 
 #define HAS_REGMEM 8

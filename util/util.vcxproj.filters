@@ -15,13 +15,16 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="dasm.c">
+    <ClCompile Include="buf.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="inst.c">
+    <ClCompile Include="printf.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="lua_api.c">
+    <ClCompile Include="region.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="list.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -29,15 +32,23 @@
     <ClInclude Include="buf.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="dasm.h">
+    <ClInclude Include="types.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="inst.h">
+    <ClInclude Include="filebuf.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="inst.in" />
-    <None Include="reg.in" />
+    <ClInclude Include="region.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="printf.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="list.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

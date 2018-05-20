@@ -6,8 +6,8 @@ typedef long long offset;
 
 struct cache_entry {
 	offset addr;
-	uint8_t *data;
-	uint8_t flags;
+	uchar *data;
+	uchar flags;
 };
 
 typedef struct tree Tree;
@@ -19,7 +19,7 @@ typedef struct {
 	offset buffer_size;
 	Segment *firstseg;
 	struct cache_entry *cache;
-	uint8_t *cache_data;
+	uchar *cache_data;
 	Tree *tree;
 	Region tree_rgn;
 	int next_cache;
@@ -27,10 +27,10 @@ typedef struct {
 
 int buf_init(Buffer *, HANDLE);
 void buf_finalize(Buffer *);
-//uint8_t *buf_get_data(Buffer *, offset);
-void buf_read(Buffer *, uint8_t *, offset, size_t);
-uint8_t buf_getbyte(Buffer *, offset);
-//void buf_setbyte(Buffer *, offset, uint8_t);
+//uchar *buf_get_data(Buffer *, offset);
+void buf_read(Buffer *, uchar *, offset, size_t);
+uchar buf_getbyte(Buffer *, offset);
+//void buf_setbyte(Buffer *, offset, uchar);
 int buf_save(Buffer *, HANDLE);
-void buf_replace(Buffer *, offset, const uint8_t *, size_t);
-void buf_insert(Buffer *, offset, const uint8_t *, size_t);
+void buf_replace(Buffer *, offset, const uchar *, size_t);
+void buf_insert(Buffer *, offset, const uchar *, size_t);

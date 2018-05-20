@@ -39,11 +39,11 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <IncludePath>$(SolutionDir)lua\lua-5.3.4\src;$(IncludePath)</IncludePath>
+    <IncludePath>$(SolutionDir)util;$(SolutionDir)lua\lua-5.3.4\src;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)$(Configuration);$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>$(SolutionDir)lua\lua-5.3.4\src;$(IncludePath)</IncludePath>
+    <IncludePath>$(SolutionDir)util;$(SolutionDir)lua\lua-5.3.4\src;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)$(Configuration);$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -54,7 +54,7 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>lua.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>util.lib;lua.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -69,18 +69,15 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>lua.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>util.lib;lua.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="buffer.c" />
-    <ClCompile Include="list.c" />
     <ClCompile Include="luatk.c" />
     <ClCompile Include="lua_api.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="monoedit.c" />
-    <ClCompile Include="printf.c" />
-    <ClCompile Include="region.c" />
     <ClCompile Include="tree.c" />
     <ClCompile Include="unicode.c" />
     <ClCompile Include="winutil.c" />

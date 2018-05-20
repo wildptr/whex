@@ -2,8 +2,6 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -12,8 +10,11 @@
 #include <lualib.h>
 
 #include <windows.h>
+#include <commctrl.h>
 
-#include "util.h"
+#include "types.h"
+#include "region.h"
+#include "list.h"
 #include "buffer.h"
 #include "ui.h"
 #include "monoedit.h"
@@ -21,8 +22,7 @@
 #include "unicode.h"
 #include "resource.h"
 #include "printf.h"
-
-#include <commctrl.h>
+#include "util.h"
 
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 4
@@ -61,14 +61,14 @@ iswordchar(char c)
 	return isalnum(c) || c == '_';
 }
 
-static uint8_t
+static uchar
 hexval(char c)
 {
 	return c > '9' ? 10+(c|32)-'a' : c-'0';
 }
 
-static uint8_t
-hextobyte(const uint8_t *p)
+static uchar
+hextobyte(const uchar *p)
 {
 	return hexval(p[0]) << 4 | hexval(p[1]);
 }
@@ -825,7 +825,7 @@ handle_char_normal(UI *ui, int c)
 void
 handle_char_replace(UI *ui, int c)
 {
-	uint8_t val;
+	uchar val;
 	if (c >= '0' && c <= '9') {
 		val = c-'0';
 	} else if (c >= 'a' && c <= 'f') {
@@ -837,7 +837,7 @@ handle_char_replace(UI *ui, int c)
 	int cy = ui->cursor_y;
 	int cx = ui->cursor_x;
 	offset pos = cursor_pos(ui);
-	uint8_t b;
+	uchar b;
 	if (ui->cursor_at_low_nibble) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
@@ -894,7 +894,7 @@ med_getline(offset ln, MedLine *line, void *arg)
 	line->text = text;
 	line->tags = 0;
 
-	uint8_t data[N_COL];
+	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
 	offset addr = ln << LOG2_N_COL;
 	int end;
@@ -922,7 +922,7 @@ med_getline(offset ln, MedLine *line, void *arg)
 		_wsprintf(p, TEXT("  "));
 		p += 2;
 		for (int j=0; j<end; j++) {
-			uint8_t c = data[j];
+			uchar c = data[j];
 			*p++ = c < 0x20 || c > 0x7e ? '.' : c;
 		}
 	}

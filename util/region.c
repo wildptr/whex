@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "util.h"
+#include "region.h"
+
+#pragma warning(disable:4146)
 
 #define CHUNK_SIZE 0x1000
 #define PTR_SIZE sizeof(void*)
@@ -17,7 +19,7 @@ void *
 ralloc(Region *r, int size)
 {
 	// align
-	size = (size+PTR_SIZE-1)&(~PTR_SIZE+1);
+	size = (size+PTR_SIZE-1)&(-PTR_SIZE);
 	if (r->cur + size > r->limit) {
 		int malloc_size =
 			size > CHUNK_SIZE-PTR_SIZE ? PTR_SIZE+size : CHUNK_SIZE;

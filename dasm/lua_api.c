@@ -2,8 +2,11 @@
 #include <string.h>
 #include <lua.h>
 #include <lauxlib.h>
+#include <tchar.h>
 
-#include "util.h"
+#include "types.h"
+#include "region.h"
+#include "buf.h"
 #include "inst.h"
 #include "dasm.h"
 

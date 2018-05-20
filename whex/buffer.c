@@ -1,6 +1,4 @@
 #include <assert.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -8,7 +6,10 @@
 #include <windows.h>
 #include <tchar.h>
 
+#include "types.h"
+#include "region.h"
 #include "util.h"
+#include "list.h"
 #include "buffer.h"
 
 #define VALID 1
@@ -22,15 +23,15 @@ enum {
 
 struct segment {
 	struct segment *next;
-	uint8_t kind;
+	uchar kind;
 	offset start;
 	offset end;
 	union {
 		struct {
 			offset file_offset;
-			uint8_t *filedata;
+			uchar *filedata;
 		};
-		uint8_t data[8];
+		uchar data[8];
 	};
 };
 
@@ -65,25 +66,23 @@ find_cache(Buffer *b, offset addr)
 	b->cache[ret].flags = VALID;
 	b->next_cache = (ret+1)&(N_CACHE_BLOCK-1);
 
-	DEBUG_PRINTF("loaded %I64x into cache block %d\n", base, ret);
-
 	return ret;
 }
 
-static uint8_t *
+static uchar *
 get_file_data(Buffer *b, offset addr)
 {
 	int block = find_cache(b, addr);
 	return &b->cache[block].data[addr & (CACHE_BLOCK_SIZE-1)];
 }
 
-static uint8_t
+static uchar
 get_file_byte(Buffer *b, offset addr)
 {
 	return *get_file_data(b, addr);
 }
 
-uint8_t
+uchar
 buf_getbyte(Buffer *b, offset addr)
 {
 	assert(addr >= 0 && addr < b->buffer_size);
@@ -105,7 +104,7 @@ buf_getbyte(Buffer *b, offset addr)
 
 #if 0
 void
-buf_setbyte(Buffer *b, offset addr, uint8_t val)
+buf_setbyte(Buffer *b, offset addr, uchar val)
 {
 	int block = find_cache(b, addr);
 	struct cache_entry *c = &b->cache[block];
@@ -115,7 +114,7 @@ buf_setbyte(Buffer *b, offset addr, uint8_t val)
 #endif
 
 static void
-kmp_table(int *T, const uint8_t *pat, int len)
+kmp_table(int *T, const uchar *pat, int len)
 {
 	int pos = 2;
 	int cnd = 0;
@@ -140,7 +139,7 @@ kmp_table(int *T, const uint8_t *pat, int len)
 }
 
 offset
-buf_kmp_search(Buffer *b, const uint8_t *pat, int len, offset start)
+buf_kmp_search(Buffer *b, const uchar *pat, int len, offset start)
 {
 	int *T;
 	offset m;
@@ -179,10 +178,10 @@ buf_kmp_search(Buffer *b, const uint8_t *pat, int len, offset start)
  * number of bytes after the second mark = N-(start+len-1)
  */
 offset
-buf_kmp_search_backward(Buffer *b, const uint8_t *pat, int len, offset start)
+buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, offset start)
 {
 	int *T;
-	uint8_t *revpat;
+	uchar *revpat;
 	offset m;
 	int i;
 
@@ -223,7 +222,7 @@ buf_kmp_search_backward(Buffer *b, const uint8_t *pat, int len, offset start)
 int
 buf_init(Buffer *b, HANDLE file)
 {
-	uint8_t *cache_data;
+	uchar *cache_data;
 	struct cache_entry *cache;
 	DWORD lo, hi;
 	offset size;
@@ -401,7 +400,7 @@ newmemseg(offset start, size_t len)
 }
 
 void
-buf_replace(Buffer *b, offset addr, const uint8_t *data, size_t len)
+buf_replace(Buffer *b, offset addr, const uchar *data, size_t len)
 {
 	assert(addr >= 0 && addr < b->buffer_size);
 	assert(len > 0);
@@ -496,7 +495,7 @@ buf_replace(Buffer *b, offset addr, const uint8_t *data, size_t len)
 }
 
 void
-buf_insert(Buffer *b, offset addr, const uint8_t *data, size_t len)
+buf_insert(Buffer *b, offset addr, const uchar *data, size_t len)
 {
 	assert(addr >= 0 && addr <= b->buffer_size);
 	assert(len > 0);
@@ -545,10 +544,10 @@ buf_insert(Buffer *b, offset addr, const uint8_t *data, size_t len)
 }
 
 static void
-buf_read_file(Buffer *b, uint8_t *dst, offset fileoff, size_t n)
+buf_read_file(Buffer *b, uchar *dst, offset fileoff, size_t n)
 {
 	do {
-		uint8_t *src = get_file_data(b, fileoff);
+		uchar *src = get_file_data(b, fileoff);
 		size_t n1 = CACHE_BLOCK_SIZE - (fileoff & (CACHE_BLOCK_SIZE-1));
 		if (n1 > n) n1 = n;
 		memcpy(dst, src, n1);
@@ -559,7 +558,7 @@ buf_read_file(Buffer *b, uint8_t *dst, offset fileoff, size_t n)
 }
 
 void
-buf_read(Buffer *b, uint8_t *dst, offset addr, size_t n)
+buf_read(Buffer *b, uchar *dst, offset addr, size_t n)
 {
 	assert(addr >= 0 && addr < b->buffer_size);
 	Segment *s = b->firstseg;

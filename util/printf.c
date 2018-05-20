@@ -28,13 +28,14 @@
  */
 
 #include <stdarg.h>
-#include <stdbool.h>
 #include <string.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 
-#include "util.h"
+#include "types.h"
+#include "buf.h"
+#include "printf.h"
 
-typedef unsigned int uint;
-typedef unsigned long ulong;
 typedef int (*Formatter)();
 
 enum {
@@ -218,7 +219,7 @@ spec:
 
 		case 's' :
 			s = va_arg(va, TCHAR *);
-			n = strlen(s);
+			n = lstrlen(s);
 			ret += b->puts(b, s, n);
 			break;
 
@@ -243,6 +244,25 @@ bprintf(Buf *b, const TCHAR *fmt, ...)
 	va_list va;
 	va_start(va, fmt);
 	ret = vbprintf(b, fmt, va);
+	va_end(va);
+	return ret;
+}
+
+int
+_wvsprintf(TCHAR *s, const TCHAR *fmt, va_list va)
+{
+	FixedBuf fb;
+	init_fixedbuf(&fb, s);
+	return vbprintf(&fb.buf, fmt, va);
+}
+
+int
+_wsprintf(TCHAR *buf, const TCHAR *fmt, ...)
+{
+	int ret;
+	va_list va;
+	va_start(va, fmt);
+	ret = _wvsprintf(buf, fmt, va);
 	va_end(va);
 	return ret;
 }

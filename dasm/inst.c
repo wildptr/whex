@@ -1,8 +1,9 @@
 #include <assert.h>
+#include <tchar.h>
 
-#include "util.h"
-#include "inst.h"
+#include "types.h"
 #include "buf.h"
+#include "inst.h"
 
 #define DEF(x) #x
 

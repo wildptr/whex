@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <tchar.h>
 
-#define USE_FILEBUF
-#include "util.h"
+#include "types.h"
+#include "buf.h"
+#include "filebuf.h"
 
 #define INIT_BUFSIZE 32
 
@@ -82,11 +84,37 @@ filebuf_puts(Buf *b, const TCHAR *s, int n)
 	return ret;
 }
 
-int
+void
 init_filebuf(FileBuf *fb, FILE *fp)
 {
 	fb->buf.putc = filebuf_putc;
 	fb->buf.puts = filebuf_puts;
 	fb->fp = fp;
-	return 0;
+}
+
+static int
+fixedbuf_putc(Buf *b, TCHAR c)
+{
+	FixedBuf *fb = (FixedBuf *) b;
+	*fb->cur++ = c;
+	*fb->cur = 0;
+	return 1;
+}
+
+static int
+fixedbuf_puts(Buf *b, const TCHAR *s, int n)
+{
+	FixedBuf *fb = (FixedBuf *) b;
+	memcpy(fb->cur, s, n*sizeof(TCHAR));
+	fb->cur += n;
+	*fb->cur = 0;
+	return n;
+}
+
+void
+init_fixedbuf(FixedBuf *fb, TCHAR *start)
+{
+	fb->buf.putc = fixedbuf_putc;
+	fb->buf.puts = fixedbuf_puts;
+	fb->cur = start;
 }

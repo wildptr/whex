@@ -1,5 +1,3 @@
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -9,7 +7,8 @@
 
 #include <windows.h>
 
-#include "util.h"
+#include "types.h"
+#include "region.h"
 #include "buffer.h"
 #include "tree.h"
 #include "ui.h"
@@ -33,8 +32,8 @@ api_buffer_peeku16(lua_State *L)
 	long long addr = luaL_checkinteger(L, 2);
 	if (addr < 0 || addr+2 > b->file_size) return 0;
 	union {
-		uint16_t i;
-		uint8_t b[2];
+		uint16 i;
+		uchar b[2];
 	} u;
 	buf_read(b, u.b, addr, 2);
 	lua_pushinteger(L, u.i);
@@ -48,8 +47,8 @@ api_buffer_peeku32(lua_State *L)
 	long long addr = luaL_checkinteger(L, 2);
 	if (addr < 0 || addr+4 > b->file_size) return 0;
 	union {
-		uint32_t i;
-		uint8_t b[4];
+		uint32 i;
+		uchar b[4];
 	} u;
 	buf_read(b, u.b, addr, 4);
 	lua_pushinteger(L, u.i);
@@ -63,8 +62,8 @@ api_buffer_peeku64(lua_State *L)
 	long long addr = luaL_checkinteger(L, 2);
 	if (addr < 0 || addr+8 > b->file_size) return 0;
 	union {
-		uint64_t i;
-		uint8_t b[8];
+		uint64 i;
+		uchar b[8];
 	} u;
 	buf_read(b, u.b, addr, 8);
 	lua_pushinteger(L, u.i);
@@ -77,7 +76,7 @@ api_buffer_read(lua_State *L)
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
 	long n = (long) luaL_checkinteger(L, 3);
-	uint8_t *s;
+	uchar *s;
 
 	if (addr < 0 || addr + n > b->file_size) return 0;
 	s = malloc(n+1);
@@ -198,7 +197,7 @@ api_buffer_replace(lua_State *L)
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
 	size_t len;
-	const uint8_t *data = (const uint8_t *) lua_tolstring(L, 3, &len);
+	const uchar *data = (const uchar *) lua_tolstring(L, 3, &len);
 	buf_replace(b, addr, data, len);
 	return 0;
 }
@@ -209,7 +208,7 @@ api_buffer_insert(lua_State *L)
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	long long addr = luaL_checkinteger(L, 2);
 	size_t len;
-	const uint8_t *data = (const uint8_t *) lua_tolstring(L, 3, &len);
+	const uchar *data = (const uchar *) lua_tolstring(L, 3, &len);
 	buf_insert(b, addr, data, len);
 	return 0;
 }

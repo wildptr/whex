@@ -4,6 +4,7 @@
 *.o
 *.sdf
 *.suo
+*~
 Debug/
 Release/
 doc/

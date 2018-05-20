@@ -1,4 +1,5 @@
-#include "util.h"
+#include "region.h"
+#include "list.h"
 
 List *
 cons(Region *r, void *data, List *next)
@@ -11,7 +12,7 @@ cons(Region *r, void *data, List *next)
 }
 
 int
-len(List *l)
+length(List *l)
 {
 	int n = 0;
 	while (l) {

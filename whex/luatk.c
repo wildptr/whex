@@ -61,7 +61,8 @@ typedef struct {
 	HWND parent;
 } Config;
 
-static const char luatk_class[] = "LuaTk";
+#define LUATK_CLASS "luatk"
+static const char luatk_class[] = LUATK_CLASS;
 static lua_State *lua;
 
 void luaerrorbox(HWND hwnd, lua_State *L);
@@ -155,12 +156,17 @@ init_window(lua_State *L, Window *w, const char *wndclass, DWORD wndstyle,
 		hei = CW_USEDEFAULT;
 	}
 
+	void *arg = 0;
+	if (wndclass == luatk_class) {
+		arg = w;
+	}
+
 	HWND hwnd;
 	/* sets w->hwnd */
 	hwnd = CreateWindowA(wndclass, c.text, wndstyle,
 			     x, y, wid, hei,
 			     c.parent, /* might be 0 */
-			     0, GetModuleHandle(0), w);
+			     0, GetModuleHandle(0), arg);
 	if (c.text) free(c.text);
 	assert(hwnd);
 
@@ -383,7 +389,7 @@ init_luatk(lua_State *L)
 static ATOM
 register_wndclass(void)
 {
-	WNDCLASSA wndclass = {0};
+	WNDCLASS wndclass = {0};
 
 	wndclass.lpfnWndProc = luatk_wndproc;
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
@@ -391,8 +397,8 @@ register_wndclass(void)
 	wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
-	wndclass.lpszClassName = luatk_class;
-	return RegisterClassA(&wndclass);
+	wndclass.lpszClassName = TEXT(LUATK_CLASS);
+	return RegisterClass(&wndclass);
 }
 
 void
@@ -710,6 +716,7 @@ api_quit(lua_State *L)
 	return 0;
 }
 
+/* 'c' must be zeroed out */
 void
 parse_config(lua_State *L, int index, Config *c)
 {

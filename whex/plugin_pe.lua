@@ -233,6 +233,52 @@ local function export_table(buf)
   w:show()
 end
 
+local function loadapi(dllpath, funcname)
+  local func, err = package.loadlib(dllpath, funcname)
+  if func == nil then
+    print(err)
+    return
+  end
+  return func
+end
+
+local function disassembly(buf)
+  local dasmdll = 'C:/Users/user/Desktop/whex/Debug/dasm.dll'
+  local disasm = loadapi(dasmdll, 'api_disasm')
+  local format_inst = loadapi(dasmdll, 'api_format_inst')
+
+  local pe = buf:tree()
+  local sectno = find_section(pe, '.text\0\0\0')
+  if sectno == nil then return end
+  local sh = pe.section_headers[sectno]
+  local code = buf:read(sh.raw_data_offset, sh.raw_data_size)
+  local off = 0
+  local instlist = {}
+  local i
+  for i=1,256 do
+    local inst = disasm(code, off)
+    off = off + string.len(inst.bytes)
+    instlist[i] = inst
+  end
+  local w = Window{text='Disassembly', size={640,480}}
+  local me = MonoEdit{parent=w}
+  me.source = function(ln)
+    local i = 1+ln
+    if i <= 0 or i > 256 then return '' end
+    local inst = instlist[i]
+    local bytes = inst.bytes
+    local s = bytes:gsub('.', function(c)
+      return string.format('%02x', string.byte(c))
+    end)
+    return string.format('%-32s%s', s, format_inst(inst))
+  end
+  w.on_resize = function(w, wid, hei)
+    me:resize(wid, hei)
+  end
+  w:show()
+  me:update()
+end
+
 return {
   name = 'PE',
   parser = require 'pe',
@@ -240,5 +286,6 @@ return {
     {section_table, 'Section Table...'},
     {import_table, 'Import Table...'},
     {export_table, 'Export Table...'},
+    {disassembly, 'Disassembly...'},
   }
 }

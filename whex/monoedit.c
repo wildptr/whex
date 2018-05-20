@@ -199,8 +199,6 @@ static LRESULT CALLBACK
 wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	CREATESTRUCT *cs;
-	bool has_font;
 
 	switch (message) {
 	case WM_NCCREATE:
@@ -208,24 +206,26 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		if (!w) return FALSE;
 		w->getline = default_getline;
 		w->bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
-		cs = (CREATESTRUCT *) lparam;
-		has_font = 0;
-		if (cs) {
+		{
+			CREATESTRUCT *cs = (CREATESTRUCT *) lparam;
+			bool has_font = 0;
 			MedConfig *conf = cs->lpCreateParams;
-			if (conf->mask & MED_CONFIG_GETLINE) {
-				set_source(w, conf->getline, conf->getline_arg);
+			if (conf) {
+				if (conf->mask & MED_CONFIG_GETLINE) {
+					set_source(w, conf->getline, conf->getline_arg);
+				}
+				if (conf->mask & MED_CONFIG_FONT) {
+					has_font = 1;
+					set_font(w, hwnd, (HFONT) conf->font);
+				}
 			}
-			if (conf->mask & MED_CONFIG_FONT) {
-				has_font = 1;
-				set_font(w, hwnd, (HFONT) conf->font);
+			if (!has_font) {
+				set_font(w, hwnd,
+					 (HFONT) GetStockObject(ANSI_FIXED_FONT));
 			}
-		}
-		if (!has_font) {
-			set_font(w, hwnd,
-				 (HFONT) GetStockObject(ANSI_FIXED_FONT));
 		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
-		break;
+		return TRUE;
 	case WM_NCDESTROY:
 		/* This check is necessary, since we reach here even
 		   when WM_NCCREATE returns FALSE (which means we failed to

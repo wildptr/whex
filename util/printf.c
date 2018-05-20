@@ -273,3 +273,15 @@ _wsprintf(TCHAR *buf, const TCHAR *fmt, ...)
 	va_end(va);
 	return ret;
 }
+
+TCHAR *
+asprintf(const TCHAR *fmt, ...)
+{
+	HeapBuf hb;
+	va_list va;
+	if (init_heapbuf(&hb)) return 0;
+	va_start(va, fmt);
+	vbprintf(&hb.buf, fmt, va);
+	va_end(va);
+	return hb.start;
+}

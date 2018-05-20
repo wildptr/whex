@@ -451,10 +451,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
 	/* set Lua search path */
 	lua_getglobal(L, "package");
-	char *luapath = malloc(wdlen + 6 + 1);
-	sprintf(luapath, "%s/?.lua", workdir);
-	lua_pushstring(L, luapath);
-	free(luapath);
+	lua_pushfstring(L, "%s/?.lua", workdir);
 	lua_setfield(L, -2, "path");
 
 	luaL_newmetatable(L, "buffer");
@@ -491,8 +488,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_newtable(L);
 	lua_setfield(L, -2, "customtype");
 
-	char *ftdet_path = malloc(wdlen+1+9+1);
-	sprintf(ftdet_path, "%s/ftdet.lua", workdir);
+	char *ftdet_path = asprintfA("%s/ftdet.lua", workdir);
 	if (luaL_dofile(L, ftdet_path)) {
 		luaerrorbox(0, L);
 		lua_pop(L, 1);
@@ -1615,10 +1611,9 @@ det:
 	}
 	int ret;
 	if (ft) {
-		char *buf = malloc(wdlen+8+strlen(ft)+4+1);
-		sprintf(buf, "%s/plugin_%s.lua", workdir, ft);
-		ret = load_plugin(ui, buf);
-		free(buf);
+		char *path = asprintfA("%s/plugin_%s.lua", workdir, ft);
+		ret = load_plugin(ui, path);
+		free(path);
 	} else {
 		ret = -1;
 	}
@@ -1691,15 +1686,15 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		case 1:
 			*ptypename = "uint8";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%lu (%02lx)", ival, ival);
+			return _wsprintfA(buf, "%lu (%02lx)", ival, ival);
 		case 2:
 			*ptypename = "uint16";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%lu (%04lx)", ival, ival);
+			return _wsprintfA(buf, "%lu (%04lx)", ival, ival);
 		case 4:
 			*ptypename = "uint32";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%lu (%08lx)", ival, ival);
+			return _wsprintfA(buf, "%lu (%08lx)", ival, ival);
 		}
 		*ptypename = "uint";
 		return 0;
@@ -1710,15 +1705,15 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		case 1:
 			*ptypename = "int8";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%ld", ival);
+			return _wsprintfA(buf, "%ld", ival);
 		case 2:
 			*ptypename = "int16";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%ld", ival);
+			return _wsprintfA(buf, "%ld", ival);
 		case 4:
 			*ptypename = "int32";
 			*pvaluerepr = buf;
-			return sprintf(buf, "%ld", ival);
+			return _wsprintfA(buf, "%ld", ival);
 		}
 		*ptypename = "int";
 		return 0;

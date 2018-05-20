@@ -8,6 +8,7 @@
 #include "types.h"
 #include "buf.h"
 #include "monoedit.h"
+#include "printf.h"
 
 typedef struct {
 	TCHAR *text; /* NOT null-terminated! */
@@ -113,9 +114,11 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 	RECT r;
 	r.left = w->charwidth * line->textlen;
 	r.right = w->clientwidth;
-	r.top = y;
-	r.bottom = y + w->charheight;
-	FillRect(dc, &r, w->bgbrush);
+	if (r.left < r.right) {
+		r.top = y;
+		r.bottom = y + w->charheight;
+		FillRect(dc, &r, w->bgbrush);
+	}
 }
 
 static void
@@ -125,6 +128,7 @@ paint(Med *w, HWND hwnd)
 	HDC dc = BeginPaint(hwnd, &paint);
 	RECT r = { 0, 0, w->clientwidth, w->clientheight };
 
+	SelectObject(dc, w->bgbrush);
 	if (w->buffer) {
 		SelectObject(dc, w->font);
 		for (int i=0; i<w->nrow; i++) {
@@ -132,7 +136,9 @@ paint(Med *w, HWND hwnd)
 		}
 		r.top = w->nrow * w->charheight;
 	}
-	FillRect(dc, &r, w->bgbrush);
+	if (r.top < r.bottom) {
+		FillRect(dc, &r, w->bgbrush);
+	}
 
 	EndPaint(hwnd, &paint);
 }
@@ -276,7 +282,9 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			int hei = HIWORD(lparam);
 			w->clientwidth = wid;
 			w->clientheight = hei;
-			set_size(w, hei/w->charheight, wid/w->charwidth);
+			int ch = w->charheight;
+			int cw = w->charwidth;
+			set_size(w, (hei+ch-1)/ch, (wid+cw-1)/cw);
 		}
 		return 0;
 	}
@@ -532,6 +540,11 @@ set_size(Med *w, int nrow, int ncol)
 	assert(nrow >= 0);
 	assert(ncol >= 0);
 	w->ncol = ncol;
+	if (nrow < w->nrow) {
+		for (int i=nrow; i<w->nrow; i++) {
+			free(w->buffer[i].text);
+		}
+	}
 	w->buffer = realloc(w->buffer, nrow * sizeof *w->buffer);
 	if (nrow > w->nrow) {
 		memset(&w->buffer[w->nrow], 0,

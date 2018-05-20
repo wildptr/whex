@@ -880,14 +880,14 @@ med_getline(long long ln, Buf *b, void *arg)
 	size_t l;
 	const char *s = luaL_checklstring(L, -1, &l);
 	if (!s) return;
-	int textlen = (int) l;
 #ifdef UNICODE
-	TCHAR *tstr = malloc(textlen * sizeof *tstr);
-	textlen = MultiByteToWideChar(CP_ACP, 0, s, textlen, tstr, textlen);
-	b->puts(b, tstr, textlen);
+	int buflen = MultiByteToWideChar(CP_ACP, 0, s, l, 0, 0);
+	TCHAR *tstr = malloc(buflen * sizeof *tstr);
+	MultiByteToWideChar(CP_ACP, 0, s, l, tstr, buflen);
+	b->puts(b, tstr, buflen);
 	free(tstr);
 #else
-	b->puts(b, s, textlen);
+	b->puts(b, s, l);
 #endif
 }
 

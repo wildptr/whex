@@ -59,6 +59,8 @@ format_operand(BufA *buf, Operand *o)
 {
 	int ret;
 	switch (o->kind) {
+	case O_INV:
+		return buf->puts(buf, "<INVALID>", 9);
 	case O_REG:
 		return bprintfA(buf, "%s", regname[o->reg]);
 	case O_MEM:

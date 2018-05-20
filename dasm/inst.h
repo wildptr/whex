@@ -7,6 +7,7 @@ enum {
 #define NOREG 0xff
 
 enum {
+	O_INV,
 	O_REG,
 	O_MEM,
 	O_IMM,

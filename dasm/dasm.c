@@ -407,8 +407,9 @@ read_regmem32(const uchar *p, Operand *o)
 		break;
 	case 3:
 		o->kind = O_REG;
-		o->reg = addr32reg(r);
-		o->size = regsize(o->reg);
+		/* 'o->reg' and 'o->size' are to be corrected later in convert_inst() */
+		o->reg = r;
+		o->size = 0;
 		break;
 	default:
 		assert(0);
@@ -512,6 +513,15 @@ convert_inst(PrefixedOpcode *po, Operand *rm, int32 *imm, Inst *inst,
 			o->reg = data;
 			break;
 		case F_RM:
+			if (o->kind == O_REG) {
+				uchar size = data;
+				if (size) {
+					o->reg = getreg(o->reg, size);
+					o->size = size;
+				} else {
+					o->kind = O_INV;
+				}
+			}
 			*o = *rm;
 			break;
 		case F_O:

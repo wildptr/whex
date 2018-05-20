@@ -15,16 +15,22 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="buf.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="printf.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="region.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="list.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="printfa.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="printfw.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="bufa.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="bufw.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

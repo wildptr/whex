@@ -1,7 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <assert.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,7 +12,11 @@
 #include <windows.h>
 #include <commctrl.h>
 
+#include "types.h"
+#include "region.h"
+#include "buf.h"
 #include "monoedit.h"
+#include "unicode.h"
 
 #define BUFSIZE 512
 
@@ -864,29 +867,28 @@ api_listview_clear(lua_State *L)
 }
 
 static void
-med_getline(long long ln, MedLine *line, void *arg)
+med_getline(long long ln, Buf *b, void *arg)
 {
 	lua_State *L = lua;
 	HWND med = (HWND) arg;
-	line->tags = 0;
 	getluafield(L, med, F_MONOEDIT_SOURCE);
 	lua_pushinteger(L, ln);
 	if (lua_pcall(L, 1, 1, 0)) {
-		line->text = 0;
-		line->textlen = 0;
+		lua_pop(L, 1);
 		return;
 	}
 	size_t l;
 	const char *s = luaL_checklstring(L, -1, &l);
+	if (!s) return;
 	int textlen = (int) l;
-	line->text = malloc(textlen * sizeof(TCHAR));
-	//med_alloc_text(med, textlen);
 #ifdef UNICODE
-	MultiByteToWideChar(CP_ACP, 0, s, textlen, line->text, textlen);
+	TCHAR *tstr = malloc(textlen * sizeof *tstr);
+	textlen = MultiByteToWideChar(CP_ACP, 0, s, textlen, tstr, textlen);
+	b->puts(b, tstr, textlen);
+	free(tstr);
 #else
-	memcpy(line->text, s, textlen);
+	b->puts(b, s, textlen);
 #endif
-	line->textlen = textlen;
 }
 
 int

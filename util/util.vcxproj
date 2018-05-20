@@ -64,9 +64,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="buf.c" />
+    <ClCompile Include="bufa.c" />
+    <ClCompile Include="bufw.c" />
     <ClCompile Include="list.c" />
-    <ClCompile Include="printf.c" />
+    <ClCompile Include="printfa.c" />
+    <ClCompile Include="printfw.c" />
     <ClCompile Include="region.c" />
   </ItemGroup>
   <ItemGroup>

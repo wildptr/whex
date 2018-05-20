@@ -52,4 +52,4 @@ extern const char *opname[];
 extern const char *regname[];
 
 uchar regsize(uchar reg); /* in bytes */
-int format_inst(Buf *, Inst *);
+int format_inst(BufA *, Inst *);

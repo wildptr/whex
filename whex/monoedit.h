@@ -5,14 +5,8 @@ typedef struct med_tag {
 	unsigned attr;
 } MedTag;
 
-typedef struct {
-	TCHAR *text; /* NOT null-terminated! */
-	MedTag *tags;
-	int textlen;
-} MedLine;
-
 typedef void (*MedGetLineProc)
-	(long long ln, MedLine *line, void *arg);
+	(long long ln, Buf *buf, void *arg);
 
 typedef struct {
 	unsigned char mask;

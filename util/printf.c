@@ -29,14 +29,21 @@
 
 #include <stdarg.h>
 #include <string.h>
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 
 #include "types.h"
 #include "buf.h"
 #include "printf.h"
 
 typedef int (*Formatter)();
+
+int __stdcall lstrlenA(const char *);
+int __stdcall lstrlenW(const wchar_t *);
+
+#ifdef UNICODE
+#define lstrlen lstrlenW
+#else
+#define lstrlen lstrlenA
+#endif
 
 enum {
 	F_SIGNED = 1,

@@ -21,9 +21,6 @@
     <ClCompile Include="luatk.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="lua_api.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -37,6 +34,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="winutil.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="whex_lua.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

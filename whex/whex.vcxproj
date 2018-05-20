@@ -75,7 +75,7 @@
   <ItemGroup>
     <ClCompile Include="buffer.c" />
     <ClCompile Include="luatk.c" />
-    <ClCompile Include="lua_api.c" />
+    <ClCompile Include="whex_lua.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="monoedit.c" />
     <ClCompile Include="tree.c" />

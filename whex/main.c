@@ -17,12 +17,13 @@
 #include "list.h"
 #include "buffer.h"
 #include "ui.h"
-#include "monoedit.h"
 #include "tree.h"
 #include "unicode.h"
 #include "resource.h"
+#include "buf.h"
 #include "printf.h"
 #include "util.h"
+#include "monoedit.h"
 
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 4
@@ -886,19 +887,13 @@ init_font(UI *ui)
 }
 
 void
-med_getline(offset ln, MedLine *line, void *arg)
+med_getline(offset ln, Buf *p, void *arg)
 {
 	assert(ln >= 0);
-	TCHAR *text = malloc(N_COL_CHAR * sizeof *text);
-	//med_alloc_text(ui->monoedit, N_COL_CHAR);
-	line->text = text;
-	line->tags = 0;
-
 	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
 	offset addr = ln << LOG2_N_COL;
 	int end;
-	TCHAR *p = text;
 	offset start = ln << LOG2_N_COL;
 	if (start + N_COL <= b->buffer_size) {
 		end = N_COL;
@@ -909,24 +904,19 @@ med_getline(offset ln, MedLine *line, void *arg)
 	}
 	if (end) {
 		buf_read(b, data, addr, end);
-		_wsprintf(p, TEXT("%08llx:"), addr);
-		p += 9;
+		bprintf(p, TEXT("%08llx:"), addr);
 		for (int j=0; j<end; j++) {
-			_wsprintf(p, TEXT(" %02x"), data[j]);
-			p += 3;
+			bprintf(p, TEXT(" %02x"), data[j]);
 		}
 		for (int j=end; j<N_COL; j++) {
-			_wsprintf(p, TEXT("   "));
-			p += 3;
+			bprintf(p, TEXT("   "));
 		}
-		_wsprintf(p, TEXT("  "));
-		p += 2;
+		bprintf(p, TEXT("  "));
 		for (int j=0; j<end; j++) {
 			uchar c = data[j];
-			*p++ = c < 0x20 || c > 0x7e ? '.' : c;
+			p->putc(p, c < 0x20 || c > 0x7e ? '.' : c);
 		}
 	}
-	line->textlen = p-text;
 }
 
 void

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 #include <lua.h>
 #include <lauxlib.h>
@@ -126,8 +127,8 @@ api_disasm(lua_State *L)
 __declspec(dllexport) int
 api_format_inst(lua_State *L)
 {
-	HeapBuf buf;
-	if (init_heapbuf(&buf)) {
+	HeapBufA buf;
+	if (init_heapbufA(&buf)) {
 		return 0;
 	}
 
@@ -142,5 +143,6 @@ api_format_inst(lua_State *L)
 
 	format_inst(&buf.buf, &inst);
 	lua_pushlstring(L, buf.start, buf.cur - buf.start);
+	free(buf.start);
 	return 1;
 }

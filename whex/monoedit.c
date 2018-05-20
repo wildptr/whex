@@ -1,18 +1,25 @@
 #include <assert.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+
+#include "types.h"
+#include "buf.h"
 #include "monoedit.h"
+
+typedef struct {
+	TCHAR *text; /* NOT null-terminated! */
+	MedTag *tags;
+	int textlen;
+} Line;
 
 typedef struct {
 	/* in characters */
 	int ncol;
 	int nrow;
-	MedLine *buffer;
+	Line *buffer;
 	HFONT font;
 	int cursorx;
 	int cursory;
@@ -29,16 +36,18 @@ typedef struct {
 	HBRUSH bgbrush;
 } Med;
 
+#if 0
 typedef struct {
 	int len, next;
 } FreeList;
+#endif
 
 static void set_source(Med *w, MedGetLineProc proc, void *arg);
 #if 0
 static TCHAR *alloc_text(Med *w, int nch);
 static void free_text(Med *w, TCHAR *text, int nch);
 static void init_textbuf(Med *w, int len);
-static void free_line(Med *w, MedLine *l);
+static void free_line(Med *w, Line *l);
 #endif
 static void update_buffer(Med *w);
 static void scroll(Med *w, HWND hwnd, int delta);
@@ -48,7 +57,7 @@ static void
 paint_row(Med *w, HWND hwnd, HDC dc, int row)
 {
 	assert(row >= 0 && row < w->nrow);
-	MedLine *line = &w->buffer[row];
+	Line *line = &w->buffer[row];
 	int ntag = 0;
 	MedTag *t = line->tags;
 	while (t) {
@@ -132,7 +141,7 @@ static void
 clear_tags(Med *w)
 {
 	for (int i=0; i<w->nrow; i++) {
-		MedLine *line = &w->buffer[i];
+		Line *line = &w->buffer[i];
 		line->tags = 0;
 	}
 	w->ntag = 0;
@@ -144,7 +153,7 @@ add_tag(Med *w, int lineno, MedTag *tag)
 	if (!(lineno >= 0 && lineno < w->nrow)) {
 		abort();
 	}
-	MedLine *line = &w->buffer[lineno];
+	Line *line = &w->buffer[lineno];
 	assert(line);
 
 	if (w->ntag == w->tag_cap) {
@@ -177,9 +186,8 @@ add_tag(Med *w, int lineno, MedTag *tag)
 }
 
 void
-default_getline(long long ln, MedLine *line, void *_arg)
+default_getline(long long _ln, Buf *_b, void *_arg)
 {
-	memset(line, 0, sizeof *line);
 }
 
 static void
@@ -391,7 +399,7 @@ med_alloc_text(HWND hwnd, int nch)
 }
 
 static void
-free_line(Med *w, MedLine *l)
+free_line(Med *w, Line *l)
 {
 	free_text(w, l->text, l->textlen);
 }
@@ -408,12 +416,28 @@ init_textbuf(Med *w, int len)
 #endif
 
 static void
+getline(Med *w, int row)
+{
+	HeapBuf hb;
+	Line *l = &w->buffer[row];
+	l->tags = 0;
+	if (init_heapbuf(&hb)) {
+		l->text = 0;
+		l->textlen = 0;
+		return;
+	}
+	w->getline(w->lineno + row, &hb.buf, w->getline_arg);
+	l->text = hb.start;
+	l->textlen = hb.cur - hb.start;
+}
+
+static void
 update_buffer(Med *w)
 {
 	for (int i=0; i<w->nrow; i++) {
-		MedLine *l = &w->buffer[i];
+		Line *l = &w->buffer[i];
 		free(l->text);
-		w->getline(w->lineno + i, l, w->getline_arg);
+		getline(w, i);
 	}
 }
 
@@ -447,8 +471,7 @@ scroll(Med *w, HWND hwnd, int delta)
 			w->buffer[d--] = w->buffer[s--];
 		}
 		for (int i=0; i<delta; i++) {
-			w->getline(w->lineno + i, &w->buffer[i],
-				   w->getline_arg);
+			getline(w, i);
 		}
 	} else if (delta < 0) {
 		delta = -delta;
@@ -462,8 +485,7 @@ scroll(Med *w, HWND hwnd, int delta)
 			w->buffer[d++] = w->buffer[s++];
 		}
 		for (int i=w->nrow-delta; i<w->nrow; i++) {
-			w->getline(w->lineno + i, &w->buffer[i],
-				   w->getline_arg);
+			getline(w, i);
 		}
 	}
 }
@@ -514,6 +536,9 @@ set_size(Med *w, int nrow, int ncol)
 	if (nrow > w->nrow) {
 		memset(&w->buffer[w->nrow], 0,
 		       (nrow - w->nrow) * sizeof w->buffer[0]);
+		for (int i=w->nrow; i<nrow; i++) {
+			getline(w, i);
+		}
 	}
 	w->nrow = nrow;
 }
@@ -529,7 +554,7 @@ void
 med_set_char(HWND hwnd, int y, int x, TCHAR c)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	MedLine *l;
+	Line *l;
 	if (y < 0 || y >= w->nrow) return;
 	l = &w->buffer[y];
 	if (x < 0 || x >= l->textlen) return;

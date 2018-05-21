@@ -116,7 +116,6 @@ void move_prev_field(UI *);
 TCHAR *inputbox(UI *, TCHAR *title);
 bool parse_addr(TCHAR *, offset *);
 void errorbox(HWND, TCHAR *);
-void msgbox(HWND, const TCHAR *, ...);
 Tree *convert_tree(Region *, lua_State *);
 int load_plugin(UI *, const char *);
 int api_buffer_peek(lua_State *L);
@@ -442,6 +441,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_getglobal(L, "package");
 	lua_pushfstring(L, "%s/?.lua", workdir);
 	lua_setfield(L, -2, "path");
+	lua_pop(L, 1); /* global 'package' */
 
 	luaL_newmetatable(L, "buffer");
 	lua_pushvalue(L, -1);
@@ -464,7 +464,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "replace");
 	lua_pushcfunction(L, api_buffer_insert);
 	lua_setfield(L, -2, "insert");
-	lua_pop(L, 1);
+	lua_pop(L, 1); /* 'buffer' */
 
 	if (init_luatk(L)) return -1;
 
@@ -1110,7 +1110,6 @@ close_file(UI *ui)
 	buf_finalize(ui->buffer);
 	free(ui->filepath);
 	ui->filepath = 0;
-	/* TODO: set current line to 0 */
 	ui->cursor_y = 0;
 	ui->cursor_x = 0;
 	ui->hl_start = 0;
@@ -1394,18 +1393,6 @@ void
 luaerrorbox(HWND hwnd, lua_State *L)
 {
 	MessageBoxA(hwnd, lua_tostring(L, -1), "Error", MB_OK | MB_ICONERROR);
-}
-
-void
-msgbox(HWND hwnd, const TCHAR *fmt, ...)
-{
-	TCHAR msg[BUFSIZE];
-	va_list ap;
-
-	va_start(ap, fmt);
-	_wvsprintf(msg, fmt, ap);
-	va_end(ap);
-	MessageBox(hwnd, msg, TEXT("WHEX"), MB_OK);
 }
 
 void

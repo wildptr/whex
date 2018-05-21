@@ -91,6 +91,7 @@
     <ClInclude Include="ui.h" />
     <ClInclude Include="unicode.h" />
     <ClInclude Include="util.h" />
+    <ClInclude Include="winutil.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="res.rc" />

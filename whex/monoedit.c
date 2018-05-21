@@ -248,7 +248,7 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			}
 		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
-		return TRUE;
+		break;
 	case WM_NCDESTROY:
 		/* This check is necessary, since we reach here even
 		   when WM_NCCREATE returns FALSE (which means we failed to

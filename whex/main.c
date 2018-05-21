@@ -1155,22 +1155,35 @@ update_monoedit_tags(UI *ui)
 		if (end_x == 0) {
 			end_x = N_COL;
 		}
+		int byteoff = start_clamp & (N_COL-1);
 		if (tag_last_line > tag_first_line) {
-			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
-			tag.len = (N_COL - (start_clamp & (N_COL-1))) * 3 - 1;
+			tag.start = 10 + byteoff * 3;
+			tag.len = (N_COL - byteoff) * 3 - 1;
+			med_add_tag(med, tag_first_line, &tag);
+			tag.start = 11 + N_COL*3 + byteoff;
+			tag.len = N_COL - byteoff;
 			med_add_tag(med, tag_first_line, &tag);
 			for (int i=tag_first_line+1; i<tag_last_line; i++) {
 				tag.start = 10;
 				tag.len = N_COL*3-1;
 				med_add_tag(med, i, &tag);
+				tag.start = 11+N_COL*3;
+				tag.len = N_COL;
+				med_add_tag(med, i, &tag);
 			}
 			tag.start = 10;
 			tag.len = end_x * 3 - 1;
 			med_add_tag(med, tag_last_line, &tag);
+			tag.start = 11+N_COL*3;
+			tag.len = end_x;
+			med_add_tag(med, tag_last_line, &tag);
 		} else {
 			// single line
-			tag.start = 10 + (start_clamp & (N_COL-1)) * 3;
-			tag.len = (end_x - (start_clamp & (N_COL-1))) * 3 - 1;
+			tag.start = 10 + byteoff * 3;
+			tag.len = (end_x - byteoff) * 3 - 1;
+			med_add_tag(med, tag_first_line, &tag);
+			tag.start = 11+N_COL*3+byteoff;
+			tag.len = end_x - byteoff;
 			med_add_tag(med, tag_first_line, &tag);
 		}
 	}

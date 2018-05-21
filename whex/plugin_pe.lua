@@ -27,7 +27,7 @@ local function section_table(buf)
   local pe = buf:tree()
   local w = Window{text='Section table', size={640,480}}
   local lv = ListView{parent=w, pos={0,0}}
-  w.on_resize = function(w, wid, hei)
+  w.on_resize = function(wid, hei)
     lv:resize(wid, hei)
   end
   lv:insert_column(0, 'Name', {width=64})
@@ -156,7 +156,7 @@ local function import_table(buf)
   local ilt = make_ilt(buf, idt, pe32plus)
   local lb = ListBox{parent=w, pos={0,0}}
   local lv = ListView{parent=w, pos={256,0}}
-  w.on_resize = function(w, wid, hei)
+  w.on_resize = function(wid, hei)
     local halfwid = wid//2
     lb:resize(halfwid, hei)
     lv:configure{pos={halfwid,0}, size={wid-halfwid, hei}}
@@ -221,7 +221,7 @@ local function export_table(buf)
   end
   local w = Window{text='Export table', size={640,480}}
   local lv = ListView{parent=w, pos={0,0}}
-  w.on_resize = function(w, wid, hei)
+  w.on_resize = function(wid, hei)
     lv:resize(wid, hei)
   end
   lv:insert_column(0, 'Name', {width=216})
@@ -262,17 +262,17 @@ local function disassembly(buf)
   end
   local w = Window{text='Disassembly', size={640,480}}
   local me = MonoEdit{parent=w}
+  local total_lines = 256
   me.source = function(ln)
-    local i = 1+ln
-    if i <= 0 or i > 256 then return '' end
-    local inst = instlist[i]
+    local inst = instlist[1+ln]
     local bytes = inst.bytes
     local s = bytes:gsub('.', function(c)
       return string.format('%02x', string.byte(c))
     end)
     return string.format('%-32s%s', s, format_inst(inst))
   end
-  w.on_resize = function(w, wid, hei)
+  me.total_lines = total_lines
+  w.on_resize = function(wid, hei)
     me:resize(wid, hei)
   end
   w:show()

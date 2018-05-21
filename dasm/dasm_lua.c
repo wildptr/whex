@@ -127,8 +127,8 @@ api_disasm(lua_State *L)
 __declspec(dllexport) int
 api_format_inst(lua_State *L)
 {
-	HeapBufA buf;
-	if (init_heapbufA(&buf)) {
+	HeapBufA hb;
+	if (init_heapbufA(&hb)) {
 		return 0;
 	}
 
@@ -139,10 +139,9 @@ api_format_inst(lua_State *L)
 	inst.var = li->var;
 	inst.noperand = li->noperand;
 	inst.operands = li->operands;
-	lua_pop(L, 1);
-
-	format_inst(&buf.buf, &inst);
-	lua_pushlstring(L, buf.start, buf.cur - buf.start);
-	free(buf.start);
+	format_inst(&hb.buf, &inst);
+	lua_pop(L, 1); /* 'userdata' */
+	lua_pushlstring(L, hb.start, hb.cur - hb.start);
+	free(hb.start);
 	return 1;
 }

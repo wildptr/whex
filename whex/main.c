@@ -977,6 +977,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				if (lua_pcall(L, 1, 0, 0)) {
 					luaerrorbox(hwnd, L);
 				}
+				/* If an error occurred, pops the error.
+				   Otherwise pops 'plugin'. */
 				lua_pop(L, 1);
 				return 0;
 			}

@@ -424,6 +424,7 @@ button_cmd(lua_State *L, Window *w)
 		if (lua_pcall(L, 1, 0, 0)) {
 			const char *err = lua_tostring(L, -1);
 			MessageBoxA(hwnd, err, "LuaTk", MB_OK | MB_ICONERROR);
+			lua_pop(L, 1);
 		}
 	} else {
 		lua_pop(L, 3);
@@ -448,6 +449,7 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		if (!lua_isnil(lua, -1)) {
 			if (lua_pcall(lua, 0, 0, 0)) {
 				luaerrorbox(hwnd, lua);
+				lua_pop(lua, 1);
 			}
 		} else {
 			lua_pop(lua, 1);
@@ -488,9 +490,12 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 						lua_pushinteger(lua, sel);
 						if (lua_pcall(lua, 2, 0, 0)) {
 							luaerrorbox(hwnd, lua);
+							lua_pop(lua, 1);
 						}
+					} else {
+						/* pops invalid 'on_select' */
+						lua_pop(lua, 1);
 					}
-					lua_pop(lua, 1);
 					break;
 				}
 				break;
@@ -501,15 +506,16 @@ luatk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		if (wparam == SIZE_MINIMIZED) return 0;
 		getluafield(lua, hwnd, F_WINDOW_ON_RESIZE);
 		if (!lua_isnil(lua, -1)) {
-			lua_pushlightuserdata(lua, hwnd);
-			lua_rawget(lua, LUA_REGISTRYINDEX);
 			lua_pushinteger(lua, LOWORD(lparam));
 			lua_pushinteger(lua, HIWORD(lparam));
-			if (lua_pcall(lua, 3, 0, 0)) {
+			if (lua_pcall(lua, 2, 0, 0)) {
 				luaerrorbox(hwnd, lua);
+				lua_pop(lua, 1);
 			}
+		} else {
+			/* pops invalid 'on_resize' */
+			lua_pop(lua, 1);
 		}
-		lua_pop(lua, 1);
 		return 0;
 	}
 	return DefWindowProc(hwnd, msg, wparam, lparam);
@@ -921,6 +927,14 @@ api_monoedit__index(lua_State *L)
 			return 1;
 		}
 		break;
+	case 11:
+		if (!strcmp(field, "total_lines")) {
+			Window *w = lua_touserdata(L, 1);
+			long long n = med_get_total_lines(w->hwnd);
+			lua_pushinteger(L, n);
+			return 1;
+		}
+		break;
 	}
 	return api_window__index(L);
 }
@@ -935,6 +949,15 @@ api_monoedit__newindex(lua_State *L)
 		if (!strcmp(field, "source")) {
 			Window *w = lua_touserdata(L, 1);
 			setluafield(L, w->hwnd, F_MONOEDIT_SOURCE, 3);
+			lua_pop(L, 1);
+			return 0;
+		}
+		break;
+	case 11:
+		if (!strcmp(field, "total_lines")) {
+			Window *w = lua_touserdata(L, 1);
+			lua_Integer n = luaL_checkinteger(L, 3);
+			med_set_total_lines(w->hwnd, n);
 			lua_pop(L, 1);
 			return 0;
 		}

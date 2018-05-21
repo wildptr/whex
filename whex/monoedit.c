@@ -36,6 +36,7 @@ typedef struct {
 	int clientwidth;
 	int clientheight;
 	HBRUSH bgbrush;
+	int sbscale;
 } Med;
 
 #if 0
@@ -56,6 +57,11 @@ static void scroll(Med *w, HWND hwnd, int delta);
 static void set_size(Med *w, int nrow, int ncol);
 static void scroll_up_line(Med *w, HWND hwnd);
 static void scroll_down_line(Med *w, HWND hwnd);
+static void scroll_up_page(Med *w, HWND hwnd);
+static void scroll_down_page(Med *w, HWND hwnd);
+static void scroll_to(Med *w, HWND hwnd, long long ln);
+static void update_scrollbar_pos(Med *w, HWND hwnd);
+static void update_scrollbar_range(Med *w, HWND hwnd);
 
 static void
 paint_row(Med *w, HWND hwnd, HDC dc, int row)
@@ -154,15 +160,14 @@ clear_tags(Med *w)
 		line->tags = 0;
 	}
 	w->ntag = 0;
+	_printf("clear_tags\n");
 }
 
 static void
-add_tag(Med *w, int current_line, MedTag *tag)
+add_tag(Med *w, int row, MedTag *tag)
 {
-	if (!(current_line >= 0 && current_line < w->nrow)) {
-		abort();
-	}
-	Line *line = &w->buffer[current_line];
+	assert(row >= 0 && row < w->nrow);
+	Line *line = &w->buffer[row];
 	assert(line);
 
 	if (w->ntag == w->tag_cap) {
@@ -176,6 +181,7 @@ add_tag(Med *w, int current_line, MedTag *tag)
 		}
 	}
 	MedTag *newtag = w->tagbuf + w->ntag++;
+	_printf("add_tag row=%d start=%d len=%d\n", row, tag->start, tag->len);
 	newtag->start = tag->start;
 	newtag->len = tag->len;
 	newtag->attr = tag->attr;
@@ -235,7 +241,8 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			MedConfig *conf = cs->lpCreateParams;
 			if (conf) {
 				if (conf->mask & MED_CONFIG_GETLINE) {
-					set_source(w, conf->getline, conf->getline_arg);
+					set_source(w, conf->getline,
+						   conf->getline_arg);
 				}
 				if (conf->mask & MED_CONFIG_FONT) {
 					has_font = 1;
@@ -243,8 +250,8 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				}
 			}
 			if (!has_font) {
-				set_font(w, hwnd,
-					 (HFONT) GetStockObject(ANSI_FIXED_FONT));
+				set_font(w, hwnd, (HFONT)
+					 GetStockObject(ANSI_FIXED_FONT));
 			}
 		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
@@ -323,6 +330,38 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			}
 		}
 		return 0;
+	case WM_VSCROLL:
+		switch (LOWORD(wparam)) {
+		case SB_LINEDOWN:
+			scroll_down_line(w, hwnd);
+			break;
+		case SB_LINEUP:
+			scroll_up_line(w, hwnd);
+			break;
+		case SB_PAGEDOWN:
+			scroll_down_page(w, hwnd);
+			break;
+		case SB_PAGEUP:
+			scroll_up_page(w, hwnd);
+			break;
+		case SB_TOP:
+			scroll_to(w, hwnd, 0);
+			break;
+		case SB_BOTTOM:
+			scroll_to(w, hwnd, w->total_lines);
+			break;
+		case SB_THUMBPOSITION:
+		case SB_THUMBTRACK:
+			{
+				SCROLLINFO si;
+				si.cbSize = sizeof si;
+				si.fMask = SIF_TRACKPOS;
+				GetScrollInfo(hwnd, SB_VERT, &si);
+				scroll_to(w, hwnd, si.nTrackPos);
+			}
+			break;
+		}
+		return 0;
 	}
 	return DefWindowProc(hwnd, message, wparam, lparam);
 }
@@ -341,12 +380,20 @@ med_register_class(void)
 	return RegisterClass(&wndclass);
 }
 
+static void
+scroll_to(Med *w, HWND hwnd, long long ln)
+{
+	w->current_line = ln;
+	update_buffer(w);
+	InvalidateRect(hwnd, 0, 0);
+	update_scrollbar_pos(w, hwnd);
+}
+
 void
 med_set_current_line(HWND hwnd, long long ln)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	w->current_line = ln;
-	update_buffer(w);
+	scroll_to(w, hwnd, ln);
 }
 
 long long
@@ -361,6 +408,7 @@ med_set_total_lines(HWND hwnd, long long n)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	w->total_lines = n;
+	update_scrollbar_range(w, hwnd);
 }
 
 long long
@@ -478,12 +526,13 @@ getline(Med *w, int row)
 {
 	HeapBuf hb;
 	Line *l = &w->buffer[row];
-	l->tags = 0;
-	if (init_heapbuf(&hb)) {
+	if (w->current_line + row >= w->total_lines) {
+abort:
 		l->text = 0;
 		l->textlen = 0;
 		return;
 	}
+	if (init_heapbuf(&hb)) goto abort;
 	w->getline(w->current_line + row, &hb.buf, w->getline_arg);
 	l->text = hb.start;
 	l->textlen = hb.cur - hb.start;
@@ -546,6 +595,7 @@ scroll(Med *w, HWND hwnd, int delta)
 			getline(w, i);
 		}
 	}
+	update_scrollbar_pos(w, hwnd);
 }
 
 void
@@ -590,6 +640,7 @@ set_size(Med *w, int nrow, int ncol)
 	assert(nrow >= 0);
 	assert(ncol >= 0);
 	w->ncol = ncol;
+	if (nrow == w->nrow) return;
 	if (nrow < w->nrow) {
 		for (int i=nrow; i<w->nrow; i++) {
 			free(w->buffer[i].text);
@@ -646,7 +697,7 @@ scroll_up_line(Med *w, HWND hwnd)
 static void
 scroll_down_line(Med *w, HWND hwnd)
 {
-	if (w->current_line + w->nrow < w->total_lines) {
+	if (w->current_line < w->total_lines) {
 		scroll(w, hwnd, -1);
 	}
 }
@@ -683,7 +734,7 @@ scroll_down_page(Med *w, HWND hwnd)
 {
 	long long curline = w->current_line;
 	int delta;
-	if (curline + w->nrow + w->nrow <= w->total_lines) {
+	if (curline + w->nrow <= w->total_lines) {
 		delta = w->nrow;
 	} else {
 		delta = (int)(w->total_lines - curline) - w->nrow;
@@ -712,4 +763,39 @@ med_get_nrow(HWND hwnd)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	return w->nrow;
+}
+
+static int
+compute_scrollbar_pos(Med *w)
+{
+	return (int)(w->current_line >> w->sbscale);
+}
+
+static void
+update_scrollbar_pos(Med *w, HWND hwnd)
+{
+	int newpos = compute_scrollbar_pos(w);
+	SCROLLINFO si;
+	si.cbSize = sizeof si;
+	si.fMask = SIF_POS;
+	si.nPos = newpos;
+	SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+}
+
+static void
+update_scrollbar_range(Med *w, HWND hwnd)
+{
+	unsigned long long bottom = w->total_lines;
+	int s = 0;
+	while (bottom >> s >= 0x80000000) s++;
+	w->sbscale = s;
+	int maxscroll = (int)(bottom >> s);
+	int newpos = compute_scrollbar_pos(w);
+	SCROLLINFO si;
+	si.cbSize = sizeof si;
+	si.fMask = SIF_RANGE | SIF_POS;
+	si.nMin = 0;
+	si.nMax = maxscroll;
+	si.nPos = newpos;
+	SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 }

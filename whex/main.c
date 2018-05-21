@@ -503,7 +503,6 @@ set_current_line(UI *ui, offset line)
 {
 	med_set_current_line(ui->monoedit, line);
 	update_cursor_pos(ui);
-	InvalidateRect(ui->monoedit, 0, FALSE);
 }
 
 void
@@ -594,14 +593,14 @@ goto_address(UI *ui, offset addr)
 		ui->cursor_y = (int)(line - curline);
 		update_cursor_pos(ui);
 	} else {
-		offset line1;
+		offset dstline;
 		if (line >= nrow >> 1) {
-			line1 = line - (nrow >> 1);
+			dstline = line - (nrow >> 1);
 		} else {
-			line1 = 0;
+			dstline = 0;
 		}
-		ui->cursor_y = (int)(line - line1);
-		set_current_line(ui, line1);
+		ui->cursor_y = (int)(line - dstline);
+		set_current_line(ui, dstline);
 	}
 }
 
@@ -857,7 +856,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	medconf.font = ui->mono_font;
 	monoedit = CreateWindow(TEXT("MonoEdit"),
 				TEXT(""),
-				WS_CHILD | WS_VISIBLE,
+				WS_CHILD | WS_VISIBLE | WS_VSCROLL,
 				0, 0, 0, 0,
 				hwnd, 0, instance, &medconf);
 	ui->monoedit = monoedit;
@@ -902,8 +901,6 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
 
 	SetFocus(monoedit);
-	update_cursor_pos(ui);
-	update_window_title(ui);
 }
 
 LRESULT CALLBACK
@@ -1212,6 +1209,7 @@ update_ui(UI *ui)
 		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);
 		mii.fState = MFS_ENABLED;
 	} else {
+		update_field_info(ui);
 		ShowWindow(ui->monoedit, SW_HIDE);
 		mii.fState = MFS_GRAYED;
 		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);
@@ -1227,9 +1225,7 @@ update_ui(UI *ui)
 	}
 	med_set_total_lines(ui->monoedit, total_lines);
 	med_update_buffer(ui->monoedit);
-	InvalidateRect(ui->monoedit, 0, FALSE);
 
-	update_field_info(ui);
 	update_plugin_menu(ui);
 }
 

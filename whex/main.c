@@ -95,14 +95,10 @@ offset cursor_pos(UI *);
 offset current_line(UI *);
 void goto_address(UI *, offset);
 void error_prompt(UI *, const char *);
-void scroll_up_line(UI *);
-void scroll_down_line(UI *);
 void move_up(UI *);
 void move_down(UI *);
 void move_left(UI *);
 void move_right(UI *);
-void move_up_page(UI *);
-void move_down_page(UI *);
 void goto_bol(UI *);
 void goto_eol(UI *);
 void handle_char_normal(UI *, int);
@@ -141,6 +137,7 @@ int save_file(UI *);
 int save_file_as(UI *, const TCHAR *);
 void populate_treeview(UI *);
 int format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
+int get_nrow(UI *ui);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -155,7 +152,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		int cx = x / ui->charwidth;
 		int cy = y / ui->charheight;
 		SetFocus(hwnd);
-		if (cx >= 10 && cx < 10+N_COL*3 && cy < ui->nrow) {
+		if (cx >= 10 && cx < 10+N_COL*3 && cy < get_nrow(ui)) {
 			bool lownib = (cx-10)%3;
 			cx = (cx-10)/3;
 			offset pos = ((current_line(ui) + cy) << LOG2_N_COL) + cx;
@@ -184,10 +181,12 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				move_right(ui);
 				break;
 			case VK_PRIOR:
-				move_up_page(ui);
+				med_scroll_up_page(ui->monoedit);
+				update_cursor_pos(ui);
 				break;
 			case VK_NEXT:
-				move_down_page(ui);
+				med_scroll_down_page(ui->monoedit);
+				update_cursor_pos(ui);
 				break;
 			case VK_HOME:
 				if (GetKeyState(VK_CONTROL) < 0) {
@@ -220,18 +219,8 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return 0;
 	case WM_MOUSEWHEEL:
 		if (ui->mode == MODE_NORMAL) {
-			int delta = (short) HIWORD(wparam);
-			if (delta > 0) {
-				int n = delta / WHEEL_DELTA;
-				while (n--) {
-					scroll_up_line(ui);
-				}
-			} else {
-				int n = (-delta) / WHEEL_DELTA;
-				while (n--) {
-					scroll_down_line(ui);
-				}
-			}
+			ui->med_wndproc(hwnd, msg, wparam, lparam);
+			update_cursor_pos(ui);
 		}
 		return 0;
 	}
@@ -512,7 +501,6 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 void
 set_current_line(UI *ui, offset line)
 {
-	assert(line <= ui->total_lines);
 	med_set_current_line(ui->monoedit, line);
 	update_cursor_pos(ui);
 	InvalidateRect(ui->monoedit, 0, FALSE);
@@ -601,13 +589,14 @@ goto_address(UI *ui, offset addr)
 	assert(addr >= 0 && addr < ui->buffer->buffer_size);
 	ui->cursor_x = col;
 	offset curline = current_line(ui);
-	if (line >= curline && line < curline + ui->nrow) {
+	int nrow = get_nrow(ui);
+	if (line >= curline && line < curline + nrow) {
 		ui->cursor_y = (int)(line - curline);
 		update_cursor_pos(ui);
 	} else {
 		offset line1;
-		if (line >= ui->nrow >> 1) {
-			line1 = line - (ui->nrow >> 1);
+		if (line >= nrow >> 1) {
+			line1 = line - (nrow >> 1);
 		} else {
 			line1 = 0;
 		}
@@ -623,33 +612,15 @@ error_prompt(UI *ui, const char *errmsg)
 }
 
 void
-scroll_up_line(UI *ui)
-{
-	if (current_line(ui)) {
-		med_scroll(ui->monoedit, 1);
-		update_cursor_pos(ui);
-	}
-}
-
-void
-scroll_down_line(UI *ui)
-{
-	if (cursor_pos(ui) + N_COL < ui->buffer->buffer_size) {
-		med_scroll(ui->monoedit, -1);
-		update_cursor_pos(ui);
-	}
-}
-
-void
 move_up(UI *ui)
 {
 	if (cursor_pos(ui) >= N_COL) {
 		if (ui->cursor_y) {
 			ui->cursor_y--;
-			update_cursor_pos(ui);
 		} else {
-			scroll_up_line(ui);
+			med_scroll_up_line(ui->monoedit);
 		}
+		update_cursor_pos(ui);
 	}
 }
 
@@ -658,12 +629,12 @@ move_down(UI *ui)
 {
 	offset filesize = ui->buffer->buffer_size;
 	if (filesize >= N_COL && cursor_pos(ui) < filesize - N_COL) {
-		if (ui->cursor_y < ui->nrow-1) {
+		if (ui->cursor_y < get_nrow(ui)-1) {
 			ui->cursor_y++;
-			update_cursor_pos(ui);
 		} else {
-			scroll_down_line(ui);
+			med_scroll_down_line(ui->monoedit);
 		}
+		update_cursor_pos(ui);
 	}
 }
 
@@ -689,51 +660,6 @@ move_right(UI *ui)
 		ui->cursor_at_low_nibble = 0;
 	} else return;
 	update_cursor_pos(ui);
-}
-
-void
-scroll_up_page(UI *ui)
-{
-	offset curline = current_line(ui);
-	int delta;
-	if (curline >= ui->nrow) {
-		delta = ui->nrow;
-	} else {
-		delta = (int) curline;
-	}
-	med_scroll(ui->monoedit, delta);
-	update_cursor_pos(ui);
-}
-
-void
-scroll_down_page(UI *ui)
-{
-	offset curline = current_line(ui);
-	int delta;
-	if (curline + ui->nrow <= ui->total_lines) {
-		delta = ui->nrow;
-	} else {
-		delta = (int)(ui->total_lines - curline);
-	}
-	med_scroll(ui->monoedit, -delta);
-	update_cursor_pos(ui);
-}
-
-void
-move_up_page(UI *ui)
-{
-	if (cursor_pos(ui) >= N_COL*ui->nrow) {
-		scroll_up_page(ui);
-	}
-}
-
-void
-move_down_page(UI *ui)
-{
-	offset filesize = ui->buffer->buffer_size;
-	if (filesize >= N_COL*ui->nrow && cursor_pos(ui) < filesize - N_COL*ui->nrow) {
-		scroll_down_page(ui);
-	}
 }
 
 void
@@ -935,7 +861,6 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 				0, 0, 0, 0,
 				hwnd, 0, instance, &medconf);
 	ui->monoedit = monoedit;
-	ui->nrow = INITIAL_N_ROW;
 	/* subclass monoedit window */
 	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) ui);
 	ui->med_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
@@ -981,17 +906,6 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	update_window_title(ui);
 }
 
-void
-resize_monoedit(UI *ui, int width, int height)
-{
-	int new_nrow = height/ui->charheight;
-	ui->nrow = new_nrow;
-	SetWindowPos(ui->monoedit, 0, 0, 0, width, height,
-		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
-	med_update_buffer(ui->monoedit);
-	InvalidateRect(ui->monoedit, 0, FALSE);
-}
-
 LRESULT CALLBACK
 wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -1032,7 +946,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			}
 			assert(med_wid > 0);
 			assert(med_hei > 0);
-			resize_monoedit(ui, med_wid, med_hei);
+			SetWindowPos(ui->monoedit, 0, 0, 0, med_wid, med_hei,
+				     SWP_NOMOVE | SWP_NOZORDER);
 			SetWindowPos(ui->treeview, 0,
 				     med_wid, 0, wid - med_wid, med_hei,
 				     SWP_NOZORDER);
@@ -1180,10 +1095,6 @@ open_file(UI *ui, TCHAR *path)
 		return -1;
 	}
 	ui->filepath = lstrdup(path);
-	ui->total_lines = b->buffer_size >> LOG2_N_COL;
-	if (b->buffer_size&(N_COL-1)) {
-		ui->total_lines += 1;
-	}
 	ui->readonly = readonly;
 
 	load_filetype_plugin(ui, path);
@@ -1197,7 +1108,6 @@ close_file(UI *ui)
 	buf_finalize(ui->buffer);
 	free(ui->filepath);
 	ui->filepath = 0;
-	ui->total_lines = 0;
 	/* TODO: set current line to 0 */
 	ui->cursor_y = 0;
 	ui->cursor_x = 0;
@@ -1231,7 +1141,7 @@ update_monoedit_tags(UI *ui)
 	offset len = ui->hl_len;
 	offset curline = current_line(ui);
 	offset view_start = curline << LOG2_N_COL;
-	offset view_end = (curline + ui->nrow) << LOG2_N_COL;
+	offset view_end = (curline + get_nrow(ui)) << LOG2_N_COL;
 	int start_clamp = (int)(clamp(start, view_start, view_end) - view_start);
 	int end_clamp = (int)(clamp(start + len, view_start, view_end) - view_start);
 	HWND med = ui->monoedit;
@@ -1295,8 +1205,16 @@ update_ui(UI *ui)
 	for (int i=0; i<NELEM(toggle_menus); i++) {
 		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 	}
+
+	offset bufsize = ui->buffer->buffer_size;
+	offset total_lines = bufsize >> LOG2_N_COL;
+	if (bufsize&(N_COL-1)) {
+		total_lines++;
+	}
+	med_set_total_lines(ui->monoedit, total_lines);
 	med_update_buffer(ui->monoedit);
 	InvalidateRect(ui->monoedit, 0, FALSE);
+
 	update_field_info(ui);
 	update_plugin_menu(ui);
 }
@@ -1752,4 +1670,10 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 	}
 
 	return 0;
+}
+
+int
+get_nrow(UI *ui)
+{
+	return med_get_nrow(ui->monoedit);
 }

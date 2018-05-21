@@ -3,9 +3,7 @@ typedef struct ui {
 	HWND hwnd;
 	HWND monoedit;
 	TCHAR *filepath;
-	long long total_lines;
 	/* number of lines displayed */
-	int nrow;
 	WNDPROC med_wndproc;
 	/* current position in file */
 	int cursor_y;

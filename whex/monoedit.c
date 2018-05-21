@@ -11,7 +11,7 @@
 #include "printf.h"
 
 typedef struct {
-	TCHAR *text; /* NOT null-terminated! */
+	TCHAR *text;
 	MedTag *tags;
 	int textlen;
 } Line;
@@ -28,7 +28,8 @@ typedef struct {
 	int charheight;
 	MedGetLineProc getline;
 	void *getline_arg;
-	long long lineno;
+	long long current_line;
+	long long total_lines;
 	MedTag *tagbuf;
 	int ntag;
 	int tag_cap;
@@ -53,6 +54,8 @@ static void free_line(Med *w, Line *l);
 static void update_buffer(Med *w);
 static void scroll(Med *w, HWND hwnd, int delta);
 static void set_size(Med *w, int nrow, int ncol);
+static void scroll_up_line(Med *w, HWND hwnd);
+static void scroll_down_line(Med *w, HWND hwnd);
 
 static void
 paint_row(Med *w, HWND hwnd, HDC dc, int row)
@@ -154,12 +157,12 @@ clear_tags(Med *w)
 }
 
 static void
-add_tag(Med *w, int lineno, MedTag *tag)
+add_tag(Med *w, int current_line, MedTag *tag)
 {
-	if (!(lineno >= 0 && lineno < w->nrow)) {
+	if (!(current_line >= 0 && current_line < w->nrow)) {
 		abort();
 	}
-	Line *line = &w->buffer[lineno];
+	Line *line = &w->buffer[current_line];
 	assert(line);
 
 	if (w->ntag == w->tag_cap) {
@@ -287,6 +290,22 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			set_size(w, (hei+ch-1)/ch, (wid+cw-1)/cw);
 		}
 		return 0;
+	case WM_MOUSEWHEEL:
+		{
+			short delta = HIWORD(wparam);
+			if (delta > 0) {
+				int n = delta / WHEEL_DELTA;
+				while (n--) {
+					scroll_up_line(w, hwnd);
+				}
+			} else {
+				int n = (-delta) / WHEEL_DELTA;
+				while (n--) {
+					scroll_down_line(w, hwnd);
+				}
+			}
+		}
+		return 0;
 	}
 	return DefWindowProc(hwnd, message, wparam, lparam);
 }
@@ -309,7 +328,7 @@ void
 med_set_current_line(HWND hwnd, long long ln)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	w->lineno = ln;
+	w->current_line = ln;
 	update_buffer(w);
 }
 
@@ -317,7 +336,21 @@ long long
 med_get_current_line(HWND hwnd)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	return w->lineno;
+	return w->current_line;
+}
+
+void
+med_set_total_lines(HWND hwnd, long long n)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	w->total_lines = n;
+}
+
+long long
+med_get_total_lines(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	return w->total_lines;
 }
 
 static void
@@ -434,7 +467,7 @@ getline(Med *w, int row)
 		l->textlen = 0;
 		return;
 	}
-	w->getline(w->lineno + row, &hb.buf, w->getline_arg);
+	w->getline(w->current_line + row, &hb.buf, w->getline_arg);
 	l->text = hb.start;
 	l->textlen = hb.cur - hb.start;
 }
@@ -467,7 +500,7 @@ scroll(Med *w, HWND hwnd, int delta)
 	};
 	ScrollWindow(hwnd, 0, delta*w->charheight,
 		     &scroll_rect, &scroll_rect);
-	w->lineno -= delta;
+	w->current_line -= delta;
 	if (delta > 0) {
 		if (delta > w->nrow) delta = w->nrow;
 		int d = w->nrow-1;
@@ -579,7 +612,87 @@ med_paint_row(HWND hwnd, int row)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	HDC dc = GetDC(hwnd);
+	SelectObject(dc, w->bgbrush);
 	SelectObject(dc, w->font);
 	paint_row(w, hwnd, dc, row);
 	ReleaseDC(hwnd, dc);
+}
+
+static void
+scroll_up_line(Med *w, HWND hwnd)
+{
+	if (w->current_line) {
+		scroll(w, hwnd, 1);
+	}
+}
+
+static void
+scroll_down_line(Med *w, HWND hwnd)
+{
+	if (w->current_line + w->nrow < w->total_lines) {
+		scroll(w, hwnd, -1);
+	}
+}
+
+void
+med_scroll_up_line(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	scroll_up_line(w, hwnd);
+}
+
+void
+med_scroll_down_line(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	scroll_down_line(w, hwnd);
+}
+
+static void
+scroll_up_page(Med *w, HWND hwnd)
+{
+	long long curline = w->current_line;
+	int delta;
+	if (curline >= w->nrow) {
+		delta = w->nrow;
+	} else {
+		delta = (int) curline;
+	}
+	scroll(w, hwnd, delta);
+}
+
+static void
+scroll_down_page(Med *w, HWND hwnd)
+{
+	long long curline = w->current_line;
+	int delta;
+	if (curline + w->nrow + w->nrow <= w->total_lines) {
+		delta = w->nrow;
+	} else {
+		delta = (int)(w->total_lines - curline) - w->nrow;
+	}
+	if (delta > 0) {
+		scroll(w, hwnd, -delta);
+	}
+}
+
+void
+med_scroll_up_page(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	scroll_up_page(w, hwnd);
+}
+
+void
+med_scroll_down_page(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	scroll_down_page(w, hwnd);
+}
+
+int
+med_get_nrow(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	return w->nrow;
 }

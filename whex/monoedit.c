@@ -212,6 +212,12 @@ set_font(Med *w, HWND hwnd, HFONT font)
 	w->font = font;
 }
 
+static void
+update_caret_pos(Med *w)
+{
+	SetCaretPos(w->cursorx*w->charwidth, w->cursory*w->charheight);
+}
+
 static LRESULT CALLBACK
 wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -264,7 +270,7 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		return 0;
 	case WM_SETFOCUS:
 		CreateCaret(hwnd, 0, w->charwidth, w->charheight);
-		SetCaretPos(w->cursorx*w->charwidth, w->cursory*w->charheight);
+		update_caret_pos(w);
 		ShowCaret(hwnd);
 		return 0;
 	case WM_KILLFOCUS:
@@ -303,6 +309,17 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				while (n--) {
 					scroll_down_line(w, hwnd);
 				}
+			}
+		}
+		return 0;
+	case WM_LBUTTONDOWN:
+		{
+			int x = LOWORD(lparam);
+			int y = HIWORD(lparam);
+			w->cursorx = x / w->charwidth;
+			w->cursory = y / w->charheight;
+			if (SetFocus(hwnd) == hwnd) {
+				update_caret_pos(w);
 			}
 		}
 		return 0;

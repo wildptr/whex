@@ -63,7 +63,7 @@ union u {
 	NAME(union u *value, TCHAR *buf, uint f)\
 	{\
 		TYPE v = value->FIELD;\
-		bool neg = (f & F_SIGNED) && v < 0;\
+		uchar neg = (f & F_SIGNED) && v < 0;\
 		TCHAR *p = buf;\
 		if (neg) v = -v;\
 		do {\
@@ -81,7 +81,7 @@ union u {
 	NAME(union u *value, TCHAR *buf, uint f)\
 	{\
 		TYPE v = value->FIELD;\
-		bool upcase = f & F_UPPERCASE;\
+		uchar upcase = (f & F_UPPERCASE) != 0;\
 		TCHAR *p = buf;\
 		do {\
 			int d = v&15;\
@@ -106,7 +106,7 @@ putn(void *value, Buf *b, conv_fn conv, int width, uint flags)
 	TCHAR buf[20]; /* NO TRAILING NUL */
 	int ret = 0;
 	int len;
-	bool zeropad = flags & F_ZEROPAD;
+	uchar zeropad = (flags & F_ZEROPAD) != 0;
 	TCHAR pad = zeropad ? '0' : ' ';
 
 	/* This builds the string back to front ... */

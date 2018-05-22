@@ -24,11 +24,11 @@ enum {
 struct segment {
 	struct segment *next;
 	uchar kind;
-	offset start;
-	offset end;
+	uint64 start;
+	uint64 end;
 	union {
 		struct {
-			offset file_offset;
+			uint64 file_offset;
 			uchar *filedata;
 		};
 		uchar data[8];
@@ -36,7 +36,7 @@ struct segment {
 };
 
 static int
-seek(HANDLE file, offset offset)
+seek(HANDLE file, uint64 offset)
 {
 	LONG lo = (LONG) offset;
 	LONG hi = offset >> 32;
@@ -48,11 +48,11 @@ seek(HANDLE file, offset offset)
 }
 
 static int
-find_cache(Buffer *b, offset addr)
+find_cache(Buffer *b, uint64 addr)
 {
 	assert(addr >= 0 && addr < b->file_size);
 
-	offset base = addr & -CACHE_BLOCK_SIZE;
+	uint64 base = addr & -CACHE_BLOCK_SIZE;
 	for (int i=0; i<N_CACHE_BLOCK; i++) {
 		struct cache_entry *c = &b->cache[i];
 		if ((c->flags & VALID) && base == c->addr) return i;
@@ -70,26 +70,26 @@ find_cache(Buffer *b, offset addr)
 }
 
 static uchar *
-get_file_data(Buffer *b, offset addr)
+get_file_data(Buffer *b, uint64 addr)
 {
 	int block = find_cache(b, addr);
 	return &b->cache[block].data[addr & (CACHE_BLOCK_SIZE-1)];
 }
 
 static uchar
-get_file_byte(Buffer *b, offset addr)
+get_file_byte(Buffer *b, uint64 addr)
 {
 	return *get_file_data(b, addr);
 }
 
 uchar
-buf_getbyte(Buffer *b, offset addr)
+buf_getbyte(Buffer *b, uint64 addr)
 {
 	assert(addr >= 0 && addr < b->buffer_size);
 	Segment *s = b->firstseg;
 	while (addr >= s->end)
 		s = s->next;
-	offset off = addr - s->start;
+	uint64 off = addr - s->start;
 	assert(off >= 0 && off < s->end - s->start);
 	switch (s->kind) {
 	case SEG_FILE:
@@ -101,17 +101,6 @@ buf_getbyte(Buffer *b, offset addr)
 	}
 	return 0; // placate compiler
 }
-
-#if 0
-void
-buf_setbyte(Buffer *b, offset addr, uchar val)
-{
-	int block = find_cache(b, addr);
-	struct cache_entry *c = &b->cache[block];
-	c->data[addr & (CACHE_BLOCK_SIZE-1)] = val;
-	c->flags |= DIRTY;
-}
-#endif
 
 static void
 kmp_table(int *T, const uchar *pat, int len)
@@ -138,11 +127,11 @@ kmp_table(int *T, const uchar *pat, int len)
 	}
 }
 
-offset
-buf_kmp_search(Buffer *b, const uchar *pat, int len, offset start)
+uint64
+buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start)
 {
 	int *T;
-	offset m;
+	uint64 m;
 	int i;
 
 	assert(len);
@@ -177,12 +166,12 @@ buf_kmp_search(Buffer *b, const uchar *pat, int len, offset start)
  * position of first mark = start
  * number of bytes after the second mark = N-(start+len-1)
  */
-offset
-buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, offset start)
+uint64
+buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 {
 	int *T;
 	uchar *revpat;
-	offset m;
+	uint64 m;
 	int i;
 
 	assert(len);
@@ -225,7 +214,7 @@ buf_init(Buffer *b, HANDLE file)
 	uchar *cache_data;
 	struct cache_entry *cache;
 	DWORD lo, hi;
-	offset size;
+	uint64 size;
 
 	/* get file size */
 	lo = GetFileSize(file, &hi);
@@ -238,7 +227,7 @@ buf_init(Buffer *b, HANDLE file)
 			return -1;
 		}
 	}
-	size = (offset) lo | (offset) hi << 32;
+	size = (uint64) lo | (uint64) hi << 32;
 	if (size < 0) {
 		puts("negative file size");
 		return -1;
@@ -305,7 +294,7 @@ buf_finalize(Buffer *b)
 int
 buf_save(Buffer *b, HANDLE dstfile)
 {
-	bool inplace = b->file == dstfile;
+	uchar inplace = b->file == dstfile;
 	Segment *s = b->firstseg;
 	while (s) {
 		printf("%I64x--%I64x ", s->start, s->end);
@@ -318,7 +307,7 @@ buf_save(Buffer *b, HANDLE dstfile)
 			if (inplace && s->start == s->file_offset) {
 				s->filedata = 0;
 			} else {
-				offset full_len = s->end - s->start;
+				uint64 full_len = s->end - s->start;
 				DWORD len = (DWORD) full_len;
 				if (len != full_len) {
 					return -1;
@@ -346,7 +335,7 @@ buf_save(Buffer *b, HANDLE dstfile)
 	}
 	s = b->firstseg;
 	while (s) {
-		offset full_seglen = s->end - s->start;
+		uint64 full_seglen = s->end - s->start;
 		DWORD seglen = (DWORD) full_seglen;
 		if (seglen != full_seglen) {
 			return -1;
@@ -389,7 +378,7 @@ buf_save(Buffer *b, HANDLE dstfile)
 }
 
 static Segment *
-newmemseg(offset start, size_t len)
+newmemseg(uint64 start, size_t len)
 {
 	size_t xsize = len > 8 ? len-8 : 8;
 	Segment *newseg = calloc(1, sizeof *newseg + xsize);
@@ -400,12 +389,12 @@ newmemseg(offset start, size_t len)
 }
 
 void
-buf_replace(Buffer *b, offset addr, const uchar *data, size_t len)
+buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 {
 	assert(addr >= 0 && addr < b->buffer_size);
 	assert(len > 0);
 	Segment *before, *after;
-	offset end = addr + len;
+	uint64 end = addr + len;
 	before = b->firstseg;
 	while (before->end < addr)
 		before = before->next;
@@ -447,7 +436,7 @@ buf_replace(Buffer *b, offset addr, const uchar *data, size_t len)
 		Segment *newseg;
 		if (after && after->start != end) {
 			size_t newseglen;
-			offset full_delta = end - after->start;
+			uint64 full_delta = end - after->start;
 			size_t delta = (size_t) full_delta;
 			switch (after->kind) {
 			case SEG_MEM:
@@ -495,7 +484,7 @@ buf_replace(Buffer *b, offset addr, const uchar *data, size_t len)
 }
 
 void
-buf_insert(Buffer *b, offset addr, const uchar *data, size_t len)
+buf_insert(Buffer *b, uint64 addr, const uchar *data, size_t len)
 {
 	assert(addr >= 0 && addr <= b->buffer_size);
 	assert(len > 0);
@@ -513,7 +502,7 @@ buf_insert(Buffer *b, offset addr, const uchar *data, size_t len)
 			after = before->next;
 		} else {
 			/* split 'before' at 'addr' */
-			offset full_delta = addr - before->start;
+			uint64 full_delta = addr - before->start;
 			size_t delta = (size_t) full_delta;
 			size_t rest;
 			switch (before->kind) {
@@ -544,7 +533,7 @@ buf_insert(Buffer *b, offset addr, const uchar *data, size_t len)
 }
 
 static void
-buf_read_file(Buffer *b, uchar *dst, offset fileoff, size_t n)
+buf_read_file(Buffer *b, uchar *dst, uint64 fileoff, size_t n)
 {
 	do {
 		uchar *src = get_file_data(b, fileoff);
@@ -558,13 +547,13 @@ buf_read_file(Buffer *b, uchar *dst, offset fileoff, size_t n)
 }
 
 void
-buf_read(Buffer *b, uchar *dst, offset addr, size_t n)
+buf_read(Buffer *b, uchar *dst, uint64 addr, size_t n)
 {
 	assert(addr >= 0 && addr < b->buffer_size);
 	Segment *s = b->firstseg;
 	while (addr >= s->end)
 		s = s->next;
-	offset segoff = addr - s->start;
+	uint64 segoff = addr - s->start;
 	assert(segoff >= 0 && segoff < s->end - s->start);
 	for (;;) {
 		size_t n1 = (size_t)(s->end - addr);

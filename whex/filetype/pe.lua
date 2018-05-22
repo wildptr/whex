@@ -255,15 +255,16 @@ local function disassembly(buf)
   local off = 0
   local instlist = {}
   local i
-  for i=1,256 do
+  local total_lines = 256
+  for i=1,total_lines do
     local inst = disasm(code, off)
     off = off + string.len(inst.bytes)
     instlist[i] = inst
   end
   local w = Window{text='Disassembly', size={640,480}}
   local me = MonoEdit{parent=w}
-  local total_lines = 256
   me.source = function(ln)
+    if ln < 0 or ln >= total_lines then return '' end
     local inst = instlist[1+ln]
     local bytes = inst.bytes
     local s = bytes:gsub('.', function(c)

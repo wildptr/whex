@@ -1,7 +1,3 @@
-typedef _Bool bool;
-#define true 1
-#define false 0
-
 typedef unsigned char	uchar;
 typedef unsigned short	ushort;
 typedef unsigned int	uint;

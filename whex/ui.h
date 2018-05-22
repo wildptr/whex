@@ -5,26 +5,25 @@ typedef struct ui {
 	TCHAR *filepath;
 	/* number of lines displayed */
 	WNDPROC med_wndproc;
-	/* current position in file */
 	int cursor_y;
 	int cursor_x;
 	int charwidth;
 	int charheight;
 	HFONT mono_font;
 	lua_State *lua;
-	long long hl_start;
-	long long hl_len;
+	uint64 hl_start;
+	uint64 hl_len;
 	HWND status_bar;
 	HINSTANCE instance;
 	int npluginfunc;
 	char *plugin_name;
 	char **plugin_funcname;
 	uchar mode;
-	bool cursor_at_low_nibble;
-	bool readonly;
+	uchar cursor_fine_pos;
+	uchar readonly;
 	HWND treeview;
-	long long replace_start;
+	uint64 replace_start;
 	uchar *replace_buf;
-	int replace_buf_cap;
-	int replace_buf_len;
+	uint replace_buf_cap;
+	uint replace_buf_len;
 } UI;

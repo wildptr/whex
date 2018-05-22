@@ -15,12 +15,22 @@
 
 /* TODO: fix address size issues */
 
+static int
+checkaddr(lua_State *L, int index, uint64 *addr)
+{
+	lua_Integer n = luaL_checkinteger(L, index);
+	if (n < 0) return -1;
+	*addr = n;
+	return 0;
+}
+
 int
 api_buffer_peek(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
-	if (addr < 0 || addr >= b->file_size) return 0;
+	uint64 addr;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr >= b->file_size) return 0;
 	lua_pushinteger(L, buf_getbyte(b, addr));
 	return 1;
 }
@@ -29,8 +39,9 @@ int
 api_buffer_peeku16(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
-	if (addr < 0 || addr+2 > b->file_size) return 0;
+	uint64 addr;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr+2 > b->file_size) return 0;
 	union {
 		uint16 i;
 		uchar b[2];
@@ -44,8 +55,9 @@ int
 api_buffer_peeku32(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
-	if (addr < 0 || addr+4 > b->file_size) return 0;
+	uint64 addr;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr+4 > b->file_size) return 0;
 	union {
 		uint32 i;
 		uchar b[4];
@@ -59,8 +71,9 @@ int
 api_buffer_peeku64(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
-	if (addr < 0 || addr+8 > b->file_size) return 0;
+	uint64 addr;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr+8 > b->file_size) return 0;
 	union {
 		uint64 i;
 		uchar b[8];
@@ -74,11 +87,12 @@ int
 api_buffer_read(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
+	uint64 addr;
+	if (checkaddr(L, 2, &addr)) return 0;
 	long n = (long) luaL_checkinteger(L, 3);
 	uchar *s;
 
-	if (addr < 0 || addr + n > b->file_size) return 0;
+	if (addr + n > b->file_size) return 0;
 	s = malloc(n+1);
 	buf_read(b, s, addr, n);
 	s[n] = 0;
@@ -195,9 +209,13 @@ int
 api_buffer_replace(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
+	uint64 addr;
 	size_t len;
-	const uchar *data = (const uchar *) lua_tolstring(L, 3, &len);
+	const uchar *data;
+
+	if (checkaddr(L, 2, &addr)) return 0;
+	data = (const uchar *) lua_tolstring(L, 3, &len);
+	if (addr + len > b->buffer_size) return 0;
 	buf_replace(b, addr, data, len);
 	return 0;
 }
@@ -206,9 +224,13 @@ int
 api_buffer_insert(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	long long addr = luaL_checkinteger(L, 2);
+	uint64 addr;
 	size_t len;
-	const uchar *data = (const uchar *) lua_tolstring(L, 3, &len);
+	const uchar *data;
+
+	if (checkaddr(L, 2, &addr)) return 0;
+	data = (const uchar *) lua_tolstring(L, 3, &len);
+	if (addr > b->buffer_size) return 0;
 	buf_insert(b, addr, data, len);
 	return 0;
 }

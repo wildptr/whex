@@ -33,15 +33,16 @@
 #define BUFSIZE 512
 
 enum {
-	IDC_STATUS_BAR = 0x100,
-	IDM_FILE_OPEN,
-	IDM_FILE_SAVE,
-	IDM_FILE_SAVEAS,
-	IDM_FILE_CLOSE,
-	IDM_FILE_EXIT,
-	IDM_TOOLS_LOAD_PLUGIN,
-	IDM_TOOLS_RUN_LUA_SCRIPT,
-	IDM_PLUGIN_0,
+	ID_MONOEDIT = 0x100,
+	ID_STATUS_BAR,
+	ID_FILE_OPEN,
+	ID_FILE_SAVE,
+	ID_FILE_SAVEAS,
+	ID_FILE_CLOSE,
+	ID_FILE_EXIT,
+	ID_TOOLS_LOAD_PLUGIN,
+	ID_TOOLS_RUN_LUA_SCRIPT,
+	ID_PLUGIN_0,
 };
 
 enum {
@@ -49,31 +50,18 @@ enum {
 	MODE_REPLACE,
 };
 
+enum {
+	POS_BEFORE,
+	POS_HINIB,
+	POS_LONIB,
+	POS_ASCII,
+};
+
 Region rgn;
 /* GetOpenFileName() changes directory, so remember working directory when
    program starts */
 char *workdir;
 int wdlen;
-
-#if 0
-static bool
-iswordchar(char c)
-{
-	return isalnum(c) || c == '_';
-}
-
-static uchar
-hexval(char c)
-{
-	return c > '9' ? 10+(c|32)-'a' : c-'0';
-}
-
-static uchar
-hextobyte(const uchar *p)
-{
-	return hexval(p[0]) << 4 | hexval(p[1]);
-}
-#endif
 
 typedef struct {
 	TCHAR *text;
@@ -86,14 +74,16 @@ static ATOM register_wndclass(void);
 void format_error_code(TCHAR *, size_t, DWORD);
 int file_chooser_dialog(HWND, TCHAR *, int);
 static int start_gui(int, UI *, TCHAR *);
-void set_current_line(UI *, offset);
+void set_current_line(UI *, uint64);
 static void update_window_title(UI *ui);
 void update_status_text(UI *, Tree *);
 void update_field_info(UI *);
-void update_cursor_pos(UI *);
-offset cursor_pos(UI *);
-offset current_line(UI *);
-void goto_address(UI *, offset);
+void update_logical_cursor_pos(UI *);
+void update_physical_cursor_pos(UI *);
+void after_update_cursor_pos(UI *);
+uint64 cursor_pos(UI *);
+uint64 current_line(UI *);
+void goto_address(UI *, uint64);
 void error_prompt(UI *, const char *);
 void move_up(UI *);
 void move_down(UI *);
@@ -114,7 +104,7 @@ void move_backward(UI *);
 void move_next_field(UI *);
 void move_prev_field(UI *);
 TCHAR *inputbox(UI *, TCHAR *title);
-bool parse_addr(TCHAR *, offset *);
+int parse_addr(TCHAR *, uint64 *);
 void errorbox(HWND, TCHAR *);
 Tree *convert_tree(Region *, lua_State *);
 int load_plugin(UI *, const char *);
@@ -137,6 +127,9 @@ int save_file_as(UI *, const TCHAR *);
 void populate_treeview(UI *);
 int format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
 int get_nrow(UI *ui);
+void exit_replace_mode(UI *);
+uchar cursor_in_gap(UI *);
+int col_to_cx(UI *, int);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -144,49 +137,10 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 	UI *ui = (UI *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	switch (msg) {
-	case WM_LBUTTONDOWN:
-		if (ui->mode != MODE_NORMAL) return 0;
-		int x = LOWORD(lparam);
-		int y = HIWORD(lparam);
-		int cx = x / ui->charwidth;
-		int cy = y / ui->charheight;
-		SetFocus(hwnd);
-		if (cx >= 10 && cx < 10+N_COL*3 && cy < get_nrow(ui)) {
-			bool lownib = (cx-10)%3;
-			cx = (cx-10)/3;
-			offset pos = ((current_line(ui) + cy) << LOG2_N_COL) + cx;
-			if (pos < ui->buffer->buffer_size) {
-				ui->cursor_x = cx;
-				ui->cursor_y = cy;
-				ui->cursor_at_low_nibble = lownib;
-				update_cursor_pos(ui);
-			}
-		}
-		return 0;
 	case WM_KEYDOWN:
 		switch (ui->mode) {
 		case MODE_NORMAL:
 			switch (wparam) {
-			case VK_UP:
-				move_up(ui);
-				break;
-			case VK_DOWN:
-				move_down(ui);
-				break;
-			case VK_LEFT:
-				move_left(ui);
-				break;
-			case VK_RIGHT:
-				move_right(ui);
-				break;
-			case VK_PRIOR:
-				med_scroll_up_page(ui->monoedit);
-				update_cursor_pos(ui);
-				break;
-			case VK_NEXT:
-				med_scroll_down_page(ui->monoedit);
-				update_cursor_pos(ui);
-				break;
 			case VK_HOME:
 				if (GetKeyState(VK_CONTROL) < 0) {
 					goto_address(ui, 0);
@@ -196,30 +150,25 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				break;
 			case VK_END:
 				if (GetKeyState(VK_CONTROL) < 0) {
-					goto_address(ui, ui->buffer->buffer_size-1);
+					goto_address
+						(ui, ui->buffer->buffer_size);
 				} else {
 					goto_eol(ui);
 				}
 				break;
+			default:
+				return ui->med_wndproc(hwnd, msg, wparam, lparam);
 			}
 			break;
 		case MODE_REPLACE:
 			switch (wparam) {
 			case VK_ESCAPE:
-				ui->mode = MODE_NORMAL;
-				buf_replace(ui->buffer, ui->replace_start,
-					    ui->replace_buf,
-					    ui->replace_buf_len);
-				ui->replace_buf_len = 0;
+				exit_replace_mode(ui);
 				break;
 			}
 			break;
-		}
-		return 0;
-	case WM_MOUSEWHEEL:
-		if (ui->mode == MODE_NORMAL) {
-			ui->med_wndproc(hwnd, msg, wparam, lparam);
-			update_cursor_pos(ui);
+		default:
+			assert(0);
 		}
 		return 0;
 	}
@@ -246,15 +195,15 @@ format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
 {
 #if 0
 	DWORD FormatMessage
-		(
-		 DWORD dwFlags,	// source and processing options
-		 LPCVOID lpSource,	// pointer to message source
-		 DWORD dwMessageId,	// requested message identifier
-		 DWORD dwLanguageId,	// language identifier for requested message
-		 LPTSTR lpBuffer,	// pointer to message buffer
-		 DWORD nSize,	// maximum size of message buffer
-		 va_list *Arguments 	// address of array of message inserts
-		);
+	(
+	 DWORD dwFlags,		// source and processing options
+	 LPCVOID lpSource,	// pointer to message source
+	 DWORD dwMessageId,	// requested message identifier
+	 DWORD dwLanguageId,	// language identifier for requested message
+	 LPTSTR lpBuffer,	// pointer to message buffer
+	 DWORD nSize,		// maximum size of message buffer
+	 va_list *Arguments 	// address of array of message inserts
+	);
 #endif
 	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
 		      0,
@@ -273,17 +222,17 @@ create_menu(void)
 	mainmenu = CreateMenu();
 
 	m = CreateMenu();
-	AppendMenu(m, MF_STRING, IDM_FILE_OPEN, TEXT("Open..."));
-	AppendMenu(m, MF_STRING, IDM_FILE_SAVE, TEXT("Save"));
-	AppendMenu(m, MF_STRING, IDM_FILE_SAVEAS, TEXT("Save As..."));
-	AppendMenu(m, MF_STRING, IDM_FILE_CLOSE, TEXT("Close"));
+	AppendMenu(m, MF_STRING, ID_FILE_OPEN, TEXT("Open..."));
+	AppendMenu(m, MF_STRING, ID_FILE_SAVE, TEXT("Save"));
+	AppendMenu(m, MF_STRING, ID_FILE_SAVEAS, TEXT("Save As..."));
+	AppendMenu(m, MF_STRING, ID_FILE_CLOSE, TEXT("Close"));
 	AppendMenu(m, MF_SEPARATOR, 0, 0);
-	AppendMenu(m, MF_STRING, IDM_FILE_EXIT, TEXT("Exit"));
+	AppendMenu(m, MF_STRING, ID_FILE_EXIT, TEXT("Exit"));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
 
 	m = CreateMenu();
-	AppendMenu(m, MF_STRING, IDM_TOOLS_LOAD_PLUGIN, TEXT("Load Plugin..."));
-	AppendMenu(m, MF_STRING, IDM_TOOLS_RUN_LUA_SCRIPT,
+	AppendMenu(m, MF_STRING, ID_TOOLS_LOAD_PLUGIN, TEXT("Load Plugin..."));
+	AppendMenu(m, MF_STRING, ID_TOOLS_RUN_LUA_SCRIPT,
 		   TEXT("Run Lua Script..."));
 	AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
@@ -499,27 +448,30 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 }
 
 void
-set_current_line(UI *ui, offset line)
+set_current_line(UI *ui, uint64 line)
 {
 	med_set_current_line(ui->monoedit, line);
-	update_cursor_pos(ui);
+	update_logical_cursor_pos(ui);
 }
 
 void
 update_status_text(UI *ui, Tree *leaf)
 {
-	TCHAR buf[17];
-	char *path = 0;
 	HWND sb = ui->status_bar;
-	offset pos = cursor_pos(ui);
-	_wsprintf(buf, TEXT("%llx"), pos);
-	SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
+	if (cursor_in_gap(ui)) {
+		SendMessage(sb, SB_SETTEXT, 0, 0);
+	} else {
+		uint64 pos = cursor_pos(ui);
+		TCHAR buf[17];
+		_wsprintf(buf, TEXT("%llx"), pos);
+		SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
+	}
 	if (leaf) {
 		char *typename;
 		char *valuerepr;
 		void *top = rgn.cur;
 		format_leaf_value(ui, leaf, &typename, &valuerepr);
-		path = tree_path(&rgn, leaf);
+		char *path = tree_path(&rgn, leaf);
 		SendMessage(sb, SB_SETTEXTA, 1, (LPARAM) typename);
 		SendMessage(sb, SB_SETTEXTA, 2, (LPARAM) valuerepr);
 		SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
@@ -539,7 +491,9 @@ update_field_info(UI *ui)
 		Tree *tree = ui->buffer->tree;
 		Tree *leaf = 0;
 		if (tree) {
-			leaf = tree_lookup(tree, cursor_pos(ui));
+			if (!cursor_in_gap(ui)) {
+				leaf = tree_lookup(tree, cursor_pos(ui));
+			}
 			if (leaf) {
 				ui->hl_start = leaf->start;
 				ui->hl_len = leaf->len;
@@ -561,47 +515,102 @@ update_field_info(UI *ui)
 }
 
 void
-update_cursor_pos(UI *ui)
+update_logical_cursor_pos(UI *ui)
 {
-	int cx = 10+ui->cursor_x*3 + ui->cursor_at_low_nibble;
+	int pos[2];
+	med_get_cursor_pos(ui->monoedit, pos);
+	int cy = pos[0];
+	int cx = pos[1];
+	ui->cursor_y = cy;
+	if (cx < 9) {
+		ui->cursor_x = -1;
+	} else if (cx < 57) {
+		ui->cursor_x = (cx-9)/3;
+		ui->cursor_fine_pos = (cx-9)%3;
+	} else if (cx < 59) {
+		ui->cursor_x = -1;
+	} else if (cx < 75) {
+		ui->cursor_x = cx-59;
+		ui->cursor_fine_pos = POS_ASCII;
+	} else {
+		ui->cursor_x = -1;
+	}
+	after_update_cursor_pos(ui);
+}
+
+void
+update_physical_cursor_pos(UI *ui)
+{
+	assert(ui->cursor_x >= 0);
+	int cx = col_to_cx(ui, ui->cursor_x);
 	med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
+}
+
+void
+after_update_cursor_pos(UI *ui)
+{
 	update_field_info(ui);
 }
 
-offset
-cursor_pos(UI *ui)
+uchar
+cursor_in_gap(UI *ui)
 {
-	return ((current_line(ui) + ui->cursor_y) << LOG2_N_COL) + ui->cursor_x;
+	return ui->cursor_x < 0;
 }
 
-offset
+uint64
+cursor_pos(UI *ui)
+{
+	assert(ui->cursor_x >= 0);
+	int pos[2];
+	med_get_cursor_pos(ui->monoedit, pos);
+	return ((current_line(ui) + pos[0]) << LOG2_N_COL) + ui->cursor_x;
+}
+
+uint64
 current_line(UI *ui)
 {
 	return med_get_current_line(ui->monoedit);
 }
 
-void
-goto_address(UI *ui, offset addr)
+int
+col_to_cx(UI *ui, int col)
 {
-	offset line = addr >> LOG2_N_COL;
+	int cx;
+	if (ui->cursor_fine_pos == POS_ASCII) {
+		cx = 59+col;
+	} else {
+		cx = 9+col*3+ui->cursor_fine_pos;
+	}
+	return cx;
+}
+
+void
+goto_address(UI *ui, uint64 addr)
+{
+	uint64 line = addr >> LOG2_N_COL;
 	int col = addr & (N_COL-1);
-	assert(addr >= 0 && addr < ui->buffer->buffer_size);
-	ui->cursor_x = col;
-	offset curline = current_line(ui);
+	int cy, cx;
+	cx = col_to_cx(ui, col);
+	assert(addr >= 0 && addr <= ui->buffer->buffer_size);
+	uint64 curline = current_line(ui);
 	int nrow = get_nrow(ui);
 	if (line >= curline && line < curline + nrow) {
-		ui->cursor_y = (int)(line - curline);
-		update_cursor_pos(ui);
+		cy = (int)(line - curline);
 	} else {
-		offset dstline;
+		uint64 dstline;
 		if (line >= nrow >> 1) {
 			dstline = line - (nrow >> 1);
 		} else {
 			dstline = 0;
 		}
-		ui->cursor_y = (int)(line - dstline);
+		cy = (int)(line - dstline);
 		set_current_line(ui, dstline);
 	}
+	ui->cursor_y = cy;
+	ui->cursor_x = col;
+	med_set_cursor_pos(ui->monoedit, cy, cx);
+	after_update_cursor_pos(ui);
 }
 
 void
@@ -613,59 +622,36 @@ error_prompt(UI *ui, const char *errmsg)
 void
 move_up(UI *ui)
 {
-	if (cursor_pos(ui) >= N_COL) {
-		if (ui->cursor_y) {
-			ui->cursor_y--;
-		} else {
-			med_scroll_up_line(ui->monoedit);
-		}
-		update_cursor_pos(ui);
-	}
+	med_move_up(ui->monoedit);
+	update_logical_cursor_pos(ui);
 }
 
 void
 move_down(UI *ui)
 {
-	offset filesize = ui->buffer->buffer_size;
-	if (filesize >= N_COL && cursor_pos(ui) < filesize - N_COL) {
-		if (ui->cursor_y < get_nrow(ui)-1) {
-			ui->cursor_y++;
-		} else {
-			med_scroll_down_line(ui->monoedit);
-		}
-		update_cursor_pos(ui);
-	}
+	med_move_down(ui->monoedit);
+	update_logical_cursor_pos(ui);
 }
 
 void
 move_left(UI *ui)
 {
-	if (ui->cursor_at_low_nibble) {
-		ui->cursor_at_low_nibble = 0;
-	} else if (ui->cursor_x) {
-		ui->cursor_x--;
-		ui->cursor_at_low_nibble = 1;
-	} else return;
-	update_cursor_pos(ui);
+	med_move_left(ui->monoedit);
+	update_logical_cursor_pos(ui);
 }
 
 void
 move_right(UI *ui)
 {
-	if (!ui->cursor_at_low_nibble) {
-		ui->cursor_at_low_nibble = 1;
-	} else if (ui->cursor_x < (N_COL-1) && cursor_pos(ui)+1 < ui->buffer->buffer_size) {
-		ui->cursor_x++;
-		ui->cursor_at_low_nibble = 0;
-	} else return;
-	update_cursor_pos(ui);
+	med_move_right(ui->monoedit);
+	update_logical_cursor_pos(ui);
 }
 
 void
 handle_char_normal(UI *ui, int c)
 {
 	TCHAR *text;
-	offset addr;
+	uint64 addr;
 
 	switch (c) {
 	case 8: // backspace
@@ -702,13 +688,15 @@ handle_char_normal(UI *ui, int c)
 		text = inputbox(ui, TEXT("Go to address"));
 		if (text) {
 			if (parse_addr(text, &addr)) {
-				if (addr >= 0 && addr < ui->buffer->buffer_size) {
+				errorbox(ui->hwnd, TEXT("Syntax error"));
+			} else {
+				if (addr >= 0 &&
+				    addr <= ui->buffer->buffer_size) {
 					goto_address(ui, addr);
 				} else {
-					errorbox(ui->hwnd, TEXT("Address out of range"));
+					errorbox(ui->hwnd,
+						 TEXT("Address out of range"));
 				}
-			} else {
-				errorbox(ui->hwnd, TEXT("Syntax error"));
 			}
 			free(text);
 		}
@@ -738,8 +726,10 @@ handle_char_normal(UI *ui, int c)
 		move_next_field(ui);
 		break;
 	case 'R':
-		ui->mode = MODE_REPLACE;
-		ui->replace_start = cursor_pos(ui);
+		if (!cursor_in_gap(ui)) {
+			ui->mode = MODE_REPLACE;
+			ui->replace_start = cursor_pos(ui);
+		}
 		break;
 	}
 }
@@ -756,19 +746,21 @@ handle_char_replace(UI *ui, int c)
 		val = 10+(c-'A');
 	} else return;
 
+	if (cursor_in_gap(ui)) return;
 	int cy = ui->cursor_y;
 	int cx = ui->cursor_x;
-	offset pos = cursor_pos(ui);
+	uint64 pos = cursor_pos(ui);
 	uchar b;
-	if (ui->cursor_at_low_nibble) {
+	if (pos >= ui->buffer->buffer_size) return;
+	if (ui->cursor_fine_pos == POS_LONIB) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
-		ui->cursor_at_low_nibble = 0;
+		ui->cursor_fine_pos = POS_HINIB;
 		med_set_char(ui->monoedit, cy, 11+cx*3, c|32);
 		med_paint_row(ui->monoedit, cy);
 		move_forward(ui);
-	} else {
+	} else if (ui->cursor_fine_pos == POS_HINIB) {
 		b = buf_getbyte(ui->buffer, pos);
 		val = val<<4 | (b&0x0f);
 		if (ui->replace_buf_len == ui->replace_buf_cap) {
@@ -777,7 +769,7 @@ handle_char_replace(UI *ui, int c)
 			ui->replace_buf_cap *= 2;
 		}
 		ui->replace_buf[ui->replace_buf_len++] = val;
-		ui->cursor_at_low_nibble = 1;
+		ui->cursor_fine_pos = POS_LONIB;
 		med_set_cursor_pos(ui->monoedit, cy, 11+cx*3);
 		med_set_char(ui->monoedit, cy, 10+cx*3, c|32);
 		med_paint_row(ui->monoedit, cy);
@@ -808,14 +800,14 @@ init_font(UI *ui)
 }
 
 void
-med_getline(offset ln, Buf *p, void *arg)
+med_getline(uint64 ln, Buf *p, void *arg)
 {
 	assert(ln >= 0);
 	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
-	offset addr = ln << LOG2_N_COL;
+	uint64 addr = ln << LOG2_N_COL;
 	int end;
-	offset start = ln << LOG2_N_COL;
+	uint64 start = ln << LOG2_N_COL;
 	if (start + N_COL <= b->buffer_size) {
 		end = N_COL;
 	} else if (start >= b->buffer_size) {
@@ -823,20 +815,20 @@ med_getline(offset ln, Buf *p, void *arg)
 	} else {
 		end = (int)(b->buffer_size - start);
 	}
+	bprintf(p, TEXT("%08llx:"), addr);
 	if (end) {
 		buf_read(b, data, addr, end);
-		bprintf(p, TEXT("%08llx:"), addr);
-		for (int j=0; j<end; j++) {
-			bprintf(p, TEXT(" %02x"), data[j]);
-		}
-		for (int j=end; j<N_COL; j++) {
-			bprintf(p, TEXT("   "));
-		}
-		bprintf(p, TEXT("  "));
-		for (int j=0; j<end; j++) {
-			uchar c = data[j];
-			p->putc(p, c < 0x20 || c > 0x7e ? '.' : c);
-		}
+	}
+	for (int j=0; j<end; j++) {
+		bprintf(p, TEXT(" %02x"), data[j]);
+	}
+	for (int j=end; j<N_COL; j++) {
+		bprintf(p, TEXT(" --"));
+	}
+	bprintf(p, TEXT("  "));
+	for (int j=0; j<end; j++) {
+		uchar c = data[j];
+		p->putc(p, c < 0x20 || c > 0x7e ? '.' : c);
 	}
 }
 
@@ -856,13 +848,14 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	medconf.font = ui->mono_font;
 	monoedit = CreateWindow(TEXT("MonoEdit"),
 				TEXT(""),
-				WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+				WS_CHILD | WS_VISIBLE,
 				0, 0, 0, 0,
-				hwnd, 0, instance, &medconf);
+				hwnd, (HMENU) ID_MONOEDIT, instance, &medconf);
 	ui->monoedit = monoedit;
 	/* subclass monoedit window */
 	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) ui);
-	ui->med_wndproc = (WNDPROC) SetWindowLongPtr(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
+	ui->med_wndproc = (WNDPROC) SetWindowLongPtr
+		(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
 
 	/* create tree view */
 	HWND treeview;
@@ -878,7 +871,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
 					NULL,
 					hwnd,
-					IDC_STATUS_BAR);
+					ID_STATUS_BAR);
 	int parts[] = { 64, 128, 256, -1 };
 	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) parts);
 	ui->status_bar = status_bar;
@@ -907,7 +900,7 @@ LRESULT CALLBACK
 wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
 	UI *ui = (UI *) GetWindowLongPtr(hwnd, 0);
-	WORD idc;
+	uint id;
 	lua_State *L;
 
 	switch (msg) {
@@ -962,10 +955,17 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			assert(0);
 		}
 		return 0;
-	case WM_COMMAND:
-		idc = LOWORD(wparam);
+	case WM_NOTIFY:
 		{
-			int pluginfunc = idc - IDM_PLUGIN_0;
+			NMHDR *nmh = (NMHDR *) lparam;
+			if (nmh->hwndFrom == ui->monoedit) {
+			}
+		}
+		return 0;
+	case WM_COMMAND:
+		id = LOWORD(wparam);
+		{
+			int pluginfunc = id - ID_PLUGIN_0;
 			if (pluginfunc >= 0 && pluginfunc < ui->npluginfunc) {
 				L = ui->lua;
 				getluaobj(L, "plugin");
@@ -980,36 +980,51 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				return 0;
 			}
 		}
-		switch (idc) {
+		switch (id) {
 			TCHAR path[BUFSIZE];
 			char *path_mbcs;
 			int ret;
-		case IDM_FILE_OPEN:
+		case ID_MONOEDIT:
+			if (HIWORD(wparam) == MED_NOTIFY_POS_CHANGED) {
+				switch (ui->mode) {
+				case MODE_REPLACE:
+					exit_replace_mode(ui);
+					/* fallthrough */
+				case MODE_NORMAL:
+					update_logical_cursor_pos(ui);
+					break;
+				default:
+					assert(0);
+				}
+			}
+			break;
+		case ID_FILE_OPEN:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
 				if (ui->filepath) close_file(ui);
 				open_file(ui, path);
+				med_reset_position(ui->monoedit);
 				update_ui(ui);
 			}
 			break;
-		case IDM_FILE_SAVE:
+		case ID_FILE_SAVE:
 			if (save_file(ui)) {
 				errorbox(hwnd, TEXT("Could not save file"));
 			}
 			break;
-		case IDM_FILE_SAVEAS:
+		case ID_FILE_SAVEAS:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 			if (save_file_as(ui, path)) {
 				errorbox(hwnd, TEXT("Could not save file"));
 			}
 			break;
-		case IDM_FILE_CLOSE:
+		case ID_FILE_CLOSE:
 			close_file(ui);
 			update_ui(ui);
 			break;
-		case IDM_FILE_EXIT:
+		case ID_FILE_EXIT:
 			SendMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
 			break;
-		case IDM_TOOLS_LOAD_PLUGIN:
+		case ID_TOOLS_LOAD_PLUGIN:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 #ifdef UNICODE
 			path_mbcs = utf16_to_mbcs(path);
@@ -1023,7 +1038,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			populate_treeview(ui);
 			update_plugin_menu(ui);
 			break;
-		case IDM_TOOLS_RUN_LUA_SCRIPT:
+		case ID_TOOLS_RUN_LUA_SCRIPT:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 #ifdef UNICODE
 			path_mbcs = utf16_to_mbcs(path);
@@ -1072,7 +1087,7 @@ open_file(UI *ui, TCHAR *path)
 	TCHAR errtext[BUFSIZE];
 	Buffer *b = ui->buffer;
 	HANDLE file;
-	bool readonly = 0;
+	uchar readonly = 0;
 
 	file = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
 			  0, // lpSecurityAttributes
@@ -1107,7 +1122,6 @@ close_file(UI *ui)
 	buf_finalize(ui->buffer);
 	free(ui->filepath);
 	ui->filepath = 0;
-	ui->cursor_y = 0;
 	ui->cursor_x = 0;
 	ui->hl_start = 0;
 	ui->hl_len = 0;
@@ -1124,8 +1138,8 @@ close_file(UI *ui)
 	}
 }
 
-static offset
-clamp(offset x, offset min, offset max)
+static uint64
+clamp(uint64 x, uint64 min, uint64 max)
 {
 	if (x < min) return min;
 	if (x > max) return max;
@@ -1135,13 +1149,15 @@ clamp(offset x, offset min, offset max)
 void
 update_monoedit_tags(UI *ui)
 {
-	offset start = ui->hl_start;
-	offset len = ui->hl_len;
-	offset curline = current_line(ui);
-	offset view_start = curline << LOG2_N_COL;
-	offset view_end = (curline + get_nrow(ui)) << LOG2_N_COL;
-	int start_clamp = (int)(clamp(start, view_start, view_end) - view_start);
-	int end_clamp = (int)(clamp(start + len, view_start, view_end) - view_start);
+	uint64 start = ui->hl_start;
+	uint64 len = ui->hl_len;
+	uint64 curline = current_line(ui);
+	uint64 view_start = curline << LOG2_N_COL;
+	uint64 view_end = (curline + get_nrow(ui)) << LOG2_N_COL;
+	int start_clamp =
+		(int)(clamp(start, view_start, view_end) - view_start);
+	int end_clamp =
+		(int)(clamp(start + len, view_start, view_end) - view_start);
 	HWND med = ui->monoedit;
 	med_clear_tags(med);
 	if (end_clamp > start_clamp) {
@@ -1192,9 +1208,9 @@ void
 update_ui(UI *ui)
 {
 	static const int toggle_menus[] = {
-		IDM_FILE_SAVEAS,
-		IDM_FILE_CLOSE,
-		IDM_TOOLS_LOAD_PLUGIN,
+		ID_FILE_SAVEAS,
+		ID_FILE_CLOSE,
+		ID_TOOLS_LOAD_PLUGIN,
 	};
 
 	HMENU menu = GetMenu(ui->hwnd);
@@ -1204,22 +1220,22 @@ update_ui(UI *ui)
 	update_window_title(ui);
 	if (ui->filepath) {
 		ShowWindow(ui->monoedit, SW_SHOW);
-		update_cursor_pos(ui);
+		update_logical_cursor_pos(ui);
 		mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
-		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);
+		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
 		mii.fState = MFS_ENABLED;
 	} else {
 		update_field_info(ui);
 		ShowWindow(ui->monoedit, SW_HIDE);
 		mii.fState = MFS_GRAYED;
-		SetMenuItemInfo(menu, IDM_FILE_SAVE, FALSE, &mii);
+		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
 	}
 	for (int i=0; i<NELEM(toggle_menus); i++) {
 		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 	}
 
-	offset bufsize = ui->buffer->buffer_size;
-	offset total_lines = bufsize >> LOG2_N_COL;
+	uint64 bufsize = ui->buffer->buffer_size;
+	uint64 total_lines = bufsize >> LOG2_N_COL;
 	if (bufsize&(N_COL-1)) {
 		total_lines++;
 	}
@@ -1232,15 +1248,22 @@ update_ui(UI *ui)
 void
 move_forward(UI *ui)
 {
-	Buffer *b = ui->buffer;
-	if (cursor_pos(ui) < b->buffer_size) {
-		if (ui->cursor_x < N_COL-1) {
-			ui->cursor_at_low_nibble = 1;
-			move_right(ui);
-		} else {
+	if (ui->cursor_x < 0) return;
+	if (ui->cursor_x+1 < N_COL) {
+		ui->cursor_x++;
+		update_physical_cursor_pos(ui);
+		after_update_cursor_pos(ui);
+	} else {
+		int nrow = get_nrow(ui);
+		uint64 total_lines = med_get_total_lines(ui->monoedit);
+		int cy = ui->cursor_y;
+		if (current_line(ui) + (cy+1) < total_lines + nrow) {
+			if (cy+1 < nrow) cy++;
+			else med_scroll_down_line(ui->monoedit);
+			ui->cursor_y = cy;
 			ui->cursor_x = 0;
-			ui->cursor_at_low_nibble = 0;
-			move_down(ui);
+			update_physical_cursor_pos(ui);
+			after_update_cursor_pos(ui);
 		}
 	}
 }
@@ -1248,14 +1271,21 @@ move_forward(UI *ui)
 void
 move_backward(UI *ui)
 {
-	if (cursor_pos(ui) > 0) {
-		ui->cursor_at_low_nibble = 0;
-		if (ui->cursor_x > 0) {
-			move_left(ui);
-			ui->cursor_at_low_nibble = 0;
-		} else {
+	if (ui->cursor_x < 0) return;
+	int cy = ui->cursor_y;
+	if (ui->cursor_x > 0) {
+		ui->cursor_x--;
+		update_physical_cursor_pos(ui);
+		after_update_cursor_pos(ui);
+	} else {
+		int cy = ui->cursor_y;
+		if (current_line(ui) + cy > 0) {
+			if (cy > 0) cy--;
+			else med_scroll_up_line(ui->monoedit);
+			ui->cursor_y = cy;
 			ui->cursor_x = N_COL-1;
-			move_up(ui);
+			update_physical_cursor_pos(ui);
+			after_update_cursor_pos(ui);
 		}
 	}
 }
@@ -1264,8 +1294,8 @@ void
 move_next_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
-	if (b->tree) {
-		offset cur = cursor_pos(ui);
+	if (b->tree && !cursor_in_gap(ui)) {
+		uint64 cur = cursor_pos(ui);
 		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			goto_address(ui, leaf->start + leaf->len);
@@ -1277,8 +1307,8 @@ void
 move_prev_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
-	if (b->tree) {
-		offset cur = cursor_pos(ui);
+	if (b->tree && !cursor_in_gap(ui)) {
+		uint64 cur = cursor_pos(ui);
 		Tree *leaf = tree_lookup(b->tree, cur);
 		if (leaf) {
 			Tree *prev_leaf = tree_lookup(b->tree, cur-1);
@@ -1300,9 +1330,9 @@ goto_bol(UI *ui)
 void
 goto_eol(UI *ui)
 {
-	offset filesize = ui->buffer->buffer_size;
+	uint64 filesize = ui->buffer->buffer_size;
 	if (filesize > 0) {
-		offset addr = (current_line(ui) + ui->cursor_y + 1) * N_COL - 1;
+		uint64 addr = (current_line(ui) + ui->cursor_y + 1) * N_COL - 1;
 		if (addr >= filesize) {
 			addr = filesize-1;
 		}
@@ -1356,11 +1386,11 @@ inputbox(UI *ui, TCHAR *title)
 	return 0;
 }
 
-bool
-parse_addr(TCHAR *s, offset *addr)
+int
+parse_addr(TCHAR *s, uint64 *addr)
 {
-	offset n = 0;
-	if (!*s) return 0;
+	uint64 n = 0;
+	if (!*s) return -1;
 	do {
 		TCHAR c = *s++;
 		int d;
@@ -1371,12 +1401,12 @@ parse_addr(TCHAR *s, offset *addr)
 		} else if (c >= 'A' && c <= 'F') {
 			d = 10+(c-'A');
 		} else {
-			return false;
+			return -1;
 		}
 		n = (n<<4)|d;
 	} while (*s);
 	*addr = n;
-	return true;
+	return 0;
 }
 
 void
@@ -1478,7 +1508,7 @@ update_plugin_menu(UI *ui)
 	if (ui->plugin_name) {
 		HMENU plugin_menu = CreateMenu();
 		for (int i=0; i<ui->npluginfunc; i++) {
-			AppendMenuA(plugin_menu, MF_STRING, IDM_PLUGIN_0+i,
+			AppendMenuA(plugin_menu, MF_STRING, ID_PLUGIN_0+i,
 				    ui->plugin_funcname[i]);
 		}
 		ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
@@ -1527,7 +1557,7 @@ det:
 	}
 	int ret;
 	if (ft) {
-		char *path = asprintfA("%s/plugin_%s.lua", workdir, ft);
+		char *path = asprintfA("%s/filetype/%s.lua", workdir, ft);
 		ret = load_plugin(ui, path);
 		free(path);
 	} else {
@@ -1674,4 +1704,18 @@ int
 get_nrow(UI *ui)
 {
 	return med_get_nrow(ui->monoedit);
+}
+
+void
+exit_replace_mode(UI *ui)
+{
+	ui->mode = MODE_NORMAL;
+	if (ui->replace_start + ui->replace_buf_len
+	    <= ui->buffer->buffer_size) {
+		buf_replace(ui->buffer,
+			    ui->replace_start,
+			    ui->replace_buf,
+			    ui->replace_buf_len);
+	}
+	ui->replace_buf_len = 0;
 }

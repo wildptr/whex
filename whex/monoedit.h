@@ -2,14 +2,13 @@ typedef struct med_tag {
 	struct med_tag *next;
 	int start;
 	int len;
-	unsigned attr;
+	uint attr;
 } MedTag;
 
-typedef void (*MedGetLineProc)
-	(long long ln, Buf *buf, void *arg);
+typedef void (*MedGetLineProc)(uint64 ln, Buf *buf, void *arg);
 
 typedef struct {
-	unsigned char mask;
+	uchar mask;
 	MedGetLineProc getline;
 	void *getline_arg;
 	HFONT font;
@@ -20,11 +19,15 @@ enum {
 	MED_CONFIG_FONT = 2,
 };
 
+enum {
+	MED_NOTIFY_POS_CHANGED
+};
+
 ATOM med_register_class(void);
-void med_set_current_line(HWND, long long ln);
-long long med_get_current_line(HWND);
-void med_set_total_lines(HWND, long long ln);
-long long med_get_total_lines(HWND);
+void med_set_current_line(HWND, uint64 ln);
+uint64 med_get_current_line(HWND);
+void med_set_total_lines(HWND, uint64 ln);
+uint64 med_get_total_lines(HWND);
 void med_set_source(HWND, MedGetLineProc proc, void *arg);
 #if 0
 TCHAR *med_alloc_text(HWND, int nch);
@@ -42,3 +45,9 @@ void med_scroll_down_line(HWND);
 void med_scroll_up_page(HWND);
 void med_scroll_down_page(HWND);
 int med_get_nrow(HWND);
+void med_get_cursor_pos(HWND, int pos[2]);
+void med_move_left(HWND);
+void med_move_right(HWND);
+void med_move_up(HWND);
+void med_move_down(HWND);
+void med_reset_position(HWND);

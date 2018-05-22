@@ -28,8 +28,8 @@ typedef struct {
 	int charheight;
 	MedGetLineProc getline;
 	void *getline_arg;
-	long long current_line;
-	long long total_lines;
+	uint64 current_line;
+	uint64 total_lines;
 	MedTag *tagbuf;
 	int ntag;
 	int tag_cap;
@@ -37,6 +37,7 @@ typedef struct {
 	int clientheight;
 	HBRUSH bgbrush;
 	int sbscale;
+	uint id;
 } Med;
 
 #if 0
@@ -59,9 +60,15 @@ static void scroll_up_line(Med *w, HWND hwnd);
 static void scroll_down_line(Med *w, HWND hwnd);
 static void scroll_up_page(Med *w, HWND hwnd);
 static void scroll_down_page(Med *w, HWND hwnd);
-static void scroll_to(Med *w, HWND hwnd, long long ln);
+static void scroll_to(Med *w, HWND hwnd, uint64 ln);
 static void update_scrollbar_pos(Med *w, HWND hwnd);
 static void update_scrollbar_range(Med *w, HWND hwnd);
+static void notify_parent(Med *, HWND);
+static void move_up(Med *, HWND);
+static void move_down(Med *, HWND);
+static void move_left(Med *w);
+static void move_right(Med *w);
+static void set_cursor_pos(Med *, HWND, int y, int x);
 
 static void
 paint_row(Med *w, HWND hwnd, HDC dc, int row)
@@ -84,7 +91,7 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 		if (t) {
 			nextstart = t->start;
 		} else {
-			nextstart = line->textlen;
+			nextstart = max(line->textlen, prev_end);
 		}
 		/* untagged segment */
 		int len = nextstart - prev_end;
@@ -108,20 +115,35 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 			old_bkcolor = SetBkColor
 				(dc, RGB(204, 204, 204));
 		}
-		assert(seg->start + seg->len <= line->textlen);
-		TextOut(dc,
-			seg->start * w->charwidth,
-			y,
-			line->text + seg->start,
-			seg->len);
+		int x = seg->start * w->charwidth;
+		if (seg->start + seg->len <= line->textlen) {
+			TextOut(dc, x, y, line->text + seg->start, seg->len);
+		} else {
+			TCHAR *text = malloc(seg->len * sizeof *text);
+			int src = seg->start;
+			int dst = 0;
+			while (src < line->textlen) {
+				text[dst++] = line->text[src++];
+			}
+			while (dst < seg->len) {
+				text[dst++] = ' ';
+			}
+			TextOut(dc, x, y, text, seg->len);
+			free(text);
+		}
 		if (seg->attr) {
 			SetBkColor(dc, old_bkcolor);
 		}
 	}
+	int linelen = 0;
+	if (s) {
+		MedTag *lastseg = &segments[s-1];
+		linelen = lastseg->start + lastseg->len;
+	}
 	free(segments);
 	/* fill right margin */
 	RECT r;
-	r.left = w->charwidth * line->textlen;
+	r.left = w->charwidth * linelen;
 	r.right = w->clientwidth;
 	if (r.left < r.right) {
 		r.top = y;
@@ -160,7 +182,9 @@ clear_tags(Med *w)
 		line->tags = 0;
 	}
 	w->ntag = 0;
+#if 0
 	_printf("clear_tags\n");
+#endif
 }
 
 static void
@@ -181,7 +205,9 @@ add_tag(Med *w, int row, MedTag *tag)
 		}
 	}
 	MedTag *newtag = w->tagbuf + w->ntag++;
+#if 0
 	_printf("add_tag row=%d start=%d len=%d\n", row, tag->start, tag->len);
+#endif
 	newtag->start = tag->start;
 	newtag->len = tag->len;
 	newtag->attr = tag->attr;
@@ -201,7 +227,7 @@ add_tag(Med *w, int row, MedTag *tag)
 }
 
 void
-default_getline(long long _ln, Buf *_b, void *_arg)
+default_getline(uint64 _ln, Buf *_b, void *_arg)
 {
 }
 
@@ -237,7 +263,7 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		w->bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 		{
 			CREATESTRUCT *cs = (CREATESTRUCT *) lparam;
-			bool has_font = 0;
+			uchar has_font = 0;
 			MedConfig *conf = cs->lpCreateParams;
 			if (conf) {
 				if (conf->mask & MED_CONFIG_GETLINE) {
@@ -253,6 +279,7 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				set_font(w, hwnd, (HFONT)
 					 GetStockObject(ANSI_FIXED_FONT));
 			}
+			w->id = (uint) cs->hMenu;
 		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
@@ -276,11 +303,13 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		set_font(w, hwnd, (HFONT) wparam);
 		return 0;
 	case WM_SETFOCUS:
+		_printf("SETFOCUS\n");
 		CreateCaret(hwnd, 0, w->charwidth, w->charheight);
 		update_caret_pos(w);
 		ShowCaret(hwnd);
 		return 0;
 	case WM_KILLFOCUS:
+		_printf("KILLFOCUS\n");
 		HideCaret(hwnd);
 		DestroyCaret();
 		return 0;
@@ -300,7 +329,10 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			w->clientheight = hei;
 			int ch = w->charheight;
 			int cw = w->charwidth;
-			set_size(w, (hei+ch-1)/ch, (wid+cw-1)/cw);
+			int new_nrow = hei/ch;
+			int new_ncol = wid/cw;
+			set_size(w, new_nrow, new_ncol);
+			InvalidateRect(hwnd, 0, 0);
 		}
 		return 0;
 	case WM_MOUSEWHEEL:
@@ -318,6 +350,8 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				}
 			}
 		}
+notify:
+		notify_parent(w, hwnd);
 		return 0;
 	case WM_LBUTTONDOWN:
 		{
@@ -329,27 +363,27 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				update_caret_pos(w);
 			}
 		}
-		return 0;
+		goto notify;
 	case WM_VSCROLL:
 		switch (LOWORD(wparam)) {
 		case SB_LINEDOWN:
 			scroll_down_line(w, hwnd);
-			break;
+			goto notify;
 		case SB_LINEUP:
 			scroll_up_line(w, hwnd);
-			break;
+			goto notify;
 		case SB_PAGEDOWN:
 			scroll_down_page(w, hwnd);
-			break;
+			goto notify;
 		case SB_PAGEUP:
 			scroll_up_page(w, hwnd);
-			break;
+			goto notify;
 		case SB_TOP:
 			scroll_to(w, hwnd, 0);
-			break;
+			goto notify;
 		case SB_BOTTOM:
 			scroll_to(w, hwnd, w->total_lines);
-			break;
+			goto notify;
 		case SB_THUMBPOSITION:
 		case SB_THUMBTRACK:
 			{
@@ -359,7 +393,37 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				GetScrollInfo(hwnd, SB_VERT, &si);
 				scroll_to(w, hwnd, si.nTrackPos);
 			}
-			break;
+			goto notify;
+		}
+		return 0;
+	case WM_KEYDOWN:
+		switch (wparam) {
+		case VK_UP:
+			move_up(w, hwnd);
+			goto notify;
+		case VK_DOWN:
+			move_down(w, hwnd);
+			goto notify;
+		case VK_LEFT:
+			move_left(w);
+			goto notify;
+		case VK_RIGHT:
+			move_right(w);
+			goto notify;
+		case VK_PRIOR:
+			scroll_up_page(w, hwnd);
+			goto notify;
+		case VK_NEXT:
+			scroll_down_page(w, hwnd);
+			goto notify;
+		case VK_HOME:
+			w->cursorx = 0;
+			update_caret_pos(w);
+			goto notify;
+		case VK_END:
+			w->cursorx = max(w->ncol-1, 0);
+			update_caret_pos(w);
+			goto notify;
 		}
 		return 0;
 	}
@@ -375,13 +439,12 @@ med_register_class(void)
 	wndclass.cbWndExtra = sizeof(LONG_PTR);
 	wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wndclass.hbrBackground = (HBRUSH) GetStockObject(WHITE_BRUSH);
-	//CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 	wndclass.lpszClassName = TEXT("MonoEdit");
 	return RegisterClass(&wndclass);
 }
 
 static void
-scroll_to(Med *w, HWND hwnd, long long ln)
+scroll_to(Med *w, HWND hwnd, uint64 ln)
 {
 	w->current_line = ln;
 	update_buffer(w);
@@ -390,13 +453,13 @@ scroll_to(Med *w, HWND hwnd, long long ln)
 }
 
 void
-med_set_current_line(HWND hwnd, long long ln)
+med_set_current_line(HWND hwnd, uint64 ln)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	scroll_to(w, hwnd, ln);
 }
 
-long long
+uint64
 med_get_current_line(HWND hwnd)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
@@ -404,14 +467,14 @@ med_get_current_line(HWND hwnd)
 }
 
 void
-med_set_total_lines(HWND hwnd, long long n)
+med_set_total_lines(HWND hwnd, uint64 n)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	w->total_lines = n;
 	update_scrollbar_range(w, hwnd);
 }
 
-long long
+uint64
 med_get_total_lines(HWND hwnd)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
@@ -526,13 +589,11 @@ getline(Med *w, int row)
 {
 	HeapBuf hb;
 	Line *l = &w->buffer[row];
-	if (w->current_line + row >= w->total_lines) {
-abort:
+	if (init_heapbuf(&hb)) {
 		l->text = 0;
 		l->textlen = 0;
 		return;
 	}
-	if (init_heapbuf(&hb)) goto abort;
 	w->getline(w->current_line + row, &hb.buf, w->getline_arg);
 	l->text = hb.start;
 	l->textlen = hb.cur - hb.start;
@@ -564,8 +625,12 @@ scroll(Med *w, HWND hwnd, int delta)
 		w->charwidth * w->ncol,
 		w->charheight * w->nrow
 	};
+#if 0
 	ScrollWindow(hwnd, 0, delta*w->charheight,
 		     &scroll_rect, &scroll_rect);
+#else
+	InvalidateRect(hwnd, 0, 0);
+#endif
 	w->current_line -= delta;
 	if (delta > 0) {
 		if (delta > w->nrow) delta = w->nrow;
@@ -719,7 +784,7 @@ med_scroll_down_line(HWND hwnd)
 static void
 scroll_up_page(Med *w, HWND hwnd)
 {
-	long long curline = w->current_line;
+	uint64 curline = w->current_line;
 	int delta;
 	if (curline >= w->nrow) {
 		delta = w->nrow;
@@ -732,16 +797,14 @@ scroll_up_page(Med *w, HWND hwnd)
 static void
 scroll_down_page(Med *w, HWND hwnd)
 {
-	long long curline = w->current_line;
+	uint64 curline = w->current_line;
 	int delta;
 	if (curline + w->nrow <= w->total_lines) {
 		delta = w->nrow;
 	} else {
-		delta = (int)(w->total_lines - curline) - w->nrow;
+		delta = (int)(w->total_lines - curline);
 	}
-	if (delta > 0) {
-		scroll(w, hwnd, -delta);
-	}
+	scroll(w, hwnd, -delta);
 }
 
 void
@@ -785,7 +848,7 @@ update_scrollbar_pos(Med *w, HWND hwnd)
 static void
 update_scrollbar_range(Med *w, HWND hwnd)
 {
-	unsigned long long bottom = w->total_lines;
+	uint64 bottom = w->total_lines;
 	int s = 0;
 	while (bottom >> s >= 0x80000000) s++;
 	w->sbscale = s;
@@ -798,4 +861,95 @@ update_scrollbar_range(Med *w, HWND hwnd)
 	si.nMax = maxscroll;
 	si.nPos = newpos;
 	SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+}
+
+static void
+notify_parent(Med *w, HWND hwnd)
+{
+	SendMessage(GetParent(hwnd), WM_COMMAND,
+		    MED_NOTIFY_POS_CHANGED << 16 | w->id, (LPARAM) hwnd);
+}
+
+void
+med_get_cursor_pos(HWND hwnd, int pos[2])
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	pos[0] = w->cursory;
+	pos[1] = w->cursorx;
+}
+
+static void
+move_left(Med *w)
+{
+	if (w->cursorx > 0) {
+		w->cursorx--;
+		update_caret_pos(w);
+	}
+}
+
+void
+med_move_left(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	move_left(w);
+}
+
+static void
+move_right(Med *w)
+{
+	if (w->cursorx+1 < w->ncol) {
+		w->cursorx++;
+		update_caret_pos(w);
+	}
+}
+
+void
+med_move_right(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	move_right(w);
+}
+
+static void
+move_up(Med *w, HWND hwnd)
+{
+	if (w->cursory > 0) {
+		w->cursory--;
+		update_caret_pos(w);
+	} else {
+		scroll_up_line(w, hwnd);
+	}
+}
+
+void
+med_move_up(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	move_up(w, hwnd);
+}
+
+static void
+move_down(Med *w, HWND hwnd)
+{
+	if (w->cursory+1 < w->nrow) {
+		w->cursory++;
+		update_caret_pos(w);
+	} else {
+		scroll_down_line(w, hwnd);
+	}
+}
+
+void
+med_move_down(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	move_down(w, hwnd);
+}
+
+void
+med_reset_position(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	w->current_line = 0;
+	set_cursor_pos(w, hwnd, 0, 0);
 }

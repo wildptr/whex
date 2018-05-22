@@ -17,6 +17,7 @@
 #include "buf.h"
 #include "monoedit.h"
 #include "unicode.h"
+#include "printf.h"
 
 #define BUFSIZE 512
 
@@ -56,9 +57,9 @@ typedef struct {
 } Window;
 
 typedef struct {
-	bool has_pos;
-	bool has_size;
-	bool has_parent;
+	uchar has_pos;
+	uchar has_size;
+	uchar has_parent;
 	char *text;
 	int x, y, w, h;
 	HWND parent;
@@ -744,7 +745,7 @@ parse_config(lua_State *L, int index, Config *c)
 	lua_pushstring(L, "pos");
 	lua_gettable(L, index);
 	if (!lua_isnil(L, -1)) {
-		c->has_pos = true;
+		c->has_pos = 1;
 		lua_geti(L, -1, 1);
 		c->x = (int) luaL_checkinteger(L, -1);
 		lua_pop(L, 1);
@@ -758,7 +759,7 @@ parse_config(lua_State *L, int index, Config *c)
 	lua_pushstring(L, "size");
 	lua_gettable(L, index);
 	if (!lua_isnil(L, -1)) {
-		c->has_size = true;
+		c->has_size = 1;
 		lua_geti(L, -1, 1);
 		c->w = (int) luaL_checkinteger(L, -1);
 		lua_pop(L, 1);
@@ -772,7 +773,7 @@ parse_config(lua_State *L, int index, Config *c)
 	lua_pushstring(L, "parent");
 	lua_gettable(L, index);
 	if (!lua_isnil(L, -1)) {
-		c->has_parent = true;
+		c->has_parent = 1;
 		Window *w = lua_touserdata(L, -1);
 		c->parent = w->hwnd;
 	}
@@ -873,12 +874,14 @@ api_listview_clear(lua_State *L)
 }
 
 static void
-med_getline(long long ln, Buf *b, void *arg)
+med_getline(uint64 ln, Buf *b, void *arg)
 {
 	lua_State *L = lua;
 	HWND med = (HWND) arg;
 	getluafield(L, med, F_MONOEDIT_SOURCE);
 	lua_pushinteger(L, ln);
+	/* If the Lua function returns nothing, this routine crashes.
+	   TODO: Investigate. */
 	if (lua_pcall(L, 1, 1, 0)) {
 		lua_pop(L, 1);
 		return;
@@ -895,6 +898,7 @@ med_getline(long long ln, Buf *b, void *arg)
 #else
 	b->puts(b, s, l);
 #endif
+	lua_pop(L, 1); /* 's' */
 }
 
 int
@@ -930,7 +934,7 @@ api_monoedit__index(lua_State *L)
 	case 11:
 		if (!strcmp(field, "total_lines")) {
 			Window *w = lua_touserdata(L, 1);
-			long long n = med_get_total_lines(w->hwnd);
+			uint64 n = med_get_total_lines(w->hwnd);
 			lua_pushinteger(L, n);
 			return 1;
 		}

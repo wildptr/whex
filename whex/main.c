@@ -324,7 +324,7 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 	i = 0;
 	argv = ralloc(r, (narg+1) * sizeof *argv);
 	for (node = head.next; node; node = node->next)
-		arg = node->data;
+		argv[i++] = node->data;
 	argv[narg] = 0;
 	*argc = narg;
 	return argv;

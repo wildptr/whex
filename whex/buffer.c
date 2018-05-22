@@ -11,6 +11,8 @@
 #include "util.h"
 #include "list.h"
 #include "buffer.h"
+#include "buf.h"
+#include "printf.h"
 
 #define VALID 1
 
@@ -41,7 +43,7 @@ seek(HANDLE file, uint64 offset)
 	LONG lo = (LONG) offset;
 	LONG hi = offset >> 32;
 	if (SetFilePointer(file, lo, &hi, FILE_BEGIN) != lo) {
-		printf("seek(%I64x) failed\n", offset);
+		_printf("seek(%llx) failed\n", offset);
 		return -1;
 	}
 	return 0;
@@ -135,16 +137,15 @@ buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start)
 	int i;
 
 	assert(len);
-	T = malloc(len * sizeof *T);
+	Region *r = &b->tmp_rgn;
+	void *top = r->cur;
+	T = ralloc(r, len * sizeof *T);
 	kmp_table(T, pat, len);
 	m = start; // start of potential match
 	i = 0;
 	while (m+i < b->buffer_size) {
 		if (pat[i] == buf_getbyte(b, m+i)) {
-			if (i == len - 1) {
-				free(T);
-				return m; // match found
-			}
+			if (i == len - 1) goto end; /* match found */
 			i++;
 		} else {
 			// current character does not match
@@ -157,8 +158,10 @@ buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start)
 		}
 	}
 	/* no match */
-	free(T);
-	return b->buffer_size;
+	m = b->buffer_size;
+end:
+	rfree(r, top);
+	return m;
 }
 
 /*
@@ -175,8 +178,10 @@ buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 	int i;
 
 	assert(len);
-	T = malloc(len * sizeof *T);
-	revpat = malloc(len);
+	Region *r = &b->tmp_rgn;
+	void *top = r->cur;
+	T = ralloc(r, len * sizeof *T);
+	revpat = ralloc(r, len);
 
 	for (i=0; i<len; i++) {
 		revpat[i] = pat[len-1-i];
@@ -188,9 +193,8 @@ buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 	while (m+i < b->buffer_size) {
 		if (pat[i] == buf_getbyte(b, b->buffer_size-1-(m+i))) {
 			if (i == len - 1) {
-				free(T);
-				free(revpat);
-				return b->buffer_size - (m + len);
+				m = b->buffer_size - (m + len);
+				goto end;
 			}
 			i++;
 		} else {
@@ -203,9 +207,10 @@ buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 		}
 	}
 	/* no match */
-	free(T);
-	free(revpat);
-	return b->buffer_size;
+	m = b->buffer_size;
+end:
+	rfree(r, top);
+	return m;
 }
 
 int
@@ -296,35 +301,38 @@ buf_save(Buffer *b, HANDLE dstfile)
 {
 	uchar inplace = b->file == dstfile;
 	Segment *s = b->firstseg;
+	Region *r = &b->tmp_rgn;
+	void *top = r->cur;
 	while (s) {
-		printf("%I64x--%I64x ", s->start, s->end);
+		_printf("%llx--%llx ", s->start, s->end);
 		switch (s->kind) {
 		case SEG_MEM:
-			printf("MEM\n");
+			_printf("MEM\n");
 			break;
 		case SEG_FILE:
-			printf("FILE offset=%I64x\n", s->file_offset);
+			_printf("FILE offset=%llx\n", s->file_offset);
 			if (inplace && s->start == s->file_offset) {
 				s->filedata = 0;
 			} else {
 				uint64 full_len = s->end - s->start;
 				DWORD len = (DWORD) full_len;
 				if (len != full_len) {
+fail:
+					rfree(r, top);
 					return -1;
 				}
-				s->filedata = malloc(len);
-				/* TODO: cleanup on failure */
+				s->filedata = ralloc(r, len);
 				if (!s->filedata) {
-					printf("malloc(%lu) failed\n", len);
-					return -1;
+					_printf("out of memory\n", len);
+					goto fail;
 				}
 				seek(b->file, s->file_offset);
 				DWORD nread;
 				ReadFile(b->file, s->filedata, len, &nread, 0);
 				if (nread != len) {
-					printf("short read (%lu/%lu)\n",
-					       nread, len);
-					return -1;
+					_printf("short read (%lu/%lu)\n",
+						nread, len);
+					goto fail;
 				}
 			}
 			break;

@@ -19,7 +19,7 @@ typedef struct {
 	struct cache_entry *cache;
 	uchar *cache_data;
 	Tree *tree;
-	Region tree_rgn;
+	Region tree_rgn, tmp_rgn;
 	int next_cache;
 } Buffer;
 

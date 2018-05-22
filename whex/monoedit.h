@@ -51,3 +51,4 @@ void med_move_right(HWND);
 void med_move_up(HWND);
 void med_move_down(HWND);
 void med_reset_position(HWND);
+void med_invalidate_char(HWND, int row, int col);

@@ -147,7 +147,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				} else {
 					goto_bol(ui);
 				}
-				break;
+				return 0;
 			case VK_END:
 				if (GetKeyState(VK_CONTROL) < 0) {
 					goto_address
@@ -155,22 +155,20 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				} else {
 					goto_eol(ui);
 				}
-				break;
-			default:
-				return ui->med_wndproc(hwnd, msg, wparam, lparam);
+				return 0;
 			}
-			break;
+			break; /* to CallWindowProc */
 		case MODE_REPLACE:
 			switch (wparam) {
 			case VK_ESCAPE:
 				exit_replace_mode(ui);
 				break;
 			}
-			break;
+			return 0;
 		default:
 			assert(0);
 		}
-		return 0;
+		break;
 	}
 	return CallWindowProc(ui->med_wndproc, hwnd, msg, wparam, lparam);
 }
@@ -757,8 +755,9 @@ handle_char_replace(UI *ui, int c)
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
 		ui->cursor_fine_pos = POS_HINIB;
-		med_set_char(ui->monoedit, cy, 11+cx*3, c|32);
-		med_paint_row(ui->monoedit, cy);
+		int med_cx = 11+cx*3;
+		med_set_char(ui->monoedit, cy, med_cx, c|32);
+		med_invalidate_char(ui->monoedit, cy, med_cx);
 		move_forward(ui);
 	} else if (ui->cursor_fine_pos == POS_HINIB) {
 		b = buf_getbyte(ui->buffer, pos);
@@ -771,8 +770,9 @@ handle_char_replace(UI *ui, int c)
 		ui->replace_buf[ui->replace_buf_len++] = val;
 		ui->cursor_fine_pos = POS_LONIB;
 		med_set_cursor_pos(ui->monoedit, cy, 11+cx*3);
-		med_set_char(ui->monoedit, cy, 10+cx*3, c|32);
-		med_paint_row(ui->monoedit, cy);
+		int med_cx = 10+cx*3;
+		med_set_char(ui->monoedit, cy, med_cx, c|32);
+		med_invalidate_char(ui->monoedit, cy, med_cx);
 	}
 }
 

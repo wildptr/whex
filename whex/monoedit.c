@@ -945,3 +945,15 @@ med_reset_position(HWND hwnd)
 	w->current_line = 0;
 	set_cursor_pos(w, hwnd, 0, 0);
 }
+
+void
+med_invalidate_char(HWND hwnd, int row, int col)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	RECT r;
+	r.left = col*w->charwidth;
+	r.top = row*w->charheight;
+	r.right = r.left + w->charwidth;
+	r.bottom = r.top + w->charheight;
+	InvalidateRect(hwnd, &r, 0);
+}

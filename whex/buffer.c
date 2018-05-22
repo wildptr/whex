@@ -391,7 +391,7 @@ newmemseg(uint64 start, size_t len)
 void
 buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 {
-	assert(addr >= 0 && addr < b->buffer_size);
+	assert(addr >= 0 && addr + len < b->buffer_size);
 	assert(len > 0);
 	Segment *before, *after;
 	uint64 end = addr + len;
@@ -421,6 +421,7 @@ buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 					after = malloc(sizeof *after);
 					*after = *before;
 					before->next = newseg;
+					before->end = addr;
 				}
 				after->file_offset += end - before->start;
 				after->start = end;

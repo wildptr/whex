@@ -7,8 +7,8 @@ enum field_type {
 };
 
 typedef struct tree {
-	long long start;
-	long long len;
+	uint64 start;
+	uint64 len;
 	char *name;
 	long intvalue;
 	int n_child;
@@ -19,5 +19,5 @@ typedef struct tree {
 } Tree;
 
 void tree_print(Tree *);
-struct tree *tree_lookup(Tree *, long long addr);
+struct tree *tree_lookup(Tree *, uint64 addr);
 char *tree_path(Region *, Tree *);

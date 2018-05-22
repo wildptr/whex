@@ -18,8 +18,9 @@ static int
 heapbuf_grow(HeapBuf *hb, int newsize)
 {
 	TCHAR *newbuf = realloc(hb->start, newsize * sizeof *newbuf);
+	int len;
 	if (!newbuf) return -1;
-	int len = hb->cur - hb->start;
+	len = hb->cur - hb->start;
 	hb->start = newbuf;
 	hb->cur = newbuf + len;
 	hb->end = newbuf + newsize;

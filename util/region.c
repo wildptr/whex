@@ -18,13 +18,15 @@ typedef struct chunk {
 void *
 ralloc(Region *r, int size)
 {
+	void *ret;
 	// align
 	size = (size+PTR_SIZE-1)&(-PTR_SIZE);
 	if (r->cur + size > r->limit) {
 		int malloc_size =
 			size > CHUNK_SIZE-PTR_SIZE ? PTR_SIZE+size : CHUNK_SIZE;
+		Chunk *c;
 		assert(malloc_size >= 0);
-		Chunk *c = malloc(malloc_size);
+		c = malloc(malloc_size);
 		if (!c) {
 			fputs("out of memory\n", stderr);
 			exit(1);
@@ -34,7 +36,7 @@ ralloc(Region *r, int size)
 		r->cur = c->data;
 		r->limit = (char *) c + malloc_size;
 	}
-	void *ret = r->cur;
+	ret = r->cur;
 	r->cur += size;
 	return ret;
 }
@@ -52,8 +54,9 @@ rinit(Region *r)
 void *
 ralloc0(Region *r, int size)
 {
+	void *p;
 	assert(size >= 0);
-	void *p = ralloc(r, size);
+	p = ralloc(r, size);
 	memset(p, 0, size);
 	return p;
 }

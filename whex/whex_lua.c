@@ -40,12 +40,12 @@ api_buffer_peeku16(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	uint64 addr;
-	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr+2 > b->file_size) return 0;
 	union {
 		uint16 i;
 		uchar b[2];
 	} u;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr+2 > b->file_size) return 0;
 	buf_read(b, u.b, addr, 2);
 	lua_pushinteger(L, u.i);
 	return 1;
@@ -56,12 +56,12 @@ api_buffer_peeku32(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	uint64 addr;
-	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr+4 > b->file_size) return 0;
 	union {
 		uint32 i;
 		uchar b[4];
 	} u;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr+4 > b->file_size) return 0;
 	buf_read(b, u.b, addr, 4);
 	lua_pushinteger(L, u.i);
 	return 1;
@@ -72,12 +72,12 @@ api_buffer_peeku64(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	uint64 addr;
-	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr+8 > b->file_size) return 0;
 	union {
 		uint64 i;
 		uchar b[8];
 	} u;
+	if (checkaddr(L, 2, &addr)) return 0;
+	if (addr+8 > b->file_size) return 0;
 	buf_read(b, u.b, addr, 8);
 	lua_pushinteger(L, u.i);
 	return 1;
@@ -88,10 +88,11 @@ api_buffer_read(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	uint64 addr;
-	if (checkaddr(L, 2, &addr)) return 0;
-	long n = (long) luaL_checkinteger(L, 3);
+	long n;
 	uchar *s;
 
+	if (checkaddr(L, 2, &addr)) return 0;
+	n = (long) luaL_checkinteger(L, 3);
 	if (addr + n > b->file_size) return 0;
 	s = malloc(n+1);
 	buf_read(b, s, addr, n);
@@ -105,6 +106,8 @@ Tree *
 convert_tree(Region *r, lua_State *L)
 {
 	Tree *tree = ralloc(r, sizeof *tree);
+	int n, i;
+
 	tree->parent = 0;
 
 	lua_getfield(L, -1, "name");
@@ -161,14 +164,15 @@ convert_tree(Region *r, lua_State *L)
 
 	lua_getfield(L, -1, "children");
 	// top of stack is array of children
-	int n = lua_rawlen(L, -1); // get number of children
+	n = lua_rawlen(L, -1); // get number of children
 
 	tree->n_child = n;
 	tree->children = ralloc(r, n * sizeof *tree->children);
-	for (int i=0; i<n; i++) {
+	for (i=0; i<n; i++) {
+		Tree *child;
 		// beware that indices start at 1 in Lua
 		lua_rawgeti(L, -1, 1+i); // push child
-		Tree *child = convert_tree(r, L);
+		child = convert_tree(r, L);
 		if (!child) {
 			lua_pop(L, 2);
 			return 0;

@@ -3,9 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "types.h"
 #include "region.h"
 #include "tree.h"
 
+#if 0
 static void
 print_rec(Tree *tree, int depth)
 {
@@ -33,10 +35,12 @@ tree_print(Tree *tree)
 {
 	print_rec(tree, 0);
 }
+#endif
 
 Tree *
-tree_lookup(Tree *tree, long long addr)
+tree_lookup(Tree *tree, uint64 addr)
 {
+	int i;
 	if (addr < tree->start || addr >= tree->start + tree->len) {
 		// out of bounds
 		return 0;
@@ -46,7 +50,7 @@ tree_lookup(Tree *tree, long long addr)
 		return tree;
 	}
 	assert(tree->children);
-	for (int i=0; i<tree->n_child; i++) {
+	for (i=0; i<tree->n_child; i++) {
 		Tree *result = tree_lookup(tree->children[i], addr);
 		if (result) return result;
 	}

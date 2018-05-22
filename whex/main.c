@@ -2,7 +2,6 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #include <lauxlib.h>
@@ -11,6 +10,10 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#if _MSC_VER <= 1200
+#include "vc6compat.h"
+#undef putc
+#endif
 
 #include "types.h"
 #include "region.h"
@@ -91,8 +94,8 @@ void move_left(UI *);
 void move_right(UI *);
 void goto_bol(UI *);
 void goto_eol(UI *);
-void handle_char_normal(UI *, int);
-void handle_char_replace(UI *, int);
+void handle_char_normal(UI *, TCHAR);
+void handle_char_replace(UI *, TCHAR);
 void init_font(UI *);
 void handle_wm_create(UI *, LPCREATESTRUCT);
 int open_file(UI *, TCHAR *);
@@ -244,6 +247,10 @@ create_menu(void)
 static int
 start_gui(int show, UI *ui, TCHAR *filepath)
 {
+	HMENU menu;
+	HWND hwnd;
+	MSG msg;
+
 	InitCommonControls();
 	if (!med_register_class()) return 1;
 	if (!register_wndclass()) return 1;
@@ -252,21 +259,20 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 		free(filepath);
 	}
 	init_font(ui);
-	HMENU menu = create_menu();
-	HWND hwnd = CreateWindow(TEXT("WHEX"), // class name
-				 0, // window title
-				 WS_OVERLAPPEDWINDOW, // window style
-				 CW_USEDEFAULT, // initial x position
-				 CW_USEDEFAULT, // initial y position
-				 CW_USEDEFAULT, // initial width
-				 CW_USEDEFAULT, // initial height
-				 0,
-				 menu,
-				 ui->instance,
-				 ui); // window-creation data
+	menu = create_menu();
+	hwnd = CreateWindow(TEXT("WHEX"), // class name
+			    0, // window title
+			    WS_OVERLAPPEDWINDOW, // window style
+			    CW_USEDEFAULT, // initial x position
+			    CW_USEDEFAULT, // initial y position
+			    CW_USEDEFAULT, // initial width
+			    CW_USEDEFAULT, // initial height
+			    0,
+			    menu,
+			    ui->instance,
+			    ui); // window-creation data
 	ShowWindow(hwnd, show);
 	update_ui(ui);
-	MSG msg;
 	while (GetMessage(&msg, 0, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
@@ -280,11 +286,15 @@ static TCHAR **
 cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 {
 	int narg = 0;
+	int i;
 	List head = {0};
 	List *last = &head;
 	TCHAR *p = cmdline;
 	TCHAR *q;
 	TCHAR *arg;
+	TCHAR **argv;
+	List *node;
+
 	do {
 		int n;
 		q = p;
@@ -311,9 +321,10 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 		p = q;
 		while (isspace(*p)) p++;
 	} while (*p);
-	int i=0;
-	TCHAR **argv = ralloc(r, (narg+1) * sizeof *argv);
-	FOREACH(head.next, arg) argv[i++] = arg;
+	i = 0;
+	argv = ralloc(r, (narg+1) * sizeof *argv);
+	for (node = head.next; node; node = node->next)
+		arg = node->data;
 	argv[narg] = 0;
 	*argc = narg;
 	return argv;
@@ -335,6 +346,11 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	int argc;
 	TCHAR **argv;
 	TCHAR *filepath;
+	void *top;
+	int i;
+	lua_State *L;
+	Buffer *b;
+	UI *ui;
 
 	workdir = malloc(BUFSIZE);
 	wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
@@ -346,10 +362,10 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	if (!wdlen) return 1;
 
 	rinit(&rgn);
-	void *top = rgn.cur;
+	top = rgn.cur;
 	argv = cmdline_to_argv(&rgn, GetCommandLine(), &argc);
 
-	int i = 1;
+	i = 1;
 	while (i < argc) {
 		TCHAR *arg = argv[i];
 		if (arg[0] == '-') {
@@ -381,7 +397,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	if (filepath) filepath = lstrdup(filepath);
 	rfree(&rgn, top);
 
-	lua_State *L = luaL_newstate();
+	L = luaL_newstate();
 	luaL_openlibs(L);
 
 	/* set Lua search path */
@@ -416,7 +432,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	if (init_luatk(L)) return -1;
 
 	lua_newtable(L); /* global 'whex' */
-	Buffer *b = lua_newuserdata(L, sizeof *b);
+	b = lua_newuserdata(L, sizeof *b);
 	luaL_setmetatable(L, "buffer");
 	lua_setfield(L, -2, "buffer");
 	lua_newtable(L);
@@ -424,18 +440,20 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_newtable(L);
 	lua_setfield(L, -2, "customtype");
 
-	char *ftdet_path = asprintfA("%s/ftdet.lua", workdir);
-	if (luaL_dofile(L, ftdet_path)) {
-		luaerrorbox(0, L);
-		lua_pop(L, 1);
-	} else {
-		lua_setfield(L, -2, "ftdet");
+	{
+		char *ftdet_path = asprintfA("%s/ftdet.lua", workdir);
+		if (luaL_dofile(L, ftdet_path)) {
+			luaerrorbox(0, L);
+			lua_pop(L, 1);
+		} else {
+			lua_setfield(L, -2, "ftdet");
+		}
+		free(ftdet_path);
 	}
-	free(ftdet_path);
 
 	lua_setglobal(L, "whex");
 
-	UI *ui = ralloc0(&rgn, sizeof *ui);
+	ui = ralloc0(&rgn, sizeof *ui);
 	ui->lua = L;
 	ui->buffer = b;
 	ui->instance = instance;
@@ -468,8 +486,9 @@ update_status_text(UI *ui, Tree *leaf)
 		char *typename;
 		char *valuerepr;
 		void *top = rgn.cur;
+		char *path;
 		format_leaf_value(ui, leaf, &typename, &valuerepr);
-		char *path = tree_path(&rgn, leaf);
+		path = tree_path(&rgn, leaf);
 		SendMessage(sb, SB_SETTEXTA, 1, (LPARAM) typename);
 		SendMessage(sb, SB_SETTEXTA, 2, (LPARAM) valuerepr);
 		SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
@@ -516,9 +535,10 @@ void
 update_logical_cursor_pos(UI *ui)
 {
 	int pos[2];
+	int cy, cx;
 	med_get_cursor_pos(ui->monoedit, pos);
-	int cy = pos[0];
-	int cx = pos[1];
+	cy = pos[0];
+	cx = pos[1];
 	ui->cursor_y = cy;
 	if (cx < 9) {
 		ui->cursor_x = -1;
@@ -539,8 +559,9 @@ update_logical_cursor_pos(UI *ui)
 void
 update_physical_cursor_pos(UI *ui)
 {
+	int cx;
 	assert(ui->cursor_x >= 0);
-	int cx = col_to_cx(ui, ui->cursor_x);
+	cx = col_to_cx(ui, ui->cursor_x);
 	med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
 }
 
@@ -559,8 +580,8 @@ cursor_in_gap(UI *ui)
 uint64
 cursor_pos(UI *ui)
 {
-	assert(ui->cursor_x >= 0);
 	int pos[2];
+	assert(ui->cursor_x >= 0);
 	med_get_cursor_pos(ui->monoedit, pos);
 	return ((current_line(ui) + pos[0]) << LOG2_N_COL) + ui->cursor_x;
 }
@@ -587,12 +608,15 @@ void
 goto_address(UI *ui, uint64 addr)
 {
 	uint64 line = addr >> LOG2_N_COL;
-	int col = addr & (N_COL-1);
+	int col = (int) addr & (N_COL-1);
 	int cy, cx;
-	cx = col_to_cx(ui, col);
+	uint64 curline;
+	int nrow;
+
 	assert(addr >= 0 && addr <= ui->buffer->buffer_size);
-	uint64 curline = current_line(ui);
-	int nrow = get_nrow(ui);
+	cx = col_to_cx(ui, col);
+	curline = current_line(ui);
+	nrow = get_nrow(ui);
 	if (line >= curline && line < curline + nrow) {
 		cy = (int)(line - curline);
 	} else {
@@ -646,7 +670,7 @@ move_right(UI *ui)
 }
 
 void
-handle_char_normal(UI *ui, int c)
+handle_char_normal(UI *ui, TCHAR c)
 {
 	TCHAR *text;
 	uint64 addr;
@@ -733,9 +757,13 @@ handle_char_normal(UI *ui, int c)
 }
 
 void
-handle_char_replace(UI *ui, int c)
+handle_char_replace(UI *ui, TCHAR c)
 {
-	uchar val;
+	uchar val, b;
+	int cy, cx;
+	uint64 pos;
+	int med_cx;
+
 	if (c >= '0' && c <= '9') {
 		val = c-'0';
 	} else if (c >= 'a' && c <= 'f') {
@@ -745,17 +773,16 @@ handle_char_replace(UI *ui, int c)
 	} else return;
 
 	if (cursor_in_gap(ui)) return;
-	int cy = ui->cursor_y;
-	int cx = ui->cursor_x;
-	uint64 pos = cursor_pos(ui);
-	uchar b;
+	cy = ui->cursor_y;
+	cx = ui->cursor_x;
+	pos = cursor_pos(ui);
 	if (pos >= ui->buffer->buffer_size) return;
 	if (ui->cursor_fine_pos == POS_LONIB) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
 		ui->cursor_fine_pos = POS_HINIB;
-		int med_cx = 11+cx*3;
+		med_cx = 11+cx*3;
 		med_set_char(ui->monoedit, cy, med_cx, c|32);
 		med_invalidate_char(ui->monoedit, cy, med_cx);
 		move_forward(ui);
@@ -770,7 +797,7 @@ handle_char_replace(UI *ui, int c)
 		ui->replace_buf[ui->replace_buf_len++] = val;
 		ui->cursor_fine_pos = POS_LONIB;
 		med_set_cursor_pos(ui->monoedit, cy, 11+cx*3);
-		int med_cx = 10+cx*3;
+		med_cx = 10+cx*3;
 		med_set_char(ui->monoedit, cy, med_cx, c|32);
 		med_invalidate_char(ui->monoedit, cy, med_cx);
 	}
@@ -780,8 +807,20 @@ void
 init_font(UI *ui)
 {
 	static LOGFONT logfont = {
-		.lfHeight = 16,
-		.lfFaceName = TEXT("Courier New"),
+		16,	/* lfHeight */
+		0,	/* lfWidth */
+		0,	/* lfEscapement */
+		0,	/* lfOrientation */
+		0,	/* lfWeight */
+		0,	/* lfItalic */
+		0,	/* lfUnderline */
+		0,	/* lfStrikeOut */
+		0,	/* lfCharSet */
+		0,	/* lfOutPrecision */
+		0,	/* lfClipPrecision */
+		0,	/* lfQuality */
+		0,	/* lfPitchAndFamily */
+		TEXT("Courier New") /* lfFaceName */
 	};
 
 	HDC dc;
@@ -802,12 +841,13 @@ init_font(UI *ui)
 void
 med_getline(uint64 ln, Buf *p, void *arg)
 {
-	assert(ln >= 0);
 	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
 	uint64 addr = ln << LOG2_N_COL;
-	int end;
 	uint64 start = ln << LOG2_N_COL;
+	int end, i;
+
+	assert(ln >= 0);
 	if (start + N_COL <= b->buffer_size) {
 		end = N_COL;
 	} else if (start >= b->buffer_size) {
@@ -819,27 +859,32 @@ med_getline(uint64 ln, Buf *p, void *arg)
 	if (end) {
 		buf_read(b, data, addr, end);
 	}
-	for (int j=0; j<end; j++) {
-		bprintf(p, TEXT(" %02x"), data[j]);
+	for (i=0; i<end; i++) {
+		bprintf(p, TEXT(" %02x"), data[i]);
 	}
-	for (int j=end; j<N_COL; j++) {
+	for (i=end; i<N_COL; i++) {
 		bprintf(p, TEXT(" --"));
 	}
 	bprintf(p, TEXT("  "));
-	for (int j=0; j<end; j++) {
-		uchar c = data[j];
-		p->putc(p, c < 0x20 || c > 0x7e ? '.' : c);
+	for (i=0; i<end; i++) {
+		uchar c = data[i];
+		p->putc(p, (TCHAR)(c < 0x20 || c > 0x7e ? '.' : c));
 	}
 }
 
 void
 handle_wm_create(UI *ui, LPCREATESTRUCT create)
 {
+	static int sbparts[] = { 64, 128, 256, -1 };
+
 	HWND hwnd = ui->hwnd;
 	HWND monoedit;
 	HWND status_bar;
-
 	HINSTANCE instance = create->hInstance;
+	HWND treeview;
+	RECT rect;
+	int sbheight;
+
 	/* create and initialize MonoEdit */
 	MedConfig medconf;
 	medconf.mask = MED_CONFIG_GETLINE | MED_CONFIG_FONT;
@@ -858,7 +903,6 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 		(monoedit, GWLP_WNDPROC, (LONG_PTR) med_wndproc);
 
 	/* create tree view */
-	HWND treeview;
 	treeview = CreateWindow(WC_TREEVIEW,
 				TEXT(""),
 				WS_CHILD | WS_VISIBLE |
@@ -872,21 +916,19 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 					NULL,
 					hwnd,
 					ID_STATUS_BAR);
-	int parts[] = { 64, 128, 256, -1 };
-	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) parts);
+	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) sbparts);
 	ui->status_bar = status_bar;
 
 	// get height of status bar
-	RECT rect;
 	GetWindowRect(status_bar, &rect);
-	int status_bar_height = rect.bottom - rect.top;
+	sbheight = rect.bottom - rect.top;
 
 	// adjust size of main window
 	GetWindowRect(hwnd, &rect);
 	rect.right = rect.left + ui->charwidth * N_COL_CHAR;
 	rect.bottom = rect.top +
 		ui->charheight * INITIAL_N_ROW + // MonoEdit
-		status_bar_height; // status bar
+		sbheight; // status bar
 	AdjustWindowRect(&rect, GetWindowLongPtr(hwnd, GWL_STYLE), TRUE);
 	SetWindowPos(hwnd, 0, 0, 0,
 		     rect.right - rect.left,
@@ -918,11 +960,12 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 	case WM_SIZE:
 		{
 			/* will crash if we continue */
-			if (wparam == SIZE_MINIMIZED) return 0;
-			int wid = LOWORD(lparam);
-			int med_wid = 80*ui->charwidth;
-			int med_hei;
+			int wid;
+			int med_hei, med_wid;
 			RECT r;
+			if (wparam == SIZE_MINIMIZED) return 0;
+			wid = LOWORD(lparam);
+			med_wid = 80*ui->charwidth;
 			if (ui->status_bar) {
 				/* adjust status bar geometry automatically */
 				SendMessage(ui->status_bar, WM_SIZE, 0, 0);
@@ -946,10 +989,10 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 	case WM_CHAR:
 		switch (ui->mode) {
 		case MODE_NORMAL:
-			handle_char_normal(ui, wparam);
+			handle_char_normal(ui, (TCHAR) wparam);
 			break;
 		case MODE_REPLACE:
-			handle_char_replace(ui, wparam);
+			handle_char_replace(ui, (TCHAR) wparam);
 			break;
 		default:
 			assert(0);
@@ -1127,10 +1170,11 @@ close_file(UI *ui)
 	ui->hl_len = 0;
 	ui->npluginfunc = 0;
 	if (ui->plugin_name) {
+		int i;
 		free(ui->plugin_name);
 		ui->plugin_name = 0;
 		ui->npluginfunc = 0;
-		for (int i=0; i<ui->npluginfunc; i++) {
+		for (i=0; i<ui->npluginfunc; i++) {
 			free(ui->plugin_funcname[i]);
 		}
 		free(ui->plugin_funcname);
@@ -1162,22 +1206,23 @@ update_monoedit_tags(UI *ui)
 	med_clear_tags(med);
 	if (end_clamp > start_clamp) {
 		MedTag tag;
-		tag.attr = 1;
 		int tag_first_line = start_clamp >> LOG2_N_COL;
 		int tag_last_line = (end_clamp-1) >> LOG2_N_COL; // inclusive
 		int end_x = end_clamp & (N_COL-1);
+		int byteoff = start_clamp & (N_COL-1);
+		tag.attr = 1;
 		if (end_x == 0) {
 			end_x = N_COL;
 		}
-		int byteoff = start_clamp & (N_COL-1);
 		if (tag_last_line > tag_first_line) {
+			int i;
 			tag.start = 10 + byteoff * 3;
 			tag.len = (N_COL - byteoff) * 3 - 1;
 			med_add_tag(med, tag_first_line, &tag);
 			tag.start = 11 + N_COL*3 + byteoff;
 			tag.len = N_COL - byteoff;
 			med_add_tag(med, tag_first_line, &tag);
-			for (int i=tag_first_line+1; i<tag_last_line; i++) {
+			for (i=tag_first_line+1; i<tag_last_line; i++) {
 				tag.start = 10;
 				tag.len = N_COL*3-1;
 				med_add_tag(med, i, &tag);
@@ -1214,7 +1259,12 @@ update_ui(UI *ui)
 	};
 
 	HMENU menu = GetMenu(ui->hwnd);
-	MENUITEMINFO mii = { sizeof mii };
+	MENUITEMINFO mii;
+	uint64 bufsize;
+	uint64 total_lines;
+	int i;
+
+	mii.cbSize = sizeof mii;
 	mii.fMask = MIIM_STATE;
 
 	update_window_title(ui);
@@ -1230,12 +1280,12 @@ update_ui(UI *ui)
 		mii.fState = MFS_GRAYED;
 		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
 	}
-	for (int i=0; i<NELEM(toggle_menus); i++) {
+	for (i=0; i<NELEM(toggle_menus); i++) {
 		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 	}
 
-	uint64 bufsize = ui->buffer->buffer_size;
-	uint64 total_lines = bufsize >> LOG2_N_COL;
+	bufsize = ui->buffer->buffer_size;
+	total_lines = bufsize >> LOG2_N_COL;
 	if (bufsize&(N_COL-1)) {
 		total_lines++;
 	}
@@ -1271,8 +1321,9 @@ move_forward(UI *ui)
 void
 move_backward(UI *ui)
 {
+	int cy;
 	if (ui->cursor_x < 0) return;
-	int cy = ui->cursor_y;
+	cy = ui->cursor_y;
 	if (ui->cursor_x > 0) {
 		ui->cursor_x--;
 		update_physical_cursor_pos(ui);
@@ -1434,6 +1485,10 @@ int
 load_plugin(UI *ui, const char *path)
 {
 	lua_State *L = ui->lua;
+	Buffer *b;
+	Tree *tree;
+	char *plugin_name;
+	int n, i;
 
 	if (luaL_dofile(L, path)) {
 		luaerrorbox(ui->hwnd, L);
@@ -1460,8 +1515,8 @@ load_plugin(UI *ui, const char *path)
 		return -1;
 	}
 
-	Buffer *b = ui->buffer;
-	Tree *tree = convert_tree(&b->tree_rgn, L);
+	b = ui->buffer;
+	tree = convert_tree(&b->tree_rgn, L);
 	getluaobj(L, "buffer");
 	lua_insert(L, -2);
 	lua_setuservalue(L, -2);
@@ -1472,7 +1527,7 @@ load_plugin(UI *ui, const char *path)
 	b->tree = tree;
 
 	lua_getfield(L, -1, "name"); /* plugin.name */
-	char *plugin_name = _strdup(luaL_checkstring(L, -1));
+	plugin_name = _strdup(luaL_checkstring(L, -1));
 	lua_pop(L, 1);
 	if (ui->plugin_name) {
 		free(ui->plugin_name);
@@ -1483,15 +1538,16 @@ load_plugin(UI *ui, const char *path)
 	lua_pushstring(L, "functions");
 	lua_gettable(L, -3);
 	luaL_checktype(L, -1, LUA_TTABLE);
-	int n = (int) luaL_len(L, -1);
+	n = (int) luaL_len(L, -1);
 	ui->npluginfunc = n;
 	ui->plugin_funcname = malloc(n * sizeof *ui->plugin_funcname);
-	for (int i=0; i<n; i++) {
+	for (i=0; i<n; i++) {
+		char *funcname;
 		lua_geti(L, -1, 1+i); /* push {func, funcname} */
 		lua_geti(L, -1, 1); /* push func */
 		lua_seti(L, -4, 1+i);
 		lua_geti(L, -1, 2); /* push funcname */
-		char *funcname = _strdup(luaL_checkstring(L, -1));
+		funcname = _strdup(luaL_checkstring(L, -1));
 		lua_pop(L, 2);
 		ui->plugin_funcname[i] = funcname;
 	}
@@ -1506,8 +1562,9 @@ update_plugin_menu(UI *ui)
 	HMENU mainmenu = GetMenu(ui->hwnd);
 
 	if (ui->plugin_name) {
+		int i;
 		HMENU plugin_menu = CreateMenu();
-		for (int i=0; i<ui->npluginfunc; i++) {
+		for (i=0; i<ui->npluginfunc; i++) {
 			AppendMenuA(plugin_menu, MF_STRING, ID_PLUGIN_0+i,
 				    ui->plugin_funcname[i]);
 		}
@@ -1525,7 +1582,12 @@ update_plugin_menu(UI *ui)
 int
 load_filetype_plugin(UI *ui, const TCHAR *path)
 {
-	int i = lstrlen(path);
+	lua_State *L;
+	const char *ft;
+	int ret;
+	int i;
+
+	i = lstrlen(path);
 	while (i >= 1) {
 		switch (path[i-1]) {
 		case '/':
@@ -1537,7 +1599,6 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
 		i--;
 	}
 	return 0;
-	lua_State *L;
 det:
 	L = ui->lua;
 	getluaobj(L, "ftdet");
@@ -1551,11 +1612,10 @@ det:
 		lua_pop(L, 1);
 		return -1;
 	}
-	const char *ft = 0;
+	ft = 0;
 	if (lua_isstring(L, -1)) {
 		ft = luaL_checkstring(L, -1);
 	}
-	int ret;
 	if (ft) {
 		char *path = asprintfA("%s/filetype/%s.lua", workdir, ft);
 		ret = load_plugin(ui, path);
@@ -1578,13 +1638,14 @@ save_file_as(UI *ui, const TCHAR *path)
 {
 	HANDLE dstfile =
 		CreateFile(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+	int ret;
 	if (dstfile == INVALID_HANDLE_VALUE) {
 		TCHAR errtext[BUFSIZE];
 		format_error_code(errtext, BUFSIZE, GetLastError());
 		errorbox(ui->hwnd, errtext);
 		return -1;
 	}
-	int ret = buf_save(ui->buffer, dstfile);
+	ret = buf_save(ui->buffer, dstfile);
 	CloseHandle(dstfile);
 	return ret;
 }
@@ -1593,15 +1654,17 @@ static void
 addtotree(HWND treeview, HTREEITEM parent, Tree *tree)
 {
 	TVINSERTSTRUCTA tvins;
+	HTREEITEM item;
+	int i;
+
 	tvins.hParent = parent;
 	tvins.hInsertAfter = TVI_LAST;
 	tvins.item.mask = TVIF_TEXT;
 	tvins.item.pszText = tree->name;
 
-	HTREEITEM item = (HTREEITEM)
-		SendMessage(treeview, TVM_INSERTITEMA,
-			    0, (LPARAM) &tvins);
-	for (int i=0; i<tree->n_child; i++)
+	item = (HTREEITEM)
+		SendMessage(treeview, TVM_INSERTITEMA, 0, (LPARAM) &tvins);
+	for (i=0; i<tree->n_child; i++)
 		addtotree(treeview, item, tree->children[i]);
 }
 
@@ -1615,9 +1678,11 @@ populate_treeview(UI *ui)
 int
 format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 {
+	char *buf;
+	int vrlen;
+
 	*ptypename = 0;
 	*pvaluerepr = 0;
-	char *buf;
 
 	switch (t->type) {
 		lua_State *L;
@@ -1681,14 +1746,15 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		lua_getfield(L, -1, "value");
 		lua_remove(L, -2);
 		lua_pushinteger(L, t->intvalue);
-		int vrlen = 0;
+		vrlen = 0;
 		if (lua_pcall(L, 2, 1, 0)) {
 			puts(lua_tostring(L, -1));
 		} else {
 			size_t n;
 			const char *vr = luaL_tolstring(L, -1, &n);
+			char *vrdup;
 			n += 1;
-			char *vrdup = ralloc(&rgn, n);
+			vrdup = ralloc(&rgn, n);
 			memcpy(vrdup, vr, n);
 			*pvaluerepr = vrdup;
 			vrlen = n;

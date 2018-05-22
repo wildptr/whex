@@ -7,8 +7,8 @@
 int
 file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
 {
-	buf[0] = 0;
 	OPENFILENAME ofn = {0};
+	buf[0] = 0;
 	ofn.lStructSize = sizeof ofn;
 	ofn.hwndOwner = owner;
 	ofn.hInstance = GetModuleHandle(0);

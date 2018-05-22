@@ -45,6 +45,8 @@ int __stdcall lstrlenW(const wchar_t *);
 #define lstrlen lstrlenA
 #endif
 
+#define INT64 __int64
+
 enum {
 	F_SIGNED = 1,
 	F_UPPERCASE = 2,
@@ -55,7 +57,7 @@ enum {
 union u {
 	int i;
 	long l;
-	long long L;
+	INT64 L;
 };
 
 #define PUTNUM10(NAME, FIELD, TYPE)\
@@ -67,7 +69,7 @@ union u {
 		TCHAR *p = buf;\
 		if (neg) v = -v;\
 		do {\
-			int d = (unsigned TYPE) v % 10;\
+			int d = (int)((unsigned TYPE) v % 10);\
 			*p++ = '0'+d;\
 			v = (unsigned TYPE) v / 10;\
 		} while (v);\
@@ -84,7 +86,7 @@ union u {
 		uchar upcase = (f & F_UPPERCASE) != 0;\
 		TCHAR *p = buf;\
 		do {\
-			int d = v&15;\
+			int d = (int) v & 15;\
 			*p++ = d < 10 ? '0'+d : (upcase?'A':'a')+(d-10);\
 			v = (unsigned TYPE) v >> 4;\
 		} while (v);\
@@ -93,10 +95,10 @@ union u {
 
 PUTNUM10(puti10, i, int)
 PUTNUM10(putl10, l, long)
-PUTNUM10(putL10, L, long long)
+PUTNUM10(putL10, L, INT64)
 PUTNUM16(puti16, i, int)
 PUTNUM16(putl16, l, long)
-PUTNUM16(putL16, L, long long)
+PUTNUM16(putL16, L, INT64)
 
 typedef TCHAR *(*conv_fn)(union u *, TCHAR *, uint);
 
@@ -108,6 +110,7 @@ putn(void *value, Buf *b, conv_fn conv, int width, uint flags)
 	int len;
 	uchar zeropad = (flags & F_ZEROPAD) != 0;
 	TCHAR pad = zeropad ? '0' : ' ';
+	int i;
 
 	/* This builds the string back to front ... */
 	len = conv(value, buf, flags) - buf;
@@ -119,7 +122,7 @@ putn(void *value, Buf *b, conv_fn conv, int width, uint flags)
 
 	/* ... now we reverse it (could do it recursively but will
 	   conserve the stack space) */
-	for (int i = 0; i < len/2; i++) {
+	for (i = 0; i < len/2; i++) {
 		TCHAR tmp = buf[i];
 		buf[i] = buf[len-i-1];
 		buf[len-i-1] = tmp;
@@ -136,20 +139,24 @@ vbprintf(Buf *b, const TCHAR *fmt, va_list va)
 	TCHAR ch;
 
 	while ((ch = *fmt++)) {
+		uint flags;
+		TCHAR *s;
+		int n;
+		uint width;
+		int l;
+		conv_fn conv;
+		union u val;
+		Formatter f;
+		void *d;
+
 		if (ch!='%') {
 			ret += b->putc(b, ch);
 			continue;
 		}
 
-		uint flags = 0;
-		TCHAR *s;
-		int n;
-		uint width = 0;
-		int l = 0;
-		conv_fn conv;
-		union u val;
-		int (*f)();
-		void *d;
+		flags = 0;
+		width = 0;
+		l = 0;
 
 		ch = *fmt++;
 
@@ -195,7 +202,7 @@ spec:
 				break;
 			default:
 				conv = putL10;
-				val.L = va_arg(va, long long);
+				val.L = va_arg(va, INT64);
 			}
 			ret += putn(&val, b, conv, width, flags);
 			break;
@@ -215,7 +222,7 @@ spec:
 				break;
 			default:
 				conv = putL16;
-				val.L = va_arg(va, long long);
+				val.L = va_arg(va, INT64);
 			}
 			ret += putn(&val, b, conv, width, flags);
 			break;

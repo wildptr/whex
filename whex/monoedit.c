@@ -4,6 +4,9 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#if _MSC_VER <= 1200
+#include "vc6compat.h"
+#endif
 
 #include "types.h"
 #include "buf.h"
@@ -73,28 +76,40 @@ static void set_cursor_pos(Med *, HWND, int y, int x);
 static void
 paint_row(Med *w, HWND hwnd, HDC dc, int row)
 {
+	Line *line;
+	MedTag *segments, *t;
+	int ntag;
+	int maxnseg;
+	int nextstart;
+	int s;
+	int prev_end;
+	int y;
+	int i;
+	int linelen;
+	RECT r;
+
 	assert(row >= 0 && row < w->nrow);
-	Line *line = &w->buffer[row];
-	int ntag = 0;
-	MedTag *t = line->tags;
+	line = &w->buffer[row];
+	ntag = 0;
+	t = line->tags;
 	while (t) {
 		ntag++;
 		t = t->next;
 	}
-	int maxnseg = ntag*2+1;
-	MedTag *segments = malloc(maxnseg * sizeof *segments);
-	int nextstart;
+	maxnseg = ntag*2+1;
+	segments = malloc(maxnseg * sizeof *segments);
 	t = line->tags;
-	int s = 0;
-	int prev_end = 0;
+	s = 0;
+	prev_end = 0;
 	for (;;) {
+		int len;
 		if (t) {
 			nextstart = t->start;
 		} else {
 			nextstart = max(line->textlen, prev_end);
 		}
 		/* untagged segment */
-		int len = nextstart - prev_end;
+		len = nextstart - prev_end;
 		if (len) {
 			segments[s].start = prev_end;
 			segments[s].len = len;
@@ -107,15 +122,16 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 		prev_end = t->start + t->len;
 		t = t->next;
 	}
-	int y = row * w->charheight;
-	for (int i=0; i<s; i++) {
+	y = row * w->charheight;
+	for (i=0; i<s; i++) {
 		MedTag *seg = &segments[i];
 		COLORREF old_bkcolor;
+		int x;
 		if (seg->attr) {
 			old_bkcolor = SetBkColor
 				(dc, RGB(204, 204, 204));
 		}
-		int x = seg->start * w->charwidth;
+		x = seg->start * w->charwidth;
 		if (seg->start + seg->len <= line->textlen) {
 			TextOut(dc, x, y, line->text + seg->start, seg->len);
 		} else {
@@ -135,14 +151,13 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 			SetBkColor(dc, old_bkcolor);
 		}
 	}
-	int linelen = 0;
+	linelen = 0;
 	if (s) {
 		MedTag *lastseg = &segments[s-1];
 		linelen = lastseg->start + lastseg->len;
 	}
 	free(segments);
 	/* fill right margin */
-	RECT r;
 	r.left = w->charwidth * linelen;
 	r.right = w->clientwidth;
 	if (r.left < r.right) {
@@ -161,8 +176,9 @@ paint(Med *w, HWND hwnd)
 
 	SelectObject(dc, w->bgbrush);
 	if (w->buffer) {
+		int i;
 		SelectObject(dc, w->font);
-		for (int i=0; i<w->nrow; i++) {
+		for (i=0; i<w->nrow; i++) {
 			paint_row(w, hwnd, dc, i);
 		}
 		r.top = w->nrow * w->charheight;
@@ -177,7 +193,8 @@ paint(Med *w, HWND hwnd)
 static void
 clear_tags(Med *w)
 {
-	for (int i=0; i<w->nrow; i++) {
+	int i;
+	for (i=0; i<w->nrow; i++) {
 		Line *line = &w->buffer[i];
 		line->tags = 0;
 	}
@@ -190,8 +207,13 @@ clear_tags(Med *w)
 static void
 add_tag(Med *w, int row, MedTag *tag)
 {
+	Line *line;
+	MedTag *newtag;
+	MedTag *before;
+	MedTag *next;
+
 	assert(row >= 0 && row < w->nrow);
-	Line *line = &w->buffer[row];
+	line = &w->buffer[row];
 	assert(line);
 
 	if (w->ntag == w->tag_cap) {
@@ -204,7 +226,7 @@ add_tag(Med *w, int row, MedTag *tag)
 			w->tagbuf = malloc(w->tag_cap * sizeof *w->tagbuf);
 		}
 	}
-	MedTag *newtag = w->tagbuf + w->ntag++;
+	newtag = w->tagbuf + w->ntag++;
 #if 0
 	_printf("add_tag row=%d start=%d len=%d\n", row, tag->start, tag->len);
 #endif
@@ -212,8 +234,8 @@ add_tag(Med *w, int row, MedTag *tag)
 	newtag->len = tag->len;
 	newtag->attr = tag->attr;
 
-	MedTag *before = 0;
-	MedTag *next = line->tags;
+	before = 0;
+	next = line->tags;
 	while (next && next->start < newtag->start) {
 		before = next;
 		next = before->next;
@@ -235,8 +257,8 @@ static void
 set_font(Med *w, HWND hwnd, HFONT font)
 {
 	HDC dc = GetDC(hwnd);
-	SelectObject(dc, font);
 	TEXTMETRIC tm;
+	SelectObject(dc, font);
 	GetTextMetrics(dc, &tm);
 	ReleaseDC(hwnd, dc);
 	w->charwidth = tm.tmAveCharWidth;
@@ -288,7 +310,8 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		   when WM_NCCREATE returns FALSE (which means we failed to
 		   allocate 'w'). */
 		if (w) {
-			for (int i=0; i<w->nrow; i++) {
+			int i;
+			for (i=0; i<w->nrow; i++) {
 				free(w->buffer[i].text);
 			}
 			free(w->buffer);
@@ -325,12 +348,12 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		if (wparam != SIZE_MINIMIZED) {
 			int wid = LOWORD(lparam);
 			int hei = HIWORD(lparam);
-			w->clientwidth = wid;
-			w->clientheight = hei;
 			int ch = w->charheight;
 			int cw = w->charwidth;
 			int new_nrow = hei/ch;
 			int new_ncol = wid/cw;
+			w->clientwidth = wid;
+			w->clientheight = hei;
 			set_size(w, new_nrow, new_ncol);
 			InvalidateRect(hwnd, 0, 0);
 		}
@@ -594,7 +617,8 @@ getline(Med *w, int row)
 static void
 update_buffer(Med *w)
 {
-	for (int i=0; i<w->nrow; i++) {
+	int i;
+	for (i=0; i<w->nrow; i++) {
 		Line *l = &w->buffer[i];
 		free(l->text);
 		getline(w, i);
@@ -625,30 +649,34 @@ scroll(Med *w, HWND hwnd, int delta)
 #endif
 	w->current_line -= delta;
 	if (delta > 0) {
+		int d, s;
+		int i;
 		if (delta > w->nrow) delta = w->nrow;
-		int d = w->nrow-1;
-		int s = d - delta;
-		for (int i=w->nrow-delta; i<w->nrow; i++) {
+		d = w->nrow-1;
+		s = d - delta;
+		for (i=w->nrow-delta; i<w->nrow; i++) {
 			free(w->buffer[i].text);
 		}
 		while (s >= 0) {
 			w->buffer[d--] = w->buffer[s--];
 		}
-		for (int i=0; i<delta; i++) {
+		for (i=0; i<delta; i++) {
 			getline(w, i);
 		}
 	} else if (delta < 0) {
+		int d, s;
+		int i;
 		delta = -delta;
 		if (delta > w->nrow) delta = w->nrow;
-		int d = 0;
-		int s = delta;
-		for (int i=0; i<delta; i++) {
+		d = 0;
+		s = delta;
+		for (i=0; i<delta; i++) {
 			free(w->buffer[i].text);
 		}
 		while (s < w->nrow) {
 			w->buffer[d++] = w->buffer[s++];
 		}
-		for (int i=w->nrow-delta; i<w->nrow; i++) {
+		for (i=w->nrow-delta; i<w->nrow; i++) {
 			getline(w, i);
 		}
 	}
@@ -694,12 +722,14 @@ med_set_cursor_pos(HWND hwnd, int y, int x)
 static void
 set_size(Med *w, int nrow, int ncol)
 {
+	int i;
+
 	assert(nrow >= 0);
 	assert(ncol >= 0);
 	w->ncol = ncol;
 	if (nrow == w->nrow) return;
 	if (nrow < w->nrow) {
-		for (int i=nrow; i<w->nrow; i++) {
+		for (i=nrow; i<w->nrow; i++) {
 			free(w->buffer[i].text);
 		}
 	}
@@ -707,7 +737,7 @@ set_size(Med *w, int nrow, int ncol)
 	if (nrow > w->nrow) {
 		memset(&w->buffer[w->nrow], 0,
 		       (nrow - w->nrow) * sizeof w->buffer[0]);
-		for (int i=w->nrow; i<nrow; i++) {
+		for (i=w->nrow; i<nrow; i++) {
 			getline(w, i);
 		}
 	}
@@ -842,11 +872,14 @@ update_scrollbar_range(Med *w, HWND hwnd)
 {
 	uint64 bottom = w->total_lines;
 	int s = 0;
+	SCROLLINFO si;
+	int maxscroll;
+	int newpos;
+
 	while (bottom >> s >= 0x80000000) s++;
 	w->sbscale = s;
-	int maxscroll = (int)(bottom >> s);
-	int newpos = compute_scrollbar_pos(w);
-	SCROLLINFO si;
+	maxscroll = (int)(bottom >> s);
+	newpos = compute_scrollbar_pos(w);
 	si.cbSize = sizeof si;
 	si.fMask = SIF_RANGE | SIF_POS;
 	si.nMin = 0;

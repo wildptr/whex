@@ -11,6 +11,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#if _MSC_VER <= 1200
+#include "vc6compat.h"
+#endif
 
 #include "types.h"
 #include "region.h"
@@ -135,9 +138,12 @@ init_window(lua_State *L, Window *w, const char *wndclass, DWORD wndstyle,
 	    int cfgindex)
 {
 	Config c = {0};
+	int x, y, wid, hei;
+	void *arg;
+	HWND hwnd;
+
 	parse_config(L, cfgindex, &c);
 
-	int x, y, wid, hei;
 	if (c.has_pos) {
 		x = c.x;
 		y = c.y;
@@ -160,12 +166,11 @@ init_window(lua_State *L, Window *w, const char *wndclass, DWORD wndstyle,
 		hei = CW_USEDEFAULT;
 	}
 
-	void *arg = 0;
+	arg = 0;
 	if (wndclass == luatk_class) {
 		arg = w;
 	}
 
-	HWND hwnd;
 	/* sets w->hwnd */
 	hwnd = CreateWindowA(wndclass, c.text, wndstyle,
 			     x, y, wid, hei,
@@ -660,8 +665,9 @@ api_listview_insert_column(lua_State *L)
 	Window *w = lua_touserdata(L, 1);
 	long col = (long) luaL_checkinteger(L, 2);
 	char *colname = _strdup(luaL_checkstring(L, 3));
-
 	LVCOLUMNA lvc;
+	long ret;
+
 	lvc.mask = LVCF_TEXT;
 	lvc.pszText = colname;
 
@@ -675,7 +681,7 @@ api_listview_insert_column(lua_State *L)
 		lua_pop(L, -1);
 	}
 	
-	long ret = SendMessageA(w->hwnd, LVM_INSERTCOLUMNA, col, (LPARAM) &lvc);
+	ret = SendMessageA(w->hwnd, LVM_INSERTCOLUMNA, col, (LPARAM) &lvc);
 	free(colname);
 	assert(ret == col);
 
@@ -687,25 +693,30 @@ api_listview_insert_item(lua_State *L)
 {
 	Window *w = lua_touserdata(L, 1);
 	int row = (int) luaL_checkinteger(L, 2);
+	int n;
+	char *itemname;
+	LVITEMA lvi;
+	int ret;
+	int i;
+
 	lua_len(L, 3);
-	int n = (int) luaL_checkinteger(L, -1);
+	n = (int) luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
 	lua_geti(L, 3, 1);
-	char *itemname = _strdup(luaL_checkstring(L, -1));
+	itemname = _strdup(luaL_checkstring(L, -1));
 	assert(itemname);
 
 	lua_pop(L, 1);
 
-	LVITEMA lvi;
 	lvi.iItem = row;
 	lvi.iSubItem = 0;
 	lvi.mask = LVIF_TEXT;
 	lvi.pszText = itemname;
 
-	int ret = SendMessageA(w->hwnd, LVM_INSERTITEMA, 0, (LPARAM) &lvi);
+	ret = SendMessageA(w->hwnd, LVM_INSERTITEMA, 0, (LPARAM) &lvi);
 	free(itemname);
 	assert(ret == row);
-	for (int i=1; i<n; i++) {
+	for (i=1; i<n; i++) {
 		lua_geti(L, 3, 1+i);
 		itemname = _strdup(luaL_checkstring(L, -1));
 		lua_pop(L, 1);
@@ -773,8 +784,8 @@ parse_config(lua_State *L, int index, Config *c)
 	lua_pushstring(L, "parent");
 	lua_gettable(L, index);
 	if (!lua_isnil(L, -1)) {
-		c->has_parent = 1;
 		Window *w = lua_touserdata(L, -1);
+		c->has_parent = 1;
 		c->parent = w->hwnd;
 	}
 	lua_pop(L, 1);
@@ -794,7 +805,7 @@ api_listbox(lua_State *L)
 	Window *w = lua_newuserdata(L, sizeof *w);
 	luaL_setmetatable(L, "ListBox");
 	w->kind = LISTBOX;
-	init_window(L, w, WC_LISTBOXA, WS_CHILD | WS_VISIBLE | LBS_NOTIFY, 1);
+	init_window(L, w, "ListBox", WS_CHILD | WS_VISIBLE | LBS_NOTIFY, 1);
 	return 1;
 }
 
@@ -878,6 +889,8 @@ med_getline(uint64 ln, Buf *b, void *arg)
 {
 	lua_State *L = lua;
 	HWND med = (HWND) arg;
+	size_t l;
+	const char *s;
 	getluafield(L, med, F_MONOEDIT_SOURCE);
 	lua_pushinteger(L, ln);
 	/* If the Lua function returns nothing, this routine crashes.
@@ -886,15 +899,16 @@ med_getline(uint64 ln, Buf *b, void *arg)
 		lua_pop(L, 1);
 		return;
 	}
-	size_t l;
-	const char *s = luaL_checklstring(L, -1, &l);
+	s = luaL_checklstring(L, -1, &l);
 	if (!s) return;
 #ifdef UNICODE
-	int buflen = MultiByteToWideChar(CP_ACP, 0, s, l, 0, 0);
-	TCHAR *tstr = malloc(buflen * sizeof *tstr);
-	MultiByteToWideChar(CP_ACP, 0, s, l, tstr, buflen);
-	b->puts(b, tstr, buflen);
-	free(tstr);
+	{
+		int buflen = MultiByteToWideChar(CP_ACP, 0, s, l, 0, 0);
+		TCHAR *tstr = malloc(buflen * sizeof *tstr);
+		MultiByteToWideChar(CP_ACP, 0, s, l, tstr, buflen);
+		b->puts(b, tstr, buflen);
+		free(tstr);
+	}
 #else
 	b->puts(b, s, l);
 #endif

@@ -416,14 +416,6 @@ notify:
 		case VK_NEXT:
 			scroll_down_page(w, hwnd);
 			goto notify;
-		case VK_HOME:
-			w->cursorx = 0;
-			update_caret_pos(w);
-			goto notify;
-		case VK_END:
-			w->cursorx = max(w->ncol-1, 0);
-			update_caret_pos(w);
-			goto notify;
 		}
 		return 0;
 	}

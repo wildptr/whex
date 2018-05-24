@@ -1,9 +1,8 @@
-typedef struct med_tag {
-	struct med_tag *next;
-	int start;
-	int len;
-	uint attr;
-} MedTag;
+typedef struct {
+	uchar flags;
+	COLORREF text_color;
+	COLORREF bg_color;
+} MedTextAttr;
 
 typedef void (*MedGetLineProc)(uint64 ln, Buf *buf, void *arg);
 
@@ -23,6 +22,12 @@ enum {
 	MED_NOTIFY_POS_CHANGED
 };
 
+enum {
+	MED_ATTR_TEXT_COLOR	= 1,
+	MED_ATTR_BG_COLOR	= 2,
+	MED_ATTR_BOLD_FONT	= 4,
+};
+
 ATOM med_register_class(void);
 void med_set_current_line(HWND, uint64 ln);
 uint64 med_get_current_line(HWND);
@@ -34,7 +39,7 @@ TCHAR *med_alloc_text(HWND, int nch);
 #endif
 void med_update_buffer(HWND);
 void med_scroll(HWND, int delta);
-void med_add_tag(HWND, int ln, MedTag *tag);
+void med_add_tag(HWND, int ln, int start, int len, MedTextAttr *attr);
 void med_clear_tags(HWND);
 void med_set_cursor_pos(HWND, int y, int x);
 void med_set_size(HWND, int nrow, int ncol);

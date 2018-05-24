@@ -13,9 +13,16 @@
 #include "monoedit.h"
 #include "printf.h"
 
+typedef struct tag {
+	struct tag *next;
+	int start;
+	int len;
+	MedTextAttr attr;
+} Tag;
+
 typedef struct {
 	TCHAR *text;
-	MedTag *tags;
+	Tag *tags;
 	int textlen;
 } Line;
 
@@ -33,14 +40,13 @@ typedef struct {
 	void *getline_arg;
 	uint64 current_line;
 	uint64 total_lines;
-	MedTag *tagbuf;
-	int ntag;
-	int tag_cap;
 	int clientwidth;
 	int clientheight;
 	HBRUSH bgbrush;
 	int sbscale;
 	uint id;
+	COLORREF default_text_color;
+	COLORREF default_bg_color;
 } Med;
 
 #if 0
@@ -54,8 +60,9 @@ static void set_source(Med *w, MedGetLineProc proc, void *arg);
 static TCHAR *alloc_text(Med *w, int nch);
 static void free_text(Med *w, TCHAR *text, int nch);
 static void init_textbuf(Med *w, int len);
-static void free_line(Med *w, Line *l);
 #endif
+static void free_line(Line *l);
+static void free_line_tags(Line *l);
 static void update_buffer(Med *w);
 static void scroll(Med *w, HWND hwnd, int delta);
 static void set_size(Med *w, int nrow, int ncol);
@@ -77,7 +84,7 @@ static void
 paint_row(Med *w, HWND hwnd, HDC dc, int row)
 {
 	Line *line;
-	MedTag *segments, *t;
+	Tag *segments, *t;
 	int ntag;
 	int maxnseg;
 	int nextstart;
@@ -113,7 +120,7 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 		if (len) {
 			segments[s].start = prev_end;
 			segments[s].len = len;
-			segments[s].attr = 0;
+			segments[s].attr.flags = 0;
 			s++;
 		}
 		if (!t) break;
@@ -124,13 +131,17 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 	}
 	y = row * w->charheight;
 	for (i=0; i<s; i++) {
-		MedTag *seg = &segments[i];
-		COLORREF old_bkcolor;
+		Tag *seg = &segments[i];
+		COLORREF textcolor = w->default_text_color;
+		COLORREF bgcolor = w->default_bg_color;
 		int x;
-		if (seg->attr) {
-			old_bkcolor = SetBkColor
-				(dc, RGB(204, 204, 204));
-		}
+		MedTextAttr *attr = &seg->attr;
+		if (attr->flags & MED_ATTR_TEXT_COLOR)
+			textcolor = attr->text_color;
+		if (attr->flags & MED_ATTR_BG_COLOR)
+			bgcolor = attr->bg_color;
+		SetTextColor(dc, textcolor);
+		SetBkColor(dc, bgcolor);
 		x = seg->start * w->charwidth;
 		if (seg->start + seg->len <= line->textlen) {
 			TextOut(dc, x, y, line->text + seg->start, seg->len);
@@ -147,13 +158,10 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 			TextOut(dc, x, y, text, seg->len);
 			free(text);
 		}
-		if (seg->attr) {
-			SetBkColor(dc, old_bkcolor);
-		}
 	}
 	linelen = 0;
 	if (s) {
-		MedTag *lastseg = &segments[s-1];
+		Tag *lastseg = &segments[s-1];
 		linelen = lastseg->start + lastseg->len;
 	}
 	free(segments);
@@ -195,47 +203,30 @@ clear_tags(Med *w)
 {
 	int i;
 	for (i=0; i<w->nrow; i++) {
-		Line *line = &w->buffer[i];
-		line->tags = 0;
+		Line *l = &w->buffer[i];
+		free_line_tags(l);
 	}
-	w->ntag = 0;
-#if 0
-	_printf("clear_tags\n");
-#endif
 }
 
 static void
-add_tag(Med *w, int row, MedTag *tag)
+add_tag(Med *w, int row, int start, int len, MedTextAttr *attr)
 {
-	Line *line;
-	MedTag *newtag;
-	MedTag *before;
-	MedTag *next;
+	Line *l;
+	Tag *newtag;
+	Tag *before;
+	Tag *next;
 
 	assert(row >= 0 && row < w->nrow);
-	line = &w->buffer[row];
-	assert(line);
+	l = &w->buffer[row];
+	assert(l);
 
-	if (w->ntag == w->tag_cap) {
-		if (w->tagbuf) {
-			w->tag_cap *= 2;
-			w->tagbuf = realloc(w->tagbuf, w->tag_cap *
-					    sizeof *w->tagbuf);
-		} else {
-			w->tag_cap = 16;
-			w->tagbuf = malloc(w->tag_cap * sizeof *w->tagbuf);
-		}
-	}
-	newtag = w->tagbuf + w->ntag++;
-#if 0
-	_printf("add_tag row=%d start=%d len=%d\n", row, tag->start, tag->len);
-#endif
-	newtag->start = tag->start;
-	newtag->len = tag->len;
-	newtag->attr = tag->attr;
+	newtag = malloc(sizeof *newtag);
+	newtag->start = start;
+	newtag->len = len;
+	newtag->attr = *attr;
 
 	before = 0;
-	next = line->tags;
+	next = l->tags;
 	while (next && next->start < newtag->start) {
 		before = next;
 		next = before->next;
@@ -244,7 +235,7 @@ add_tag(Med *w, int row, MedTag *tag)
 	if (before) {
 		before->next = newtag;
 	} else {
-		line->tags = newtag;
+		l->tags = newtag;
 	}
 }
 
@@ -303,6 +294,12 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			}
 			w->id = (uint) cs->hMenu;
 		}
+		{
+			HDC dc = GetDC(hwnd);
+			w->default_text_color = GetTextColor(dc);
+			w->default_bg_color = GetBkColor(dc);
+			ReleaseDC(hwnd, dc);
+		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
 	case WM_NCDESTROY:
@@ -312,10 +309,9 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		if (w) {
 			int i;
 			for (i=0; i<w->nrow; i++) {
-				free(w->buffer[i].text);
+				free_line(&w->buffer[i]);
 			}
 			free(w->buffer);
-			free(w->tagbuf);
 			free(w);
 		}
 		return 0;
@@ -326,13 +322,11 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		set_font(w, hwnd, (HFONT) wparam);
 		return 0;
 	case WM_SETFOCUS:
-		_printf("SETFOCUS\n");
 		CreateCaret(hwnd, 0, w->charwidth, w->charheight);
 		update_caret_pos(w);
 		ShowCaret(hwnd);
 		return 0;
 	case WM_KILLFOCUS:
-		_printf("KILLFOCUS\n");
 		HideCaret(hwnd);
 		DestroyCaret();
 		return 0;
@@ -583,12 +577,6 @@ med_alloc_text(HWND hwnd, int nch)
 }
 
 static void
-free_line(Med *w, Line *l)
-{
-	free_text(w, l->text, l->textlen);
-}
-
-static void
 init_textbuf(Med *w, int len)
 {
 	w->textbuf = malloc(len);
@@ -598,6 +586,26 @@ init_textbuf(Med *w, int len)
 }
 
 #endif
+
+static void
+free_line_tags(Line *l)
+{
+	Tag *t = l->tags;
+	while (t) {
+		Tag *next = t->next;
+		free(t);
+		t = next;
+	}
+	l->tags = 0;
+}
+
+static void
+free_line(Line *l)
+{
+	free(l->text);
+	l->text = 0;
+	free_line_tags(l);
+}
 
 static void
 getline(Med *w, int row)
@@ -619,8 +627,7 @@ update_buffer(Med *w)
 {
 	int i;
 	for (i=0; i<w->nrow; i++) {
-		Line *l = &w->buffer[i];
-		free(l->text);
+		free_line(&w->buffer[i]);
 		getline(w, i);
 	}
 }
@@ -649,21 +656,24 @@ scroll(Med *w, HWND hwnd, int delta)
 #endif
 	w->current_line -= delta;
 	if (delta > 0) {
+		/* move lines down, first 'delta' lines exposed */
 		int d, s;
 		int i;
 		if (delta > w->nrow) delta = w->nrow;
 		d = w->nrow-1;
 		s = d - delta;
 		for (i=w->nrow-delta; i<w->nrow; i++) {
-			free(w->buffer[i].text);
+			free_line(&w->buffer[i]);
 		}
 		while (s >= 0) {
 			w->buffer[d--] = w->buffer[s--];
 		}
-		for (i=0; i<delta; i++) {
-			getline(w, i);
-		}
+		i = 0;
+		memset(w->buffer+i, 0, delta * sizeof *w->buffer);
+		while (i < delta) 
+			getline(w, i++);
 	} else if (delta < 0) {
+		/* move lines up, last 'delta' lines exposed */
 		int d, s;
 		int i;
 		delta = -delta;
@@ -671,14 +681,15 @@ scroll(Med *w, HWND hwnd, int delta)
 		d = 0;
 		s = delta;
 		for (i=0; i<delta; i++) {
-			free(w->buffer[i].text);
+			free_line(&w->buffer[i]);
 		}
 		while (s < w->nrow) {
 			w->buffer[d++] = w->buffer[s++];
 		}
-		for (i=w->nrow-delta; i<w->nrow; i++) {
-			getline(w, i);
-		}
+		i = w->nrow - delta;
+		memset(w->buffer+i, 0, delta * sizeof *w->buffer);
+		while (i < w->nrow)
+			getline(w, i++);
 	}
 	update_scrollbar_pos(w, hwnd);
 }
@@ -691,10 +702,10 @@ med_scroll(HWND hwnd, int delta)
 }
 
 void
-med_add_tag(HWND hwnd, int ln, MedTag *tag)
+med_add_tag(HWND hwnd, int ln, int start, int len, MedTextAttr *attr)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	add_tag(w, ln, tag);
+	add_tag(w, ln, start, len, attr);
 }
 
 void
@@ -730,7 +741,7 @@ set_size(Med *w, int nrow, int ncol)
 	if (nrow == w->nrow) return;
 	if (nrow < w->nrow) {
 		for (i=nrow; i<w->nrow; i++) {
-			free(w->buffer[i].text);
+			free_line(&w->buffer[i]);
 		}
 	}
 	w->buffer = realloc(w->buffer, nrow * sizeof *w->buffer);

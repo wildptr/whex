@@ -101,7 +101,8 @@ void handle_wm_create(UI *, LPCREATESTRUCT);
 int open_file(UI *, TCHAR *);
 void close_file(UI *);
 void update_ui(UI *);
-void update_monoedit_tags(UI *);
+void update_field_highlight(UI *);
+void update_eof_tags(UI *);
 void move_forward(UI *);
 void move_backward(UI *);
 void move_next_field(UI *);
@@ -507,6 +508,7 @@ update_field_info(UI *ui)
 	if (ui->filepath) {
 		Tree *tree = ui->buffer->tree;
 		Tree *leaf = 0;
+		med_clear_tags(ui->monoedit);
 		if (tree) {
 			if (!cursor_in_gap(ui)) {
 				leaf = tree_lookup(tree, cursor_pos(ui));
@@ -518,9 +520,10 @@ update_field_info(UI *ui)
 				ui->hl_start = 0;
 				ui->hl_len = 0;
 			}
-			update_monoedit_tags(ui);
-			InvalidateRect(ui->monoedit, 0, FALSE);
+			update_field_highlight(ui);
 		}
+		update_eof_tags(ui);
+		InvalidateRect(ui->monoedit, 0, FALSE);
 		update_status_text(ui, leaf);
 	} else {
 		HWND statusbar = ui->status_bar;
@@ -859,14 +862,12 @@ med_getline(uint64 ln, Buf *p, void *arg)
 	if (end) {
 		buf_read(b, data, addr, end);
 	}
-	for (i=0; i<end; i++) {
+	for (i=end; i<N_COL; i++) data[i] = 0;
+	for (i=0; i<N_COL; i++) {
 		bprintf(p, TEXT(" %02x"), data[i]);
 	}
-	for (i=end; i<N_COL; i++) {
-		bprintf(p, TEXT(" --"));
-	}
 	bprintf(p, TEXT("  "));
-	for (i=0; i<end; i++) {
+	for (i=0; i<N_COL; i++) {
 		uchar c = data[i];
 		p->putc(p, (TCHAR)(c < 0x20 || c > 0x7e ? '.' : c));
 	}
@@ -996,13 +997,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			break;
 		default:
 			assert(0);
-		}
-		return 0;
-	case WM_NOTIFY:
-		{
-			NMHDR *nmh = (NMHDR *) lparam;
-			if (nmh->hwndFrom == ui->monoedit) {
-			}
 		}
 		return 0;
 	case WM_COMMAND:
@@ -1191,7 +1185,7 @@ clamp(uint64 x, uint64 min, uint64 max)
 }
 
 void
-update_monoedit_tags(UI *ui)
+update_field_highlight(UI *ui)
 {
 	uint64 start = ui->hl_start;
 	uint64 len = ui->hl_len;
@@ -1203,47 +1197,86 @@ update_monoedit_tags(UI *ui)
 	int end_clamp =
 		(int)(clamp(start + len, view_start, view_end) - view_start);
 	HWND med = ui->monoedit;
-	med_clear_tags(med);
 	if (end_clamp > start_clamp) {
-		MedTag tag;
-		int tag_first_line = start_clamp >> LOG2_N_COL;
-		int tag_last_line = (end_clamp-1) >> LOG2_N_COL; // inclusive
+		int first_line = start_clamp >> LOG2_N_COL;
+		int last_line = (end_clamp-1) >> LOG2_N_COL; // inclusive
 		int end_x = end_clamp & (N_COL-1);
 		int byteoff = start_clamp & (N_COL-1);
-		tag.attr = 1;
+		int start, len;
+		MedTextAttr attr;
+		attr.flags = MED_ATTR_BG_COLOR;
+		attr.bg_color = RGB(204, 204, 204);
 		if (end_x == 0) {
 			end_x = N_COL;
 		}
-		if (tag_last_line > tag_first_line) {
+		if (last_line > first_line) {
 			int i;
-			tag.start = 10 + byteoff * 3;
-			tag.len = (N_COL - byteoff) * 3 - 1;
-			med_add_tag(med, tag_first_line, &tag);
-			tag.start = 11 + N_COL*3 + byteoff;
-			tag.len = N_COL - byteoff;
-			med_add_tag(med, tag_first_line, &tag);
-			for (i=tag_first_line+1; i<tag_last_line; i++) {
-				tag.start = 10;
-				tag.len = N_COL*3-1;
-				med_add_tag(med, i, &tag);
-				tag.start = 11+N_COL*3;
-				tag.len = N_COL;
-				med_add_tag(med, i, &tag);
+			start = 10 + byteoff * 3;
+			len = (N_COL - byteoff) * 3 - 1;
+			med_add_tag(med, first_line, start, len, &attr);
+			start = 11 + N_COL*3 + byteoff;
+			len = N_COL - byteoff;
+			med_add_tag(med, first_line, start, len, &attr);
+			for (i=first_line+1; i<last_line; i++) {
+				start = 10;
+				len = N_COL*3-1;
+				med_add_tag(med, i, start, len, &attr);
+				start = 11+N_COL*3;
+				len = N_COL;
+				med_add_tag(med, i, start, len, &attr);
 			}
-			tag.start = 10;
-			tag.len = end_x * 3 - 1;
-			med_add_tag(med, tag_last_line, &tag);
-			tag.start = 11+N_COL*3;
-			tag.len = end_x;
-			med_add_tag(med, tag_last_line, &tag);
+			start = 10;
+			len = end_x * 3 - 1;
+			med_add_tag(med, last_line, start, len, &attr);
+			start = 11+N_COL*3;
+			len = end_x;
+			med_add_tag(med, last_line, start, len, &attr);
 		} else {
 			// single line
-			tag.start = 10 + byteoff * 3;
-			tag.len = (end_x - byteoff) * 3 - 1;
-			med_add_tag(med, tag_first_line, &tag);
-			tag.start = 11+N_COL*3+byteoff;
-			tag.len = end_x - byteoff;
-			med_add_tag(med, tag_first_line, &tag);
+			start = 10 + byteoff * 3;
+			len = (end_x - byteoff) * 3 - 1;
+			med_add_tag(med, first_line, start, len, &attr);
+			start = 11+N_COL*3+byteoff;
+			len = end_x - byteoff;
+			med_add_tag(med, first_line, start, len, &attr);
+		}
+	}
+}
+
+void
+update_eof_tags(UI *ui)
+{
+	int nrow = get_nrow(ui);
+	uint64 curline = current_line(ui);
+	uint64 view_end = (curline + nrow) << LOG2_N_COL;
+	uint64 bufsize = ui->buffer->buffer_size;
+	HWND med = ui->monoedit;
+	if (view_end > bufsize) {
+		/* TODO: eliminate duplication */
+		MedTextAttr attr;
+		int byteoff = (int) bufsize & (N_COL-1);
+		/* might be negative (only possible value is -1) */
+		int first_line = (int)(bufsize - (curline << LOG2_N_COL)) >>
+			LOG2_N_COL;
+		int start, len;
+		int i;
+		attr.flags = MED_ATTR_TEXT_COLOR;
+		attr.text_color = RGB(192, 192, 192);
+		if (first_line >= 0) {
+			start = 10 + byteoff * 3;
+			len = (N_COL - byteoff) * 3 - 1;
+			med_add_tag(med, first_line, start, len, &attr);
+			start = 11 + N_COL*3 + byteoff;
+			len = N_COL - byteoff;
+			med_add_tag(med, first_line, start, len, &attr);
+		}
+		for (i=first_line+1; i<nrow; i++) {
+			start = 10;
+			len = N_COL*3-1;
+			med_add_tag(med, i, start, len, &attr);
+			start = 11+N_COL*3;
+			len = N_COL;
+			med_add_tag(med, i, start, len, &attr);
 		}
 	}
 }

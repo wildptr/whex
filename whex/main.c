@@ -434,6 +434,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
 	lua_newtable(L); /* global 'whex' */
 	b = lua_newuserdata(L, sizeof *b);
+	memset(b, 0, sizeof *b);
 	luaL_setmetatable(L, "buffer");
 	lua_setfield(L, -2, "buffer");
 	lua_newtable(L);
@@ -523,6 +524,7 @@ update_field_info(UI *ui)
 			update_field_highlight(ui);
 		}
 		update_eof_tags(ui);
+		med_update_backbuffer(ui->monoedit);
 		InvalidateRect(ui->monoedit, 0, FALSE);
 		update_status_text(ui, leaf);
 	} else {
@@ -979,7 +981,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				med_hei = r.bottom;
 			}
 			assert(med_wid > 0);
-			assert(med_hei > 0);
+			if (med_hei < 0) med_hei = 0;
 			SetWindowPos(ui->monoedit, 0, 0, 0, med_wid, med_hei,
 				     SWP_NOMOVE | SWP_NOZORDER);
 			SetWindowPos(ui->treeview, 0,
@@ -1324,6 +1326,7 @@ update_ui(UI *ui)
 	}
 	med_set_total_lines(ui->monoedit, total_lines);
 	med_update_buffer(ui->monoedit);
+	med_update_backbuffer(ui->monoedit);
 
 	update_plugin_menu(ui);
 }

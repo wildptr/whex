@@ -11,7 +11,6 @@
 #include "types.h"
 #include "buf.h"
 #include "monoedit.h"
-#include "printf.h"
 
 typedef struct tag {
 	struct tag *next;
@@ -47,6 +46,8 @@ typedef struct {
 	uint id;
 	COLORREF default_text_color;
 	COLORREF default_bg_color;
+	HBITMAP backbuffer_bitmap;
+	HDC backbuffer_dc;
 } Med;
 
 #if 0
@@ -79,9 +80,10 @@ static void move_down(Med *, HWND);
 static void move_left(Med *w);
 static void move_right(Med *w);
 static void set_cursor_pos(Med *, HWND, int y, int x);
+static void update_backbuffer(Med *);
 
 static void
-paint_row(Med *w, HWND hwnd, HDC dc, int row)
+paint_row(Med *w, HDC dc, int row)
 {
 	Line *line;
 	Tag *segments, *t;
@@ -143,6 +145,7 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 		SetTextColor(dc, textcolor);
 		SetBkColor(dc, bgcolor);
 		x = seg->start * w->charwidth;
+		/* both TextOut and DrawText flickers on Windows XP */
 		if (seg->start + seg->len <= line->textlen) {
 			TextOut(dc, x, y, line->text + seg->start, seg->len);
 		} else {
@@ -176,26 +179,21 @@ paint_row(Med *w, HWND hwnd, HDC dc, int row)
 }
 
 static void
-paint(Med *w, HWND hwnd)
+update_backbuffer(Med *w)
 {
-	PAINTSTRUCT paint;
-	HDC dc = BeginPaint(hwnd, &paint);
+	HDC dc = w->backbuffer_dc;
 	RECT r = { 0, 0, w->clientwidth, w->clientheight };
 
-	SelectObject(dc, w->bgbrush);
 	if (w->buffer) {
 		int i;
-		SelectObject(dc, w->font);
 		for (i=0; i<w->nrow; i++) {
-			paint_row(w, hwnd, dc, i);
+			paint_row(w, dc, i);
 		}
 		r.top = w->nrow * w->charheight;
 	}
 	if (r.top < r.bottom) {
 		FillRect(dc, &r, w->bgbrush);
 	}
-
-	EndPaint(hwnd, &paint);
 }
 
 static void
@@ -247,11 +245,10 @@ default_getline(uint64 _ln, Buf *_b, void *_arg)
 static void
 set_font(Med *w, HWND hwnd, HFONT font)
 {
-	HDC dc = GetDC(hwnd);
+	HDC dc = w->backbuffer_dc;
 	TEXTMETRIC tm;
 	SelectObject(dc, font);
 	GetTextMetrics(dc, &tm);
-	ReleaseDC(hwnd, dc);
 	w->charwidth = tm.tmAveCharWidth;
 	w->charheight = tm.tmHeight;
 	w->font = font;
@@ -275,6 +272,13 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		w->getline = default_getline;
 		w->bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 		{
+			HDC dc = GetDC(hwnd);
+			w->default_text_color = GetTextColor(dc);
+			w->default_bg_color = GetBkColor(dc);
+			w->backbuffer_dc = CreateCompatibleDC(dc);
+			ReleaseDC(hwnd, dc);
+		}
+		{
 			CREATESTRUCT *cs = (CREATESTRUCT *) lparam;
 			uchar has_font = 0;
 			MedConfig *conf = cs->lpCreateParams;
@@ -294,12 +298,6 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			}
 			w->id = (uint) cs->hMenu;
 		}
-		{
-			HDC dc = GetDC(hwnd);
-			w->default_text_color = GetTextColor(dc);
-			w->default_bg_color = GetBkColor(dc);
-			ReleaseDC(hwnd, dc);
-		}
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
 	case WM_NCDESTROY:
@@ -313,10 +311,21 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			}
 			free(w->buffer);
 			free(w);
+			DeleteDC(w->backbuffer_dc);
 		}
 		return 0;
 	case WM_PAINT:
-		paint(w, hwnd);
+		{
+			PAINTSTRUCT ps;
+			HDC dc = BeginPaint(hwnd, &ps);
+			int x = ps.rcPaint.left;
+			int y = ps.rcPaint.top;
+			int wid = ps.rcPaint.right - x;
+			int hei = ps.rcPaint.bottom - y;
+			BitBlt(dc, x, y, wid, hei,
+			       w->backbuffer_dc, x, y, SRCCOPY);
+			EndPaint(hwnd, &ps);
+		}
 		return 0;
 	case WM_SETFONT:
 		set_font(w, hwnd, (HFONT) wparam);
@@ -350,6 +359,18 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			w->clientheight = hei;
 			set_size(w, new_nrow, new_ncol);
 			InvalidateRect(hwnd, 0, 0);
+			{
+				HDC window_dc = GetDC(hwnd);
+				HDC back_dc = w->backbuffer_dc;
+				HBITMAP old_bitmap;
+				w->backbuffer_bitmap = CreateCompatibleBitmap
+					(window_dc, wid, hei);
+				ReleaseDC(hwnd, window_dc);
+				old_bitmap = SelectObject(back_dc,
+							  w->backbuffer_bitmap);
+				if (old_bitmap)
+					DeleteObject(old_bitmap);
+			}
 		}
 		return 0;
 	case WM_MOUSEWHEEL:
@@ -457,6 +478,7 @@ scroll_to(Med *w, HWND hwnd, uint64 ln)
 {
 	w->current_line = ln;
 	update_buffer(w);
+	update_backbuffer(w);
 	InvalidateRect(hwnd, 0, 0);
 	update_scrollbar_pos(w, hwnd);
 }
@@ -648,12 +670,6 @@ scroll(Med *w, HWND hwnd, int delta)
 		w->charwidth * w->ncol,
 		w->charheight * w->nrow
 	};
-#if 0
-	ScrollWindow(hwnd, 0, delta*w->charheight,
-		     &scroll_rect, &scroll_rect);
-#else
-	InvalidateRect(hwnd, 0, 0);
-#endif
 	w->current_line -= delta;
 	if (delta > 0) {
 		/* move lines down, first 'delta' lines exposed */
@@ -670,7 +686,7 @@ scroll(Med *w, HWND hwnd, int delta)
 		}
 		i = 0;
 		memset(w->buffer+i, 0, delta * sizeof *w->buffer);
-		while (i < delta) 
+		while (i < delta)
 			getline(w, i++);
 	} else if (delta < 0) {
 		/* move lines up, last 'delta' lines exposed */
@@ -692,6 +708,8 @@ scroll(Med *w, HWND hwnd, int delta)
 			getline(w, i++);
 	}
 	update_scrollbar_pos(w, hwnd);
+	update_backbuffer(w);
+	InvalidateRect(hwnd, 0, 0);
 }
 
 void
@@ -771,17 +789,6 @@ med_set_char(HWND hwnd, int y, int x, TCHAR c)
 	l = &w->buffer[y];
 	if (x < 0 || x >= l->textlen) return;
 	l->text[x] = c;
-}
-
-void
-med_paint_row(HWND hwnd, int row)
-{
-	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	HDC dc = GetDC(hwnd);
-	SelectObject(dc, w->bgbrush);
-	SelectObject(dc, w->font);
-	paint_row(w, hwnd, dc, row);
-	ReleaseDC(hwnd, dc);
 }
 
 static void
@@ -1000,4 +1007,11 @@ med_invalidate_char(HWND hwnd, int row, int col)
 	r.right = r.left + w->charwidth;
 	r.bottom = r.top + w->charheight;
 	InvalidateRect(hwnd, &r, 0);
+}
+
+void
+med_update_backbuffer(HWND hwnd)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	update_backbuffer(w);
 }

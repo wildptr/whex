@@ -14,6 +14,9 @@
 #include "buf.h"
 #include "printf.h"
 
+#define N_CACHE_BLOCK 16
+#define LOG2_CACHE_BLOCK_SIZE 12
+#define CACHE_BLOCK_SIZE (1 << LOG2_CACHE_BLOCK_SIZE)
 #define VALID 1
 
 void format_error_code(TCHAR *, size_t, DWORD);
@@ -23,7 +26,7 @@ enum {
 	SEG_MEM,
 };
 
-struct segment {
+typedef struct segment {
 	struct segment *next;
 	uchar kind;
 	uint64 start;
@@ -35,7 +38,26 @@ struct segment {
 		};
 		uchar data[8];
 	};
+} Segment;
+
+struct cache_entry {
+	uint64 addr;
+	uchar *data;
+	uchar flags;
 };
+
+struct buffer {
+	HANDLE file;
+	uint64 file_size;
+	uint64 buffer_size;
+	Segment *firstseg;
+	struct cache_entry *cache;
+	uchar *cache_data;
+	Region tmp_rgn;
+	int next_cache;
+};
+
+const int sizeof_Buffer = sizeof(Buffer);
 
 static int
 seek(HANDLE file, uint64 offset)
@@ -280,8 +302,6 @@ nomem:
 	b->firstseg = seg;
 	b->cache = cache;
 	b->cache_data = cache_data;
-	b->tree = 0;
-	memset(&b->tree_rgn, 0, sizeof b->tree_rgn);
 	b->next_cache = 0;
 
 	return 0;
@@ -306,8 +326,6 @@ buf_finalize(Buffer *b)
 	b->cache = 0;
 	free(b->cache_data);
 	b->cache_data = 0;
-	rfreeall(&b->tree_rgn);
-	b->tree = 0;
 }
 
 int
@@ -397,6 +415,12 @@ fail:
 		b->firstseg = s;
 	}
 	return 0;
+}
+
+int
+buf_save_inplace(Buffer *b)
+{
+	return buf_save(b, b->file);
 }
 
 static Segment *
@@ -606,4 +630,10 @@ buf_read(Buffer *b, uchar *dst, uint64 addr, size_t n)
 		addr = s->start;
 		segoff = 0;
 	}
+}
+
+uint64
+buf_size(Buffer *b)
+{
+	return b->buffer_size;
 }

@@ -11,7 +11,6 @@
 #include "region.h"
 #include "buffer.h"
 #include "tree.h"
-#include "ui.h"
 
 /* TODO: fix address size issues */
 
@@ -30,7 +29,7 @@ api_buffer_peek(lua_State *L)
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
 	uint64 addr;
 	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr >= b->file_size) return 0;
+	if (addr >= buf_size(b)) return 0;
 	lua_pushinteger(L, buf_getbyte(b, addr));
 	return 1;
 }
@@ -45,7 +44,7 @@ api_buffer_peeku16(lua_State *L)
 		uchar b[2];
 	} u;
 	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr+2 > b->file_size) return 0;
+	if (addr+2 > buf_size(b)) return 0;
 	buf_read(b, u.b, addr, 2);
 	lua_pushinteger(L, u.i);
 	return 1;
@@ -61,7 +60,7 @@ api_buffer_peeku32(lua_State *L)
 		uchar b[4];
 	} u;
 	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr+4 > b->file_size) return 0;
+	if (addr+4 > buf_size(b)) return 0;
 	buf_read(b, u.b, addr, 4);
 	lua_pushinteger(L, u.i);
 	return 1;
@@ -77,7 +76,7 @@ api_buffer_peeku64(lua_State *L)
 		uchar b[8];
 	} u;
 	if (checkaddr(L, 2, &addr)) return 0;
-	if (addr+8 > b->file_size) return 0;
+	if (addr+8 > buf_size(b)) return 0;
 	buf_read(b, u.b, addr, 8);
 	lua_pushinteger(L, u.i);
 	return 1;
@@ -93,7 +92,7 @@ api_buffer_read(lua_State *L)
 
 	if (checkaddr(L, 2, &addr)) return 0;
 	n = (long) luaL_checkinteger(L, 3);
-	if (addr + n > b->file_size) return 0;
+	if (addr + n > buf_size(b)) return 0;
 	s = malloc(n+1);
 	buf_read(b, s, addr, n);
 	s[n] = 0;
@@ -192,9 +191,6 @@ int
 api_buffer_tree(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	if (!b->tree) {
-		return 0;
-	}
 	lua_getuservalue(L, 1);
 	lua_getfield(L, -1, "value");
 	lua_remove(L, -2);
@@ -205,7 +201,7 @@ int
 api_buffer_size(lua_State *L)
 {
 	Buffer *b = luaL_checkudata(L, 1, "buffer");
-	lua_pushinteger(L, b->file_size);
+	lua_pushinteger(L, buf_size(b));
 	return 1;
 }
 
@@ -219,7 +215,7 @@ api_buffer_replace(lua_State *L)
 
 	if (checkaddr(L, 2, &addr)) return 0;
 	data = (const uchar *) lua_tolstring(L, 3, &len);
-	if (addr + len > b->buffer_size) return 0;
+	if (addr + len > buf_size(b)) return 0;
 	buf_replace(b, addr, data, len);
 	return 0;
 }
@@ -234,7 +230,7 @@ api_buffer_insert(lua_State *L)
 
 	if (checkaddr(L, 2, &addr)) return 0;
 	data = (const uchar *) lua_tolstring(L, 3, &len);
-	if (addr > b->buffer_size) return 0;
+	if (addr > buf_size(b)) return 0;
 	buf_insert(b, addr, data, len);
 	return 0;
 }

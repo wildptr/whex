@@ -19,7 +19,6 @@
 #include "region.h"
 #include "list.h"
 #include "buffer.h"
-#include "ui.h"
 #include "tree.h"
 #include "unicode.h"
 #include "resource.h"
@@ -60,16 +59,47 @@ enum {
 	POS_ASCII,
 };
 
+typedef struct {
+	TCHAR *text;
+	TCHAR *title;
+} InputBoxConfig;
+
+typedef struct {
+	Buffer *buffer;
+	HWND hwnd;
+	HWND monoedit;
+	TCHAR *filepath;
+	WNDPROC med_wndproc;
+	int cursor_y;
+	int cursor_x;
+	int charwidth;
+	int charheight;
+	HFONT mono_font;
+	lua_State *lua;
+	uint64 hl_start;
+	uint64 hl_len;
+	HWND status_bar;
+	HINSTANCE instance;
+	int npluginfunc;
+	char *plugin_name;
+	char **plugin_funcname;
+	uchar mode;
+	uchar cursor_fine_pos;
+	uchar readonly;
+	HWND treeview;
+	uint64 replace_start;
+	uchar *replace_buf;
+	uint replace_buf_cap;
+	uint replace_buf_len;
+	Tree *tree;
+	Region tree_rgn;
+} UI;
+
 Region rgn;
 /* GetOpenFileName() changes directory, so remember working directory when
    program starts */
 char *workdir;
 int wdlen;
-
-typedef struct {
-	TCHAR *text;
-	TCHAR *title;
-} InputBoxConfig;
 
 LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
@@ -154,8 +184,7 @@ med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				return 0;
 			case VK_END:
 				if (GetKeyState(VK_CONTROL) < 0) {
-					goto_address
-						(ui, ui->buffer->buffer_size);
+					goto_address(ui, buf_size(ui->buffer));
 				} else {
 					goto_eol(ui);
 				}
@@ -433,8 +462,8 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	if (init_luatk(L)) return -1;
 
 	lua_newtable(L); /* global 'whex' */
-	b = lua_newuserdata(L, sizeof *b);
-	memset(b, 0, sizeof *b);
+	b = lua_newuserdata(L, sizeof_Buffer);
+	memset(b, 0, sizeof_Buffer);
 	luaL_setmetatable(L, "buffer");
 	lua_setfield(L, -2, "buffer");
 	lua_newtable(L);
@@ -507,7 +536,7 @@ void
 update_field_info(UI *ui)
 {
 	if (ui->filepath) {
-		Tree *tree = ui->buffer->tree;
+		Tree *tree = ui->tree;
 		Tree *leaf = 0;
 		med_clear_tags(ui->monoedit);
 		if (tree) {
@@ -618,7 +647,7 @@ goto_address(UI *ui, uint64 addr)
 	uint64 curline;
 	int nrow;
 
-	assert(addr >= 0 && addr <= ui->buffer->buffer_size);
+	assert(addr >= 0 && addr <= buf_size(ui->buffer));
 	cx = col_to_cx(ui, col);
 	curline = current_line(ui);
 	nrow = get_nrow(ui);
@@ -717,8 +746,7 @@ handle_char_normal(UI *ui, TCHAR c)
 			if (parse_addr(text, &addr)) {
 				errorbox(ui->hwnd, TEXT("Syntax error"));
 			} else {
-				if (addr >= 0 &&
-				    addr <= ui->buffer->buffer_size) {
+				if (addr >= 0 && addr <= buf_size(ui->buffer)) {
 					goto_address(ui, addr);
 				} else {
 					errorbox(ui->hwnd,
@@ -781,7 +809,7 @@ handle_char_replace(UI *ui, TCHAR c)
 	cy = ui->cursor_y;
 	cx = ui->cursor_x;
 	pos = cursor_pos(ui);
-	if (pos >= ui->buffer->buffer_size) return;
+	if (pos >= buf_size(ui->buffer)) return;
 	if (ui->cursor_fine_pos == POS_LONIB) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
@@ -848,17 +876,18 @@ med_getline(uint64 ln, Buf *p, void *arg)
 {
 	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
+	uint64 bufsize = buf_size(b);
 	uint64 addr = ln << LOG2_N_COL;
 	uint64 start = ln << LOG2_N_COL;
 	int end, i;
 
 	assert(ln >= 0);
-	if (start + N_COL <= b->buffer_size) {
+	if (start + N_COL <= bufsize) {
 		end = N_COL;
-	} else if (start >= b->buffer_size) {
+	} else if (start >= bufsize) {
 		end = 0;
 	} else {
-		end = (int)(b->buffer_size - start);
+		end = (int)(bufsize - start);
 	}
 	bprintf(p, TEXT("%08llx:"), addr);
 	if (end) {
@@ -1251,7 +1280,7 @@ update_eof_tags(UI *ui)
 	int nrow = get_nrow(ui);
 	uint64 curline = current_line(ui);
 	uint64 view_end = (curline + nrow) << LOG2_N_COL;
-	uint64 bufsize = ui->buffer->buffer_size;
+	uint64 bufsize = buf_size(ui->buffer);
 	HWND med = ui->monoedit;
 	if (view_end > bufsize) {
 		/* TODO: eliminate duplication */
@@ -1319,7 +1348,7 @@ update_ui(UI *ui)
 		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 	}
 
-	bufsize = ui->buffer->buffer_size;
+	bufsize = buf_size(ui->buffer);
 	total_lines = bufsize >> LOG2_N_COL;
 	if (bufsize&(N_COL-1)) {
 		total_lines++;
@@ -1381,9 +1410,10 @@ void
 move_next_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
-	if (b->tree && !cursor_in_gap(ui)) {
+	Tree *tree = ui->tree;
+	if (tree && !cursor_in_gap(ui)) {
 		uint64 cur = cursor_pos(ui);
-		Tree *leaf = tree_lookup(b->tree, cur);
+		Tree *leaf = tree_lookup(tree, cur);
 		if (leaf) {
 			goto_address(ui, leaf->start + leaf->len);
 		}
@@ -1394,11 +1424,12 @@ void
 move_prev_field(UI *ui)
 {
 	Buffer *b = ui->buffer;
-	if (b->tree && !cursor_in_gap(ui)) {
+	Tree *tree = ui->tree;
+	if (tree && !cursor_in_gap(ui)) {
 		uint64 cur = cursor_pos(ui);
-		Tree *leaf = tree_lookup(b->tree, cur);
+		Tree *leaf = tree_lookup(tree, cur);
 		if (leaf) {
-			Tree *prev_leaf = tree_lookup(b->tree, cur-1);
+			Tree *prev_leaf = tree_lookup(tree, cur-1);
 			if (prev_leaf) {
 				goto_address(ui, prev_leaf->start);
 			}
@@ -1409,7 +1440,7 @@ move_prev_field(UI *ui)
 void
 goto_bol(UI *ui)
 {
-	if (ui->buffer->buffer_size > 0) {
+	if (buf_size(ui->buffer) > 0) {
 		goto_address(ui, (current_line(ui) + ui->cursor_y) * N_COL);
 	}
 }
@@ -1417,11 +1448,11 @@ goto_bol(UI *ui)
 void
 goto_eol(UI *ui)
 {
-	uint64 filesize = ui->buffer->buffer_size;
-	if (filesize > 0) {
+	uint64 bufsize = buf_size(ui->buffer);
+	if (bufsize > 0) {
 		uint64 addr = (current_line(ui) + ui->cursor_y + 1) * N_COL - 1;
-		if (addr >= filesize) {
-			addr = filesize-1;
+		if (addr >= bufsize) {
+			addr = bufsize-1;
 		}
 		goto_address(ui, addr);
 	}
@@ -1552,15 +1583,15 @@ load_plugin(UI *ui, const char *path)
 	}
 
 	b = ui->buffer;
-	tree = convert_tree(&b->tree_rgn, L);
+	tree = convert_tree(&ui->tree_rgn, L);
 	getluaobj(L, "buffer");
 	lua_insert(L, -2);
 	lua_setuservalue(L, -2);
 	lua_pop(L, 1);
-	if (b->tree) {
-		rfreeall(&b->tree_rgn);
+	if (ui->tree) {
+		rfreeall(&ui->tree_rgn);
 	}
-	b->tree = tree;
+	ui->tree = tree;
 
 	lua_getfield(L, -1, "name"); /* plugin.name */
 	plugin_name = _strdup(luaL_checkstring(L, -1));
@@ -1666,7 +1697,7 @@ det:
 int
 save_file(UI *ui)
 {
-	return buf_save(ui->buffer, ui->buffer->file);
+	return buf_save_inplace(ui->buffer);
 }
 
 int
@@ -1707,7 +1738,7 @@ addtotree(HWND treeview, HTREEITEM parent, Tree *tree)
 void
 populate_treeview(UI *ui)
 {
-	Tree *tree = ui->buffer->tree;
+	Tree *tree = ui->tree;
 	addtotree(ui->treeview, 0, tree);
 }
 
@@ -1812,8 +1843,7 @@ void
 exit_replace_mode(UI *ui)
 {
 	ui->mode = MODE_NORMAL;
-	if (ui->replace_start + ui->replace_buf_len
-	    <= ui->buffer->buffer_size) {
+	if (ui->replace_start + ui->replace_buf_len <= buf_size(ui->buffer)) {
 		buf_replace(ui->buffer,
 			    ui->replace_start,
 			    ui->replace_buf,

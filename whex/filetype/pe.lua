@@ -242,8 +242,9 @@ local function loadapi(dllpath, funcname)
   return func
 end
 
+local dasmdll
+
 local function disassembly(buf)
-  local dasmdll = 'C:/Users/user/Desktop/whex/Debug/dasm.dll'
   local disasm = loadapi(dasmdll, 'api_disasm')
   local format_inst = loadapi(dasmdll, 'api_format_inst')
 
@@ -280,13 +281,20 @@ local function disassembly(buf)
   me:update()
 end
 
+local functions = {
+  {section_table, 'Section Table...'},
+  {import_table, 'Import Table...'},
+  {export_table, 'Export Table...'},
+}
+
+local dasm_config = require 'config/dasm'
+if dasm_config then
+  dasmdll = dasm_config.dllpath
+  functions[#functions+1] = {disassembly, 'Disassembly...'}
+end
+
 return {
   name = 'PE',
   parser = require 'pe',
-  functions = {
-    {section_table, 'Section Table...'},
-    {import_table, 'Import Table...'},
-    {export_table, 'Export Table...'},
-    {disassembly, 'Disassembly...'},
-  }
+  functions = functions
 }

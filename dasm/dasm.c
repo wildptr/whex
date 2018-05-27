@@ -214,6 +214,7 @@ int
 read_prefixed_opcode(const uchar *p, PrefixedOpcode *po)
 {
 	const uchar *start = p;
+	uchar b;
 	po->prefix = 0;
 	for (;;) {
 		uchar pfx = prefix_code(*p);
@@ -221,7 +222,6 @@ read_prefixed_opcode(const uchar *p, PrefixedOpcode *po)
 		po->prefix |= pfx;
 		p++;
 	}
-	uchar b;
 	po->opcode[0] = b = *p++;
 	if (b == 0x0f) {
 		po->opcode[1] = *p++;
@@ -233,18 +233,23 @@ int
 disasm(const uchar *p, Inst *inst, DisasmConfig *conf)
 {
 	const uchar *start = p;
-	PrefixedOpcode po;
-	p += read_prefixed_opcode(p, &po);
 	uchar fmt;
-	uchar opcode1 = po.opcode[0];
+	uchar opcode1;
+	PrefixedOpcode po;
+	Operand o = {0};
+	int32 imm[2] = {0};
+	uchar lw;
+	int (*read_imm)(const uchar *, int32 *);
+	int len;
+	uchar *bytes;
+
+	p += read_prefixed_opcode(p, &po);
+	opcode1 = po.opcode[0];
 	if (opcode1 == 0x0f) {
 		fmt = inst_format_table[po.opcode[1]];
 	} else {
 		fmt = inst_format_table[opcode1];
 	}
-
-	Operand o = {0};
-	int32 imm[2] = {0};
 
 	/* read regmem operand */
 	if (fmt & HAS_REGMEM) {
@@ -252,8 +257,7 @@ disasm(const uchar *p, Inst *inst, DisasmConfig *conf)
 		o.fmt = HAS_REGMEM;
 	}
 
-	uchar lw = logwordsize(conf->mode, po.prefix);
-	int (*read_imm)(const uchar *, int32 *);
+	lw = logwordsize(conf->mode, po.prefix);
 	switch (lw) {
 	case 1: read_imm = read_imm2; break;
 	case 2: read_imm = read_imm4; break;
@@ -317,9 +321,9 @@ disasm(const uchar *p, Inst *inst, DisasmConfig *conf)
 		}
 	}
 
-	int len = p-start;
+	len = p-start;
 	assert(len < 256);
-	uchar *bytes = ralloc(conf->rgn, len);
+	bytes = ralloc(conf->rgn, len);
 	memcpy(bytes, start, len);
 
 	inst->len = len;
@@ -337,6 +341,9 @@ read_regmem32(const uchar *p, Operand *o)
 	uchar modrm = *p++;
 	uchar r = modrm & 7;
 	uchar m = modrm >> 6; /* ModRM[7:6] -- mode field */
+	int32 disp;
+	int (*read_disp)(const uchar *, int32 *);
+
 	o->opcode_ext = (modrm >> 3) & 7;
 	switch (m) {
 	case 0:
@@ -344,7 +351,6 @@ read_regmem32(const uchar *p, Operand *o)
 		o->size = 0;
 		switch (r) {
 			SIB sib;
-			int32 disp;
 		case 4: /* SIB follows */
 			p += read_sib(p, &sib);
 			if (sib.base == 5) {
@@ -383,9 +389,8 @@ read_regmem32(const uchar *p, Operand *o)
 	case 2:
 		o->kind = O_MEM;
 		o->size = 0;
-		int32 disp = 0;
-		int (*read_disp)(const uchar *, int32 *) =
-			m == 1 ? read_imm1 : read_imm2;
+		disp = 0;
+		read_disp = m == 1 ? read_imm1 : read_imm2;
 		if (r == 4) {
 			/* SIB follows */
 			SIB sib;
@@ -472,9 +477,12 @@ convert_inst(PrefixedOpcode *po, Operand *rm, int32 *imm, Inst *inst,
 	     DisasmConfig *conf)
 {
 	uchar lw = logwordsize(conf->mode, po->prefix);
-
 	ushort fmt[3];
 	int op_var = instfmt1(po->opcode[0], rm->opcode_ext, lw, fmt);
+	int no;
+	Operand *ov, *o;
+	int i;
+
 	if (!op_var) {
 		/* invalid instruction */
 		inst->op = 0;
@@ -484,11 +492,11 @@ convert_inst(PrefixedOpcode *po, Operand *rm, int32 *imm, Inst *inst,
 		return;
 	}
 
-	int no=0;
+	no = 0;
 	while (fmt[no]) no++;
-	Operand *ov = ralloc0(conf->rgn, no * sizeof *ov);
-	Operand *o = ov;
-	for (int i=0; i<no; i++) {
+	ov = ralloc0(conf->rgn, no * sizeof *ov);
+	o = ov;
+	for (i=0; i<no; i++) {
 		uchar tag = fmt[i]>>8;
 		uchar data = fmt[i]&0xff;
 		switch (tag) {
@@ -548,18 +556,22 @@ instfmt1(uchar opcode, uchar ext, uchar lw, ushort fmt[3])
 {
 	short op = optable[opcode];
 	uchar s;
+	char var;
+	char argspec[3];
+	const char *p;
+	ushort xfmt;
+	int i;
 
 	if (op < 0) {
 		op = optable_ext[(~op<<3)|ext];
 	}
 	if (!op) return 0;
 
-	char var = vartable[opcode];
+	var = vartable[opcode];
 	if (var < 0) var = lw;
 	s = 1<<var;
 
-	char argspec[3];
-	const char *p = &operand_table[opcode][0];
+	p = &operand_table[opcode][0];
 	argspec[0] = p[0];
 	if (argspec[0] < 0) {
 		int i = ~argspec[0];
@@ -569,7 +581,7 @@ instfmt1(uchar opcode, uchar ext, uchar lw, ushort fmt[3])
 	argspec[1] = p[1];
 	argspec[2] = 0;
 
-	ushort xfmt = 0;
+	xfmt = 0;
 
 	switch (opcode) {
 	case 0x06: case 0x07: case 0x0e:
@@ -600,7 +612,7 @@ instfmt1(uchar opcode, uchar ext, uchar lw, ushort fmt[3])
 		break;
 	}
 
-	for (int i=0; i<3; i++) {
+	for (i=0; i<3; i++) {
 		switch (argspec[i]) {
 		case 0:
 			fmt[i] = 0;

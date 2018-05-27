@@ -84,8 +84,9 @@ format_inst(BufA *buf, Inst *inst)
 	int ret;
 	ret = bprintfA(buf, "%s", opname[inst->op]);
 	if (inst->noperand) {
+		int i;
 		ret += bprintfA(buf, " %a", format_operand, &inst->operands[0]);
-		for (int i=1; i<inst->noperand; i++) {
+		for (i=1; i<inst->noperand; i++) {
 			ret += bprintfA(buf, ",%a",
 				       format_operand, &inst->operands[i]);
 		}

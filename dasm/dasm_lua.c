@@ -22,8 +22,8 @@ typedef struct {
 static void
 convert_operand(lua_State *L, Operand *o)
 {
-	lua_newtable(L);
 	const char *kind;
+	lua_newtable(L);
 	switch (o->kind) {
 	case O_REG: kind = "reg"; break;
 	case O_MEM: kind = "mem"; break;
@@ -75,9 +75,10 @@ convert_operand(lua_State *L, Operand *o)
 static void
 convert_operands(lua_State *L, Inst *inst)
 {
-	lua_newtable(L);
 	int n = inst->noperand;
-	for (int i=0; i<n; i++) {
+	int i;
+	lua_newtable(L);
+	for (i=0; i<n; i++) {
 		convert_operand(L, &inst->operands[i]);
 		lua_seti(L, -2, 1+i);
 	}
@@ -88,9 +89,10 @@ static void
 convert_inst(lua_State *L, Inst *inst)
 {
 	/* bytes; op; var; operands */
-	lua_newtable(L);
 	int n = inst->noperand;
-	LuaInst *li = lua_newuserdata(L, sizeof(*li) + n*sizeof(Operand));
+	LuaInst *li;
+	lua_newtable(L);
+	li = lua_newuserdata(L, sizeof(*li) + n*sizeof(Operand));
 	li->len = inst->len;
 	li->op = inst->op;
 	li->var = inst->var;
@@ -128,16 +130,20 @@ __declspec(dllexport) int
 api_format_inst(lua_State *L)
 {
 	HeapBufA hb;
+	LuaInst *li;
+	Inst inst;
+
 	if (init_heapbufA(&hb)) {
 		return 0;
 	}
 
 	lua_getfield(L, 1, "userdata");
-	LuaInst *li = lua_touserdata(L, -1);
-	Inst inst = {0};
+	li = lua_touserdata(L, -1);
+	inst.len = 0;
 	inst.op = li->op;
 	inst.var = li->var;
 	inst.noperand = li->noperand;
+	inst.bytes = 0;
 	inst.operands = li->operands;
 	format_inst(&hb.buf, &inst);
 	lua_pop(L, 1); /* 'userdata' */

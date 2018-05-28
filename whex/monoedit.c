@@ -344,9 +344,7 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		SendMessage(GetParent(hwnd), WM_CHAR, wparam, lparam);
 		return 0;
 	case WM_ERASEBKGND:
-		/* pretend that the background has been erased in order to
-		   prevent flickering */
-		return TRUE;
+		return 0;
 	case WM_SIZE:
 		if (wparam != SIZE_MINIMIZED) {
 			int wid = LOWORD(lparam);
@@ -371,6 +369,7 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 				if (old_bitmap)
 					DeleteObject(old_bitmap);
 			}
+			update_backbuffer(w);
 		}
 		return 0;
 	case WM_MOUSEWHEEL:
@@ -395,10 +394,14 @@ notify:
 		{
 			int x = LOWORD(lparam);
 			int y = HIWORD(lparam);
-			w->cursorx = x / w->charwidth;
-			w->cursory = y / w->charheight;
-			if (SetFocus(hwnd) == hwnd) {
-				update_caret_pos(w);
+			int cx = x / w->charwidth;
+			int cy = y / w->charheight;
+			if (cx < w->ncol && cy < w->nrow) {
+				w->cursorx = cx;
+				w->cursory = cy;
+				if (SetFocus(hwnd) == hwnd) {
+					update_caret_pos(w);
+				}
 			}
 		}
 		goto notify;

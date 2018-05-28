@@ -795,6 +795,7 @@ handle_char_replace(UI *ui, TCHAR c)
 	uchar val, b;
 	int cy, cx;
 	uint64 pos;
+	uint64 bufsize;
 	int med_cx;
 
 	if (c >= '0' && c <= '9') {
@@ -809,7 +810,7 @@ handle_char_replace(UI *ui, TCHAR c)
 	cy = ui->cursor_y;
 	cx = ui->cursor_x;
 	pos = cursor_pos(ui);
-	if (pos >= buf_size(ui->buffer)) return;
+	bufsize = buf_size(ui->buffer);
 	if (ui->cursor_fine_pos == POS_LONIB) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
@@ -820,7 +821,11 @@ handle_char_replace(UI *ui, TCHAR c)
 		med_invalidate_char(ui->monoedit, cy, med_cx);
 		move_forward(ui);
 	} else if (ui->cursor_fine_pos == POS_HINIB) {
-		b = buf_getbyte(ui->buffer, pos);
+		if (pos < bufsize) {
+			b = buf_getbyte(ui->buffer, pos);
+		} else {
+			b = 0;
+		}
 		val = val<<4 | (b&0x0f);
 		if (ui->replace_buf_len == ui->replace_buf_cap) {
 			ui->replace_buf = realloc(ui->replace_buf,
@@ -1842,12 +1847,20 @@ get_nrow(UI *ui)
 void
 exit_replace_mode(UI *ui)
 {
+	uint64 bufsize = buf_size(ui->buffer);
+	uint64 replace_end = ui->replace_start + ui->replace_buf_len;
 	ui->mode = MODE_NORMAL;
-	if (ui->replace_start + ui->replace_buf_len <= buf_size(ui->buffer)) {
-		buf_replace(ui->buffer,
-			    ui->replace_start,
-			    ui->replace_buf,
-			    ui->replace_buf_len);
+	if (replace_end > bufsize) {
+		size_t extra = (size_t)(replace_end - bufsize);
+		uint64 total_lines;
+		buf_insert(ui->buffer, bufsize, 0, extra);
+		total_lines = replace_end >> LOG2_N_COL;
+		if (replace_end&(N_COL-1)) {
+			total_lines++;
+		}
+		med_set_total_lines(ui->monoedit, total_lines);
 	}
+	buf_replace(ui->buffer, ui->replace_start,
+		    ui->replace_buf, ui->replace_buf_len);
 	ui->replace_buf_len = 0;
 }

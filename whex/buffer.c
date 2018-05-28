@@ -22,6 +22,7 @@
 void format_error_code(TCHAR *, size_t, DWORD);
 
 enum {
+	SEG_ZERO,
 	SEG_FILE,
 	SEG_MEM,
 };
@@ -123,6 +124,8 @@ buf_getbyte(Buffer *b, uint64 addr)
 	off = addr - s->start;
 	assert(off >= 0 && off < s->end - s->start);
 	switch (s->kind) {
+	case SEG_ZERO:
+		return 0;
 	case SEG_FILE:
 		return get_file_byte(b, s->file_offset+off);
 	case SEG_MEM:
@@ -331,6 +334,8 @@ buf_finalize(Buffer *b)
 int
 buf_save(Buffer *b, HANDLE dstfile)
 {
+	static uchar zero[4096];
+
 	uchar inplace = b->file == dstfile;
 	Segment *s = b->firstseg;
 	Region *r = &b->tmp_rgn;
@@ -338,6 +343,9 @@ buf_save(Buffer *b, HANDLE dstfile)
 	while (s) {
 		_printf("%llx--%llx ", s->start, s->end);
 		switch (s->kind) {
+		case SEG_ZERO:
+			_printf("ZERO\n");
+			break;
 		case SEG_MEM:
 			_printf("MEM\n");
 			break;
@@ -378,10 +386,21 @@ fail:
 		uint64 full_seglen = s->end - s->start;
 		DWORD seglen = (DWORD) full_seglen;
 		DWORD nwritten;
+		DWORD remain;
 		if (seglen != full_seglen) {
 			return -1;
 		}
 		switch (s->kind) {
+		case SEG_ZERO:
+			seek(dstfile, s->start);
+			remain = seglen;
+			while (remain) {
+				DWORD n = remain;
+				if (n > sizeof zero) n = sizeof zero;
+				WriteFile(dstfile, zero, n, &nwritten, 0);
+				remain -= n;
+			}
+			break;
 		case SEG_MEM:
 			seek(dstfile, s->start);
 			WriteFile(dstfile, s->data, seglen,
@@ -434,12 +453,21 @@ newmemseg(uint64 start, size_t len)
 	return newseg;
 }
 
+static Segment *
+newzeroseg(uint64 start, size_t len)
+{
+	Segment *newseg = calloc(1, sizeof *newseg);
+	newseg->start = start;
+	newseg->end = start+len;
+	return newseg;
+}
+
 void
 buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 {
 	Segment *before, *after;
 	uint64 end;
-	assert(addr >= 0 && addr + len < b->buffer_size);
+	assert(addr >= 0 && addr + len <= b->buffer_size);
 	assert(len > 0);
 	end = addr + len;
 	before = b->firstseg;
@@ -457,6 +485,7 @@ buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 				memcpy(before->data + off, data, len);
 			}
 			break;
+		case SEG_ZERO:
 		case SEG_FILE:
 			{
 				Segment *newseg = newmemseg(addr, len);
@@ -470,7 +499,10 @@ buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 					before->next = newseg;
 					before->end = addr;
 				}
-				after->file_offset += end - before->start;
+				if (before->kind == SEG_FILE) {
+					after->file_offset +=
+						end - before->start;
+				}
 				after->start = end;
 				newseg->next = after;
 			}
@@ -498,11 +530,14 @@ buf_replace(Buffer *b, uint64 addr, const uchar *data, size_t len)
 					newseglen - len);
 				newseg->next = after->next;
 				break;
+			case SEG_ZERO:
 			case SEG_FILE:
 				newseg = newmemseg(addr, len);
 				memcpy(newseg->data, data, len);
 				newseg->next = after;
-				after->file_offset += full_delta;
+				if (after->kind == SEG_FILE) {
+					after->file_offset += full_delta;
+				}
 				break;
 			default:
 				assert(0);
@@ -540,15 +575,19 @@ buf_insert(Buffer *b, uint64 addr, const uchar *data, size_t len)
 	Segment *s;
 	assert(addr >= 0 && addr <= b->buffer_size);
 	assert(len > 0);
-	newseg = newmemseg(addr, len);
-	memcpy(newseg->data, data, len);
+	if (data) {
+		newseg = newmemseg(addr, len);
+		memcpy(newseg->data, data, len);
+	} else {
+		newseg = newzeroseg(addr, len);
+	}
 	if (addr == 0) {
 		after = b->firstseg;
 		b->firstseg = newseg;
 	} else {
 		Segment *before = b->firstseg;
+		/* 'addr' must not be larger than buffer size */
 		while (before->end < addr) before = before->next;
-		before->next = newseg;
 		if (before->end == addr) {
 			after = before->next;
 		} else {
@@ -557,12 +596,15 @@ buf_insert(Buffer *b, uint64 addr, const uchar *data, size_t len)
 			size_t delta = (size_t) full_delta;
 			size_t rest;
 			switch (before->kind) {
+			case SEG_ZERO:
 			case SEG_FILE:
 				after = malloc(sizeof *after);
 				*after = *before;
 				/* start and end will be adjusted later */
 				after->start = addr;
-				after->file_offset += full_delta;
+				if (before->kind == SEG_FILE) {
+					after->file_offset += full_delta;
+				}
 				break;
 			case SEG_MEM:
 				rest = len - delta;
@@ -575,12 +617,14 @@ buf_insert(Buffer *b, uint64 addr, const uchar *data, size_t len)
 			}
 			before->end = addr;
 		}
+		before->next = newseg;
 	}
 	newseg->next = after;
 	for (s = after; s; s = s->next) {
 		s->start += len;
 		s->end += len;
 	}
+	b->buffer_size += len;
 }
 
 static void
@@ -613,6 +657,9 @@ buf_read(Buffer *b, uchar *dst, uint64 addr, size_t n)
 		size_t n1 = (size_t)(s->end - addr);
 		if (n1 > n) n1 = n;
 		switch (s->kind) {
+		case SEG_ZERO:
+			memset(dst, 0, n1);
+			break;
 		case SEG_FILE:
 			buf_read_file(b, dst, s->file_offset + segoff, n1);
 			break;

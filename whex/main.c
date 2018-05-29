@@ -227,13 +227,13 @@ format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
 #if 0
 	DWORD FormatMessage
 	(
-	 DWORD dwFlags,		// source and processing options
-	 LPCVOID lpSource,	// pointer to message source
-	 DWORD dwMessageId,	// requested message identifier
-	 DWORD dwLanguageId,	// language identifier for requested message
-	 LPTSTR lpBuffer,	// pointer to message buffer
-	 DWORD nSize,		// maximum size of message buffer
-	 va_list *Arguments 	// address of array of message inserts
+	 DWORD dwFlags,		/* source and processing options */
+	 LPCVOID lpSource,	/* pointer to message source */
+	 DWORD dwMessageId,	/* requested message identifier */
+	 DWORD dwLanguageId,	/* language identifier for requested message */
+	 LPTSTR lpBuffer,	/* pointer to message buffer */
+	 DWORD nSize,		/* maximum size of message buffer */
+	 va_list *Arguments 	/* address of array of message inserts */
 	);
 #endif
 	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
@@ -290,24 +290,16 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 	}
 	init_font(ui);
 	menu = create_menu();
-	hwnd = CreateWindow(TEXT("WHEX"), // class name
-			    0, // window title
-			    WS_OVERLAPPEDWINDOW, // window style
-			    CW_USEDEFAULT, // initial x position
-			    CW_USEDEFAULT, // initial y position
-			    CW_USEDEFAULT, // initial width
-			    CW_USEDEFAULT, // initial height
-			    0,
-			    menu,
-			    ui->instance,
-			    ui); // window-creation data
+	hwnd = CreateWindow
+		(TEXT("WHEX"), 0 /* will be set later */, WS_OVERLAPPEDWINDOW,
+		 CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+		 0, menu, ui->instance, ui);
 	ShowWindow(hwnd, show);
 	update_ui(ui);
 	while (GetMessage(&msg, 0, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
-	// window closed now
 	return msg.wParam;
 }
 
@@ -531,7 +523,7 @@ update_status_text(UI *ui, Tree *leaf)
 	}
 }
 
-// should be invoked when position in file is changed
+/* should be invoked when position in file is changed */
 void
 update_field_info(UI *ui)
 {
@@ -710,7 +702,7 @@ handle_char_normal(UI *ui, TCHAR c)
 	uint64 addr;
 
 	switch (c) {
-	case 8: // backspace
+	case 8: /* backspace */
 		move_backward(ui);
 		break;
 	case ' ':
@@ -818,6 +810,8 @@ handle_char_replace(UI *ui, TCHAR c)
 		ui->cursor_fine_pos = POS_HINIB;
 		med_cx = 11+cx*3;
 		med_set_char(ui->monoedit, cy, med_cx, c|32);
+		/* TODO: this does not work as intended due to double buffering
+		 */
 		med_invalidate_char(ui->monoedit, cy, med_cx);
 		move_forward(ui);
 	} else if (ui->cursor_fine_pos == POS_HINIB) {
@@ -865,7 +859,6 @@ init_font(UI *ui)
 	TEXTMETRIC tm;
 	HFONT mono_font;
 
-	//mono_font = GetStockObject(OEM_FIXED_FONT);
 	mono_font = CreateFontIndirect(&logfont);
 	dc = GetDC(0);
 	SelectObject(dc, mono_font);
@@ -948,7 +941,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 				hwnd, 0, instance, 0);
 	ui->treeview = treeview;
 
-	// create status bar
+	/* create status bar */
 	status_bar = CreateStatusWindow(WS_CHILD | WS_VISIBLE,
 					NULL,
 					hwnd,
@@ -956,16 +949,16 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 	SendMessage(status_bar, SB_SETPARTS, 4, (LPARAM) sbparts);
 	ui->status_bar = status_bar;
 
-	// get height of status bar
+	/* get height of status bar */
 	GetWindowRect(status_bar, &rect);
 	sbheight = rect.bottom - rect.top;
 
-	// adjust size of main window
+	/* adjust size of main window */
 	GetWindowRect(hwnd, &rect);
 	rect.right = rect.left + ui->charwidth * N_COL_CHAR;
 	rect.bottom = rect.top +
-		ui->charheight * INITIAL_N_ROW + // MonoEdit
-		sbheight; // status bar
+		ui->charheight * INITIAL_N_ROW + /* MonoEdit */
+		sbheight; /* status bar */
 	AdjustWindowRect(&rect, GetWindowLongPtr(hwnd, GWL_STYLE), TRUE);
 	SetWindowPos(hwnd, 0, 0, 0,
 		     rect.right - rect.left,
@@ -1132,6 +1125,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			break;
 		}
 		return 0;
+	case WM_ERASEBKGND:
+		return 0;
 	}
 	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
@@ -1163,13 +1158,11 @@ open_file(UI *ui, TCHAR *path)
 	uchar readonly = 0;
 
 	file = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
-			  0, // lpSecurityAttributes
-			  OPEN_EXISTING, 0, 0);
+			  0 /* lpSecurityAttributes */, OPEN_EXISTING, 0, 0);
 	if (file == INVALID_HANDLE_VALUE &&
 	    GetLastError() == ERROR_SHARING_VIOLATION) {
 		readonly = 1;
-		file = CreateFile(path, GENERIC_READ, FILE_SHARE_READ,
-				  0, // lpSecurityAttributes
+		file = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, 0,
 				  OPEN_EXISTING, 0, 0);
 	}
 	if (file == INVALID_HANDLE_VALUE) {
@@ -1235,7 +1228,7 @@ update_field_highlight(UI *ui)
 	HWND med = ui->monoedit;
 	if (end_clamp > start_clamp) {
 		int first_line = start_clamp >> LOG2_N_COL;
-		int last_line = (end_clamp-1) >> LOG2_N_COL; // inclusive
+		int last_line = (end_clamp-1) >> LOG2_N_COL; /* inclusive */
 		int end_x = end_clamp & (N_COL-1);
 		int byteoff = start_clamp & (N_COL-1);
 		int start, len;
@@ -1268,7 +1261,7 @@ update_field_highlight(UI *ui)
 			len = end_x;
 			med_add_tag(med, last_line, start, len, &attr);
 		} else {
-			// single line
+			/* single line */
 			start = 10 + byteoff * 3;
 			len = (end_x - byteoff) * 3 - 1;
 			med_add_tag(med, first_line, start, len, &attr);

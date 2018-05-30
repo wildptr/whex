@@ -670,6 +670,12 @@ getline(Med *w, int row)
 	}
 	l->segments = segments;
 	l->nseg = n;
+	t = taglist.first;
+	while (t) {
+		Tag *next = t->next;
+		free(t);
+		t = next;
+	}
 }
 
 static void

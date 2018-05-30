@@ -21,8 +21,10 @@ typedef struct tag {
 
 typedef struct {
 	TCHAR *text;
-	Tag *tags;
+	Tag *segments; /* counted array */
+	Tag *overlay;
 	int textlen;
+	int nseg;
 } Line;
 
 typedef struct {
@@ -50,6 +52,11 @@ typedef struct {
 	HDC backbuffer_dc;
 } Med;
 
+struct med_tag_list {
+	Tag *first;
+	Tag *last;
+};
+
 #if 0
 typedef struct {
 	int len, next;
@@ -63,7 +70,6 @@ static void free_text(Med *w, TCHAR *text, int nch);
 static void init_textbuf(Med *w, int len);
 #endif
 static void free_line(Line *l);
-static void free_line_tags(Line *l);
 static void update_buffer(Med *w);
 static void scroll(Med *w, HWND hwnd, int delta);
 static void set_size(Med *w, int nrow, int ncol);
@@ -83,91 +89,63 @@ static void set_cursor_pos(Med *, HWND, int y, int x);
 static void update_backbuffer(Med *);
 
 static void
+paint_segment(Med *w, HDC dc, Line *l, Tag *seg, int y)
+{
+	COLORREF textcolor = w->default_text_color;
+	COLORREF bgcolor = w->default_bg_color;
+	int x;
+	MedTextAttr *attr = &seg->attr;
+	if (attr->flags & MED_ATTR_TEXT_COLOR)
+		textcolor = attr->text_color;
+	if (attr->flags & MED_ATTR_BG_COLOR)
+		bgcolor = attr->bg_color;
+	SetTextColor(dc, textcolor);
+	SetBkColor(dc, bgcolor);
+	x = seg->start * w->charwidth;
+	/* both TextOut and DrawText flickers on Windows XP */
+	if (seg->start + seg->len <= l->textlen) {
+		TextOut(dc, x, y, l->text + seg->start, seg->len);
+	} else {
+		TCHAR *text = malloc(seg->len * sizeof *text);
+		int src = seg->start;
+		int dst = 0;
+		while (src < l->textlen) {
+			text[dst++] = l->text[src++];
+		}
+		while (dst < seg->len) {
+			text[dst++] = ' ';
+		}
+		TextOut(dc, x, y, text, seg->len);
+		free(text);
+	}
+}
+
+static void
 paint_row(Med *w, HDC dc, int row)
 {
-	Line *line;
-	Tag *segments, *t;
-	int ntag;
-	int maxnseg;
-	int nextstart;
-	int s;
-	int prev_end;
+	Line *l;
 	int y;
+	int n;
 	int i;
 	int linelen;
 	RECT r;
+	Tag *t;
 
 	assert(row >= 0 && row < w->nrow);
-	line = &w->buffer[row];
-	ntag = 0;
-	t = line->tags;
-	while (t) {
-		ntag++;
-		t = t->next;
+	l = &w->buffer[row];
+	y = w->charheight * row;
+	n = l->nseg;
+	for (i=0; i<n; i++) {
+		paint_segment(w, dc, l, l->segments+i, y);
 	}
-	maxnseg = ntag*2+1;
-	segments = malloc(maxnseg * sizeof *segments);
-	t = line->tags;
-	s = 0;
-	prev_end = 0;
-	for (;;) {
-		int len;
-		if (t) {
-			nextstart = t->start;
-		} else {
-			nextstart = max(line->textlen, prev_end);
-		}
-		/* untagged segment */
-		len = nextstart - prev_end;
-		if (len) {
-			segments[s].start = prev_end;
-			segments[s].len = len;
-			segments[s].attr.flags = 0;
-			s++;
-		}
-		if (!t) break;
-		/* tagged segment */
-		segments[s++] = *t;
-		prev_end = t->start + t->len;
-		t = t->next;
-	}
-	y = row * w->charheight;
-	for (i=0; i<s; i++) {
-		Tag *seg = &segments[i];
-		COLORREF textcolor = w->default_text_color;
-		COLORREF bgcolor = w->default_bg_color;
-		int x;
-		MedTextAttr *attr = &seg->attr;
-		if (attr->flags & MED_ATTR_TEXT_COLOR)
-			textcolor = attr->text_color;
-		if (attr->flags & MED_ATTR_BG_COLOR)
-			bgcolor = attr->bg_color;
-		SetTextColor(dc, textcolor);
-		SetBkColor(dc, bgcolor);
-		x = seg->start * w->charwidth;
-		/* both TextOut and DrawText flickers on Windows XP */
-		if (seg->start + seg->len <= line->textlen) {
-			TextOut(dc, x, y, line->text + seg->start, seg->len);
-		} else {
-			TCHAR *text = malloc(seg->len * sizeof *text);
-			int src = seg->start;
-			int dst = 0;
-			while (src < line->textlen) {
-				text[dst++] = line->text[src++];
-			}
-			while (dst < seg->len) {
-				text[dst++] = ' ';
-			}
-			TextOut(dc, x, y, text, seg->len);
-			free(text);
-		}
+	for (t=l->overlay; t; t=t->next) {
+		paint_segment(w, dc, l, t, y);
 	}
 	linelen = 0;
-	if (s) {
-		Tag *lastseg = &segments[s-1];
+	if (n) {
+		Tag *lastseg = &l->segments[n-1];
 		linelen = lastseg->start + lastseg->len;
 	}
-	free(segments);
 	/* fill right margin */
 	r.left = w->charwidth * linelen;
 	r.right = w->clientwidth;
@@ -197,34 +175,25 @@ update_backbuffer(Med *w)
 }
 
 static void
-clear_tags(Med *w)
-{
-	int i;
-	for (i=0; i<w->nrow; i++) {
-		Line *l = &w->buffer[i];
-		free_line_tags(l);
-	}
-}
-
-static void
-add_tag(Med *w, int row, int start, int len, MedTextAttr *attr)
+add_overlay(Med *w, int row, int start, int len, MedTextAttr *attr)
 {
 	Line *l;
 	Tag *newtag;
-	Tag *before;
-	Tag *next;
+	Tag *last;
 
 	assert(row >= 0 && row < w->nrow);
 	l = &w->buffer[row];
 	assert(l);
 
 	newtag = malloc(sizeof *newtag);
+	newtag->next = 0;
 	newtag->start = start;
 	newtag->len = len;
 	newtag->attr = *attr;
 
+#if 0
 	before = 0;
-	next = l->tags;
+	next = l->overlay;
 	while (next && next->start < newtag->start) {
 		before = next;
 		next = before->next;
@@ -233,12 +202,21 @@ add_tag(Med *w, int row, int start, int len, MedTextAttr *attr)
 	if (before) {
 		before->next = newtag;
 	} else {
-		l->tags = newtag;
+		l->overlay = newtag;
+	}
+#endif
+
+	last = l->overlay;
+	if (last) {
+		while (last->next) last = last->next;
+		last->next = newtag;
+	} else {
+		l->overlay = newtag;
 	}
 }
 
 void
-default_getline(uint64 _ln, Buf *_b, void *_arg)
+default_getline(uint64 _ln, Buf *_b, void *_arg, MedTagList *_taglist)
 {
 }
 
@@ -613,15 +591,15 @@ init_textbuf(Med *w, int len)
 #endif
 
 static void
-free_line_tags(Line *l)
+free_line_overlay(Line *l)
 {
-	Tag *t = l->tags;
+	Tag *t = l->overlay;
 	while (t) {
 		Tag *next = t->next;
 		free(t);
 		t = next;
 	}
-	l->tags = 0;
+	l->overlay = 0;
 }
 
 static void
@@ -629,7 +607,9 @@ free_line(Line *l)
 {
 	free(l->text);
 	l->text = 0;
-	free_line_tags(l);
+	free(l->segments);
+	l->segments = 0;
+	free_line_overlay(l);
 }
 
 static void
@@ -637,14 +617,59 @@ getline(Med *w, int row)
 {
 	HeapBuf hb;
 	Line *l = &w->buffer[row];
+	MedTagList taglist;
+	int n;
+	int maxnseg;
+	int nextstart;
+	int prev_end;
+	Tag *segments, *t;
+
 	if (init_heapbuf(&hb)) {
 		l->text = 0;
 		l->textlen = 0;
 		return;
 	}
-	w->getline(w->current_line + row, &hb.buf, w->getline_arg);
+
+	taglist.first = 0;
+	taglist.last = (MedTagList *) &taglist.first;
+	w->getline(w->current_line + row, &hb.buf, w->getline_arg, &taglist);
 	l->text = hb.start;
 	l->textlen = hb.cur - hb.start;
+
+	n = 0;
+	t = taglist.first;
+	while (t) {
+		n++;
+		t = t->next;
+	}
+	maxnseg = n*2+1;
+	segments = malloc(maxnseg * sizeof *segments);
+	t = taglist.first;
+	n = 0;
+	prev_end = 0;
+	for (;;) {
+		int len;
+		if (t) {
+			nextstart = t->start;
+		} else {
+			nextstart = max(l->textlen, prev_end);
+		}
+		/* untagged segment */
+		len = nextstart - prev_end;
+		if (len) {
+			segments[n].start = prev_end;
+			segments[n].len = len;
+			segments[n].attr.flags = 0;
+			n++;
+		}
+		if (!t) break;
+		/* tagged segment */
+		segments[n++] = *t;
+		prev_end = t->start + t->len;
+		t = t->next;
+	}
+	l->segments = segments;
+	l->nseg = n;
 }
 
 static void
@@ -723,17 +748,27 @@ med_scroll(HWND hwnd, int delta)
 }
 
 void
-med_add_tag(HWND hwnd, int ln, int start, int len, MedTextAttr *attr)
+med_add_overlay(HWND hwnd, int ln, int start, int len, MedTextAttr *attr)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	add_tag(w, ln, start, len, attr);
+	add_overlay(w, ln, start, len, attr);
+}
+
+static void
+clear_overlay(Med *w)
+{
+	int i;
+	for (i=0; i<w->nrow; i++) {
+		Line *l = &w->buffer[i];
+		free_line_overlay(l);
+	}
 }
 
 void
-med_clear_tags(HWND hwnd)
+med_clear_overlay(HWND hwnd)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
-	clear_tags(w);
+	clear_overlay(w);
 }
 
 static void
@@ -1017,4 +1052,24 @@ med_update_backbuffer(HWND hwnd)
 {
 	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
 	update_backbuffer(w);
+}
+
+void
+med_update_backbuffer_row(HWND hwnd, int row)
+{
+	Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+	HDC dc = w->backbuffer_dc;
+	paint_row(w, dc, row);
+}
+
+void
+med_add_tag(MedTagList *taglist, int start, int len, MedTextAttr *attr)
+{
+	Tag *newtag = malloc(sizeof *newtag);
+	newtag->next = 0;
+	newtag->start = start;
+	newtag->len = len;
+	newtag->attr = *attr;
+	taglist->last->next = newtag;
+	taglist->last = newtag;
 }

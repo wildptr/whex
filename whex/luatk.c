@@ -885,7 +885,7 @@ api_listview_clear(lua_State *L)
 }
 
 static void
-med_getline(uint64 ln, Buf *b, void *arg)
+med_getline(uint64 ln, Buf *b, void *arg, MedTagList *taglist)
 {
 	lua_State *L = lua;
 	HWND med = (HWND) arg;

@@ -57,6 +57,7 @@ enum {
 	POS_HINIB,
 	POS_LONIB,
 	POS_ASCII,
+	POS_GAP
 };
 
 typedef struct {
@@ -93,6 +94,7 @@ typedef struct {
 	uint replace_buf_len;
 	Tree *tree;
 	Region tree_rgn;
+	HBRUSH bgbrush;
 } UI;
 
 Region rgn;
@@ -131,8 +133,7 @@ void handle_wm_create(UI *, LPCREATESTRUCT);
 int open_file(UI *, TCHAR *);
 void close_file(UI *);
 void update_ui(UI *);
-void update_field_highlight(UI *);
-void update_eof_tags(UI *);
+void update_overlay(UI *);
 void move_forward(UI *);
 void move_backward(UI *);
 void move_next_field(UI *);
@@ -530,7 +531,7 @@ update_field_info(UI *ui)
 	if (ui->filepath) {
 		Tree *tree = ui->tree;
 		Tree *leaf = 0;
-		med_clear_tags(ui->monoedit);
+		med_clear_overlay(ui->monoedit);
 		if (tree) {
 			if (!cursor_in_gap(ui)) {
 				leaf = tree_lookup(tree, cursor_pos(ui));
@@ -542,9 +543,8 @@ update_field_info(UI *ui)
 				ui->hl_start = 0;
 				ui->hl_len = 0;
 			}
-			update_field_highlight(ui);
 		}
-		update_eof_tags(ui);
+		update_overlay(ui);
 		med_update_backbuffer(ui->monoedit);
 		InvalidateRect(ui->monoedit, 0, FALSE);
 		update_status_text(ui, leaf);
@@ -568,16 +568,19 @@ update_logical_cursor_pos(UI *ui)
 	ui->cursor_y = cy;
 	if (cx < 9) {
 		ui->cursor_x = -1;
+		ui->cursor_fine_pos = POS_GAP;
 	} else if (cx < 57) {
 		ui->cursor_x = (cx-9)/3;
 		ui->cursor_fine_pos = (cx-9)%3;
 	} else if (cx < 59) {
 		ui->cursor_x = -1;
+		ui->cursor_fine_pos = POS_GAP;
 	} else if (cx < 75) {
 		ui->cursor_x = cx-59;
 		ui->cursor_fine_pos = POS_ASCII;
 	} else {
 		ui->cursor_x = -1;
+		ui->cursor_fine_pos = POS_GAP;
 	}
 	after_update_cursor_pos(ui);
 }
@@ -803,16 +806,18 @@ handle_char_replace(UI *ui, TCHAR c)
 	cx = ui->cursor_x;
 	pos = cursor_pos(ui);
 	bufsize = buf_size(ui->buffer);
+	HWND med = ui->monoedit;
 	if (ui->cursor_fine_pos == POS_LONIB) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
 		ui->cursor_fine_pos = POS_HINIB;
 		med_cx = 11+cx*3;
-		med_set_char(ui->monoedit, cy, med_cx, c|32);
-		/* TODO: this does not work as intended due to double buffering
-		 */
-		med_invalidate_char(ui->monoedit, cy, med_cx);
+		med_set_char(med, cy, med_cx, c|32);
+		med_set_char(med, cy, 59+cx, val);
+		med_update_backbuffer_row(med, cy);
+		med_invalidate_char(med, cy, med_cx);
+		med_invalidate_char(med, cy, 59+cx);
 		move_forward(ui);
 	} else if (ui->cursor_fine_pos == POS_HINIB) {
 		if (pos < bufsize) {
@@ -828,10 +833,13 @@ handle_char_replace(UI *ui, TCHAR c)
 		}
 		ui->replace_buf[ui->replace_buf_len++] = val;
 		ui->cursor_fine_pos = POS_LONIB;
-		med_set_cursor_pos(ui->monoedit, cy, 11+cx*3);
+		med_set_cursor_pos(med, cy, 11+cx*3);
 		med_cx = 10+cx*3;
-		med_set_char(ui->monoedit, cy, med_cx, c|32);
-		med_invalidate_char(ui->monoedit, cy, med_cx);
+		med_set_char(med, cy, med_cx, c|32);
+		med_set_char(med, cy, 59+cx, val);
+		med_update_backbuffer_row(med, cy);
+		med_invalidate_char(med, cy, med_cx);
+		med_invalidate_char(med, cy, 59+cx);
 	}
 }
 
@@ -870,7 +878,7 @@ init_font(UI *ui)
 }
 
 void
-med_getline(uint64 ln, Buf *p, void *arg)
+med_getline(uint64 ln, Buf *p, void *arg, MedTagList *taglist)
 {
 	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
@@ -899,6 +907,19 @@ med_getline(uint64 ln, Buf *p, void *arg)
 	for (i=0; i<N_COL; i++) {
 		uchar c = data[i];
 		p->putc(p, (TCHAR)(c < 0x20 || c > 0x7e ? '.' : c));
+	}
+
+	if (end < N_COL) {
+		int start, len;
+		MedTextAttr attr;
+		attr.flags = MED_ATTR_TEXT_COLOR;
+		attr.text_color = RGB(192, 192, 192);
+		start = 10 + end * 3;
+		len = (N_COL - end) * 3 - 1;
+		med_add_tag(taglist, start, len, &attr);
+		start = 11 + N_COL*3 + end;
+		len = N_COL - end;
+		med_add_tag(taglist, start, len, &attr);
 	}
 }
 
@@ -979,6 +1000,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 	case WM_NCCREATE:
 		ui = ((LPCREATESTRUCT)lparam)->lpCreateParams;
 		ui->hwnd = hwnd;
+		ui->bgbrush = (HBRUSH)
+			GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) ui);
 		break;
 	case WM_CREATE:
@@ -986,6 +1009,14 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return 0;
 	case WM_DESTROY:
 		PostQuitMessage(0);
+		return 0;
+	case WM_PAINT:
+		{
+			PAINTSTRUCT ps;
+			HDC dc = BeginPaint(hwnd, &ps);
+			FillRect(dc, &ps.rcPaint, ui->bgbrush);
+			EndPaint(hwnd, &ps);
+		}
 		return 0;
 	case WM_SIZE:
 		{
@@ -1203,6 +1234,8 @@ close_file(UI *ui)
 		free(ui->plugin_funcname);
 		ui->plugin_funcname = 0;
 	}
+	ui->tree = 0;
+	rfreeall(&ui->tree_rgn);
 }
 
 static uint64
@@ -1214,7 +1247,7 @@ clamp(uint64 x, uint64 min, uint64 max)
 }
 
 void
-update_field_highlight(UI *ui)
+update_overlay(UI *ui)
 {
 	uint64 start = ui->hl_start;
 	uint64 len = ui->hl_len;
@@ -1226,13 +1259,13 @@ update_field_highlight(UI *ui)
 	int end_clamp =
 		(int)(clamp(start + len, view_start, view_end) - view_start);
 	HWND med = ui->monoedit;
+	MedTextAttr attr;
 	if (end_clamp > start_clamp) {
 		int first_line = start_clamp >> LOG2_N_COL;
 		int last_line = (end_clamp-1) >> LOG2_N_COL; /* inclusive */
 		int end_x = end_clamp & (N_COL-1);
 		int byteoff = start_clamp & (N_COL-1);
 		int start, len;
-		MedTextAttr attr;
 		attr.flags = MED_ATTR_BG_COLOR;
 		attr.bg_color = RGB(204, 204, 204);
 		if (end_x == 0) {
@@ -1242,71 +1275,44 @@ update_field_highlight(UI *ui)
 			int i;
 			start = 10 + byteoff * 3;
 			len = (N_COL - byteoff) * 3 - 1;
-			med_add_tag(med, first_line, start, len, &attr);
+			med_add_overlay(med, first_line, start, len, &attr);
 			start = 11 + N_COL*3 + byteoff;
 			len = N_COL - byteoff;
-			med_add_tag(med, first_line, start, len, &attr);
+			med_add_overlay(med, first_line, start, len, &attr);
 			for (i=first_line+1; i<last_line; i++) {
 				start = 10;
 				len = N_COL*3-1;
-				med_add_tag(med, i, start, len, &attr);
+				med_add_overlay(med, i, start, len, &attr);
 				start = 11+N_COL*3;
 				len = N_COL;
-				med_add_tag(med, i, start, len, &attr);
+				med_add_overlay(med, i, start, len, &attr);
 			}
 			start = 10;
 			len = end_x * 3 - 1;
-			med_add_tag(med, last_line, start, len, &attr);
+			med_add_overlay(med, last_line, start, len, &attr);
 			start = 11+N_COL*3;
 			len = end_x;
-			med_add_tag(med, last_line, start, len, &attr);
+			med_add_overlay(med, last_line, start, len, &attr);
 		} else {
 			/* single line */
 			start = 10 + byteoff * 3;
 			len = (end_x - byteoff) * 3 - 1;
-			med_add_tag(med, first_line, start, len, &attr);
+			med_add_overlay(med, first_line, start, len, &attr);
 			start = 11+N_COL*3+byteoff;
 			len = end_x - byteoff;
-			med_add_tag(med, first_line, start, len, &attr);
+			med_add_overlay(med, first_line, start, len, &attr);
 		}
 	}
-}
-
-void
-update_eof_tags(UI *ui)
-{
-	int nrow = get_nrow(ui);
-	uint64 curline = current_line(ui);
-	uint64 view_end = (curline + nrow) << LOG2_N_COL;
-	uint64 bufsize = buf_size(ui->buffer);
-	HWND med = ui->monoedit;
-	if (view_end > bufsize) {
-		/* TODO: eliminate duplication */
-		MedTextAttr attr;
-		int byteoff = (int) bufsize & (N_COL-1);
-		/* might be negative (only possible value is -1) */
-		int first_line = (int)(bufsize - (curline << LOG2_N_COL)) >>
-			LOG2_N_COL;
-		int start, len;
-		int i;
-		attr.flags = MED_ATTR_TEXT_COLOR;
-		attr.text_color = RGB(192, 192, 192);
-		if (first_line >= 0) {
-			start = 10 + byteoff * 3;
-			len = (N_COL - byteoff) * 3 - 1;
-			med_add_tag(med, first_line, start, len, &attr);
-			start = 11 + N_COL*3 + byteoff;
-			len = N_COL - byteoff;
-			med_add_tag(med, first_line, start, len, &attr);
-		}
-		for (i=first_line+1; i<nrow; i++) {
-			start = 10;
-			len = N_COL*3-1;
-			med_add_tag(med, i, start, len, &attr);
-			start = 11+N_COL*3;
-			len = N_COL;
-			med_add_tag(med, i, start, len, &attr);
-		}
+	attr.flags = MED_ATTR_BG_COLOR;
+	attr.bg_color = RGB(255, 255, 204);
+	switch (ui->cursor_fine_pos) {
+	case POS_HINIB:
+	case POS_LONIB:
+		med_add_overlay(med, ui->cursor_y, 59+ui->cursor_x, 1, &attr);
+		break;
+	case POS_ASCII:
+		med_add_overlay(med, ui->cursor_y, 10+ui->cursor_x*3, 2, &attr);
+		break;
 	}
 }
 
@@ -1330,14 +1336,13 @@ update_ui(UI *ui)
 	mii.fMask = MIIM_STATE;
 
 	update_window_title(ui);
+	update_logical_cursor_pos(ui);
 	if (ui->filepath) {
 		ShowWindow(ui->monoedit, SW_SHOW);
-		update_logical_cursor_pos(ui);
 		mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
 		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
 		mii.fState = MFS_ENABLED;
 	} else {
-		update_field_info(ui);
 		ShowWindow(ui->monoedit, SW_HIDE);
 		mii.fState = MFS_GRAYED;
 		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);

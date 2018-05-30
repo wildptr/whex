@@ -4,7 +4,9 @@ typedef struct {
 	COLORREF bg_color;
 } MedTextAttr;
 
-typedef void (*MedGetLineProc)(uint64 ln, Buf *buf, void *arg);
+typedef struct med_tag_list MedTagList;
+
+typedef void (*MedGetLineProc)(uint64 ln, Buf *buf, void *arg, MedTagList *);
 
 typedef struct {
 	uchar mask;
@@ -39,8 +41,8 @@ TCHAR *med_alloc_text(HWND, int nch);
 #endif
 void med_update_buffer(HWND);
 void med_scroll(HWND, int delta);
-void med_add_tag(HWND, int ln, int start, int len, MedTextAttr *attr);
-void med_clear_tags(HWND);
+void med_add_overlay(HWND, int ln, int start, int len, MedTextAttr *attr);
+void med_clear_overlay(HWND);
 void med_set_cursor_pos(HWND, int y, int x);
 void med_set_size(HWND, int nrow, int ncol);
 void med_set_char(HWND, int y, int x, TCHAR c);
@@ -55,5 +57,7 @@ void med_move_right(HWND);
 void med_move_up(HWND);
 void med_move_down(HWND);
 void med_reset_position(HWND);
-void med_invalidate_char(HWND, int row, int col);
 void med_update_backbuffer(HWND);
+void med_update_backbuffer_row(HWND, int);
+void med_invalidate_char(HWND, int, int);
+void med_add_tag(MedTagList *, int start, int len, MedTextAttr *attr);

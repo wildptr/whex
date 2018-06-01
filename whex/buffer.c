@@ -161,14 +161,15 @@ kmp_table(int *T, const uchar *pat, int len)
 	}
 }
 
-uint64
-buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start)
+int
+buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start, uint64 *pos)
 {
 	int *T;
 	uint64 m;
 	int i;
 	Region *r;
 	void *top;
+	int ret;
 
 	assert(len);
 	r = &b->tmp_rgn;
@@ -179,7 +180,11 @@ buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start)
 	i = 0;
 	while (m+i < b->buffer_size) {
 		if (pat[i] == buf_getbyte(b, m+i)) {
-			if (i == len - 1) goto end; /* match found */
+			if (i == len - 1) {
+				*pos = m;
+				ret = 0;
+				goto end; /* match found */
+			}
 			i++;
 		} else {
 			// current character does not match
@@ -192,10 +197,10 @@ buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start)
 		}
 	}
 	/* no match */
-	m = b->buffer_size;
+	ret = -1;
 end:
 	rfree(r, top);
-	return m;
+	return ret;
 }
 
 /*
@@ -306,6 +311,7 @@ nomem:
 	b->cache = cache;
 	b->cache_data = cache_data;
 	b->next_cache = 0;
+	rinit(&b->tmp_rgn);
 
 	return 0;
 }

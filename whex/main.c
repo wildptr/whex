@@ -723,7 +723,26 @@ handle_char_normal(UI *ui, TCHAR c)
 	case '?':
 		text = inputbox(ui, TEXT("Text Search"));
 		if (text) {
+			char *pat;
+			uint64 start, pos;
+			int ret;
+#ifdef UNICODE
+			pat = utf16_to_mbcs(text);
 			free(text);
+#else
+			pat = text;
+#endif
+			if (ui->cursor_fine_pos != POS_GAP) {
+				start = cursor_pos(ui);
+			} else {
+				start = 0;
+			}
+			ret = buf_kmp_search
+				(ui->buffer, pat, strlen(pat), start, &pos);
+			free(pat);
+			if (ret == 0) {
+				goto_address(ui, pos);
+			}
 		}
 		SetFocus(ui->monoedit);
 		break;
@@ -792,6 +811,7 @@ handle_char_replace(UI *ui, TCHAR c)
 	uint64 pos;
 	uint64 bufsize;
 	int med_cx;
+	HWND med;
 
 	if (c >= '0' && c <= '9') {
 		val = c-'0';
@@ -806,7 +826,7 @@ handle_char_replace(UI *ui, TCHAR c)
 	cx = ui->cursor_x;
 	pos = cursor_pos(ui);
 	bufsize = buf_size(ui->buffer);
-	HWND med = ui->monoedit;
+	med = ui->monoedit;
 	if (ui->cursor_fine_pos == POS_LONIB) {
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;

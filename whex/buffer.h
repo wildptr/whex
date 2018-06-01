@@ -11,3 +11,5 @@ int buf_save_inplace(Buffer *);
 void buf_replace(Buffer *, uint64, const uchar *, size_t);
 void buf_insert(Buffer *, uint64, const uchar *, size_t);
 uint64 buf_size(Buffer *);
+int buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start,
+		   uint64 *pos);

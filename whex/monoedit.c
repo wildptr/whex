@@ -631,7 +631,7 @@ getline(Med *w, int row)
 	}
 
 	taglist.first = 0;
-	taglist.last = (MedTagList *) &taglist.first;
+	taglist.last = (Tag *) &taglist.first;
 	w->getline(w->current_line + row, &hb.buf, w->getline_arg, &taglist);
 	l->text = hb.start;
 	l->textlen = hb.cur - hb.start;

@@ -567,19 +567,16 @@ update_logical_cursor_pos(UI *ui)
 	cx = pos[1];
 	ui->cursor_y = cy;
 	if (cx < 9) {
-		ui->cursor_x = -1;
 		ui->cursor_fine_pos = POS_GAP;
 	} else if (cx < 57) {
 		ui->cursor_x = (cx-9)/3;
 		ui->cursor_fine_pos = (cx-9)%3;
 	} else if (cx < 59) {
-		ui->cursor_x = -1;
 		ui->cursor_fine_pos = POS_GAP;
 	} else if (cx < 75) {
 		ui->cursor_x = cx-59;
 		ui->cursor_fine_pos = POS_ASCII;
 	} else {
-		ui->cursor_x = -1;
 		ui->cursor_fine_pos = POS_GAP;
 	}
 	after_update_cursor_pos(ui);
@@ -589,7 +586,6 @@ void
 update_physical_cursor_pos(UI *ui)
 {
 	int cx;
-	assert(ui->cursor_x >= 0);
 	cx = col_to_cx(ui, ui->cursor_x);
 	med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
 }
@@ -603,14 +599,13 @@ after_update_cursor_pos(UI *ui)
 uchar
 cursor_in_gap(UI *ui)
 {
-	return ui->cursor_x < 0;
+	return ui->cursor_fine_pos == POS_GAP;
 }
 
 uint64
 cursor_pos(UI *ui)
 {
 	int pos[2];
-	assert(ui->cursor_x >= 0);
 	med_get_cursor_pos(ui->monoedit, pos);
 	return ((current_line(ui) + pos[0]) << LOG2_N_COL) + ui->cursor_x;
 }
@@ -624,13 +619,15 @@ current_line(UI *ui)
 int
 col_to_cx(UI *ui, int col)
 {
-	int cx;
-	if (ui->cursor_fine_pos == POS_ASCII) {
-		cx = 59+col;
-	} else {
-		cx = 9+col*3+ui->cursor_fine_pos;
+	switch (ui->cursor_fine_pos) {
+	case POS_ASCII:
+		return 59+col;
+	case POS_GAP:
+		assert(0);
+		/* fallthrough */
+	default:
+		return 9+col*3+ui->cursor_fine_pos;
 	}
-	return cx;
 }
 
 void
@@ -643,6 +640,9 @@ goto_address(UI *ui, uint64 addr)
 	int nrow;
 
 	assert(addr >= 0 && addr <= buf_size(ui->buffer));
+	if (ui->cursor_fine_pos == POS_GAP) {
+		ui->cursor_fine_pos = POS_HINIB;
+	}
 	cx = col_to_cx(ui, col);
 	curline = current_line(ui);
 	nrow = get_nrow(ui);
@@ -732,11 +732,7 @@ handle_char_normal(UI *ui, TCHAR c)
 #else
 			pat = text;
 #endif
-			if (ui->cursor_fine_pos != POS_GAP) {
-				start = cursor_pos(ui);
-			} else {
-				start = 0;
-			}
+			start = cursor_pos(ui);
 			ret = buf_kmp_search
 				(ui->buffer, pat, strlen(pat), start, &pos);
 			free(pat);
@@ -803,6 +799,12 @@ handle_char_normal(UI *ui, TCHAR c)
 	}
 }
 
+static uchar
+hexchar(uchar val)
+{
+	return val < 10 ? '0'+val : 'a'+(val-10);
+}
+
 void
 handle_char_replace(UI *ui, TCHAR c)
 {
@@ -812,22 +814,33 @@ handle_char_replace(UI *ui, TCHAR c)
 	uint64 bufsize;
 	int med_cx;
 	HWND med;
+	uchar hinib, lonib;
 
-	if (c >= '0' && c <= '9') {
-		val = c-'0';
-	} else if (c >= 'a' && c <= 'f') {
-		val = 10+(c-'a');
-	} else if (c >= 'A' && c <= 'F') {
-		val = 10+(c-'A');
-	} else return;
+	switch (ui->cursor_fine_pos) {
+	case POS_LONIB:
+	case POS_HINIB:
+		if (c >= '0' && c <= '9') {
+			val = c-'0';
+		} else if (c >= 'a' && c <= 'f') {
+			val = 10+(c-'a');
+		} else if (c >= 'A' && c <= 'F') {
+			val = 10+(c-'A');
+		} else return;
+		break;
+	case POS_ASCII:
+		val = (uchar) c;
+		break;
+	default:
+		return;
+	}
 
-	if (cursor_in_gap(ui)) return;
 	cy = ui->cursor_y;
 	cx = ui->cursor_x;
 	pos = cursor_pos(ui);
 	bufsize = buf_size(ui->buffer);
 	med = ui->monoedit;
-	if (ui->cursor_fine_pos == POS_LONIB) {
+	switch (ui->cursor_fine_pos) {
+	case POS_LONIB:
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
@@ -839,7 +852,8 @@ handle_char_replace(UI *ui, TCHAR c)
 		med_invalidate_char(med, cy, med_cx);
 		med_invalidate_char(med, cy, 59+cx);
 		move_forward(ui);
-	} else if (ui->cursor_fine_pos == POS_HINIB) {
+		break;
+	case POS_HINIB:
 		if (pos < bufsize) {
 			b = buf_getbyte(ui->buffer, pos);
 		} else {
@@ -860,6 +874,21 @@ handle_char_replace(UI *ui, TCHAR c)
 		med_update_backbuffer_row(med, cy);
 		med_invalidate_char(med, cy, med_cx);
 		med_invalidate_char(med, cy, 59+cx);
+		break;
+	case POS_ASCII:
+		hinib = hexchar(val>>4);
+		lonib = hexchar(val&15);
+		ui->replace_buf[ui->replace_buf_len++] = val;
+		med_set_cursor_pos(med, cy, 11+cx*3);
+		med_set_char(med, cy, 10+cx*3, hinib);
+		med_set_char(med, cy, 11+cx*3, lonib);
+		med_set_char(med, cy, 59+cx, val);
+		med_update_backbuffer_row(med, cy);
+		med_invalidate_char(med, cy, 10+cx*3);
+		med_invalidate_char(med, cy, 11+cx*3);
+		med_invalidate_char(med, cy, 59+cx);
+		move_forward(ui);
+		break;
 	}
 }
 
@@ -1386,7 +1415,7 @@ update_ui(UI *ui)
 void
 move_forward(UI *ui)
 {
-	if (ui->cursor_x < 0) return;
+	if (cursor_in_gap(ui)) return;
 	if (ui->cursor_x+1 < N_COL) {
 		ui->cursor_x++;
 		update_physical_cursor_pos(ui);
@@ -1410,7 +1439,7 @@ void
 move_backward(UI *ui)
 {
 	int cy;
-	if (ui->cursor_x < 0) return;
+	if (cursor_in_gap(ui)) return;
 	cy = ui->cursor_y;
 	if (ui->cursor_x > 0) {
 		ui->cursor_x--;
@@ -1868,17 +1897,19 @@ exit_replace_mode(UI *ui)
 	uint64 bufsize = buf_size(ui->buffer);
 	uint64 replace_end = ui->replace_start + ui->replace_buf_len;
 	ui->mode = MODE_NORMAL;
-	if (replace_end > bufsize) {
-		size_t extra = (size_t)(replace_end - bufsize);
-		uint64 total_lines;
-		buf_insert(ui->buffer, bufsize, 0, extra);
-		total_lines = replace_end >> LOG2_N_COL;
-		if (replace_end&(N_COL-1)) {
-			total_lines++;
+	if (ui->replace_buf_len > 0) {
+		if (replace_end > bufsize) {
+			size_t extra = (size_t)(replace_end - bufsize);
+			uint64 total_lines;
+			buf_insert(ui->buffer, bufsize, 0, extra);
+			total_lines = replace_end >> LOG2_N_COL;
+			if (replace_end&(N_COL-1)) {
+				total_lines++;
+			}
+			med_set_total_lines(ui->monoedit, total_lines);
 		}
-		med_set_total_lines(ui->monoedit, total_lines);
+		buf_replace(ui->buffer, ui->replace_start,
+			    ui->replace_buf, ui->replace_buf_len);
+		ui->replace_buf_len = 0;
 	}
-	buf_replace(ui->buffer, ui->replace_start,
-		    ui->replace_buf, ui->replace_buf_len);
-	ui->replace_buf_len = 0;
 }

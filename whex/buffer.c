@@ -335,6 +335,7 @@ buf_finalize(Buffer *b)
 	b->cache = 0;
 	free(b->cache_data);
 	b->cache_data = 0;
+	rfreeall(&b->tmp_rgn);
 }
 
 int

@@ -1,7 +1,6 @@
-#include <stdlib.h>
 #include <windows.h>
 
-#include "region.h"
+#include "u.h"
 #include "unicode.h"
 
 #if 0

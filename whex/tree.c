@@ -1,10 +1,4 @@
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include "types.h"
-#include "region.h"
+#include "u.h"
 #include "tree.h"
 
 #if 0

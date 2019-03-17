@@ -1,14 +1,10 @@
-#include <stdio.h>
-#include <stdlib.h>
-
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
 
 #include <windows.h>
 
-#include "types.h"
-#include "region.h"
+#include "u.h"
 #include "buffer.h"
 #include "tree.h"
 

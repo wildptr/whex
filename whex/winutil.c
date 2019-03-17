@@ -1,7 +1,5 @@
 #include <windows.h>
-#include "types.h"
-#include "buf.h"
-#include "printf.h"
+#include "u.h"
 #include "winutil.h"
 
 int
@@ -21,17 +19,19 @@ file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
 void
 msgboxf(HWND hwnd, const TCHAR *fmt, ...)
 {
-	HeapBuf hb;
+	T(HeapBuf) hb;
 	va_list ap;
 	TCHAR classname[32];
+	TCHAR *s;
 
-	if (init_heapbuf(&hb)) return;
+	T(init_heapbuf)(&hb);
 	if (!GetClassName(hwnd, classname, 32)) {
 		classname[0] = 0;
 	}
 	va_start(ap, fmt);
-	vbprintf(&hb.buf, fmt, ap);
+	T(vbprintf)(&hb.buf, fmt, ap);
 	va_end(ap);
-	MessageBox(hwnd, hb.start, classname, MB_OK);
+	s = T(finish_heapbuf)(&hb);
+	MessageBox(hwnd, s, classname, MB_OK);
 	free(hb.start);
 }

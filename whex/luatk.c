@@ -15,12 +15,9 @@
 #include "vc6compat.h"
 #endif
 
-#include "types.h"
-#include "region.h"
-#include "buf.h"
-#include "monoedit.h"
+#include "u.h"
 #include "unicode.h"
-#include "printf.h"
+#include "monoedit.h"
 
 #define BUFSIZE 512
 
@@ -885,7 +882,7 @@ api_listview_clear(lua_State *L)
 }
 
 static void
-med_getline(uint64 ln, Buf *b, void *arg, MedTagList *taglist)
+med_getline(uint64 ln, T(Buf) *b, void *arg, MedTagList *taglist)
 {
 	lua_State *L = lua;
 	HWND med = (HWND) arg;

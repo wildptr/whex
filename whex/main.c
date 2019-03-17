@@ -15,16 +15,11 @@
 #undef putc
 #endif
 
-#include "types.h"
-#include "region.h"
-#include "list.h"
+#include "u.h"
 #include "buffer.h"
 #include "tree.h"
 #include "unicode.h"
 #include "resource.h"
-#include "buf.h"
-#include "printf.h"
-#include "util.h"
 #include "monoedit.h"
 
 #define INITIAL_N_ROW 32
@@ -119,7 +114,7 @@ void after_update_cursor_pos(UI *);
 uint64 cursor_pos(UI *);
 uint64 current_line(UI *);
 void goto_address(UI *, uint64);
-void error_prompt(UI *, const char *);
+void error_prompt(UI *, const TCHAR *);
 void move_up(UI *);
 void move_down(UI *);
 void move_left(UI *);
@@ -160,7 +155,7 @@ int load_filetype_plugin(UI *, const TCHAR *);
 int save_file(UI *);
 int save_file_as(UI *, const TCHAR *);
 void populate_treeview(UI *);
-int format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
+void format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
 int get_nrow(UI *ui);
 void exit_replace_mode(UI *);
 uchar cursor_in_gap(UI *);
@@ -304,19 +299,23 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 	return msg.wParam;
 }
 
+typedef struct tstring_list {
+	TCHAR *hd;
+	struct tstring_list *tl;
+} TStringList;
+
 /* TODO: handle backslash */
 static TCHAR **
 cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 {
 	int narg = 0;
 	int i;
-	List head = {0};
-	List *last = &head;
+	TStringList *arglist, **plast = &arglist;
 	TCHAR *p = cmdline;
 	TCHAR *q;
 	TCHAR *arg;
 	TCHAR **argv;
-	List *node;
+	TStringList *node;
 
 	do {
 		int n;
@@ -337,17 +336,21 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 			n = q-p;
 		}
 		narg++;
-		arg = ralloc(r, (n+1) * sizeof *arg);
-		memcpy(arg, p, n*sizeof(TCHAR));
+		NEWARRAY(arg, n+1, r);
+		memcpy(arg, p, n * sizeof *arg);
 		arg[n] = 0;
-		APPEND(last, arg, r);
+		node = alloca(sizeof *node);
+		node->hd = arg;
+		node->tl = 0;
+		*plast = node;
+		plast = &node->tl;
 		p = q;
 		while (isspace(*p)) p++;
 	} while (*p);
 	i = 0;
-	argv = ralloc(r, (narg+1) * sizeof *argv);
-	for (node = head.next; node; node = node->next)
-		argv[i++] = node->data;
+	NEWARRAY(argv, narg+1, r);
+	for (node = arglist; node; node = node->tl)
+		argv[i++] = node->hd;
 	argv[narg] = 0;
 	*argc = narg;
 	return argv;
@@ -357,7 +360,7 @@ TCHAR *
 lstrdup(const TCHAR *s)
 {
 	int nb = (lstrlen(s)+1) * sizeof(TCHAR);
-	TCHAR *ret = malloc(nb);
+	TCHAR *ret = xmalloc(nb);
 	memcpy(ret, s, nb);
 	return ret;
 }
@@ -375,11 +378,11 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	Buffer *b;
 	UI *ui;
 
-	workdir = malloc(BUFSIZE);
+	workdir = xmalloc(BUFSIZE);
 	wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
 	if (wdlen > BUFSIZE) {
 		free(workdir);
-		workdir = malloc(wdlen);
+		workdir = xmalloc(wdlen);
 		wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
 	}
 	if (!wdlen) return 1;
@@ -465,7 +468,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "customtype");
 
 	{
-		char *ftdet_path = asprintfA("%s/ftdet.lua", workdir);
+		char *ftdet_path = asprintf("%s/ftdet.lua", workdir);
 		if (luaL_dofile(L, ftdet_path)) {
 			luaerrorbox(0, L);
 			lua_pop(L, 1);
@@ -477,12 +480,13 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
 	lua_setglobal(L, "whex");
 
-	ui = ralloc0(&rgn, sizeof *ui);
+	NEW(ui, &rgn);
+	memset(ui, 0, sizeof *ui);
 	ui->lua = L;
 	ui->buffer = b;
 	ui->instance = instance;
 	ui->replace_buf_cap = 16;
-	ui->replace_buf = malloc(ui->replace_buf_cap);
+	ui->replace_buf = xmalloc(ui->replace_buf_cap);
 
 	return start_gui(show, ui, filepath);
 }
@@ -503,7 +507,7 @@ update_status_text(UI *ui, Tree *leaf)
 	} else {
 		uint64 pos = cursor_pos(ui);
 		TCHAR buf[17];
-		_wsprintf(buf, TEXT("%llx"), pos);
+		T(_sprintf)(buf, TEXT("%llx"), pos);
 		SendMessage(sb, SB_SETTEXT, 0, (LPARAM) buf);
 	}
 	if (leaf) {
@@ -665,9 +669,9 @@ goto_address(UI *ui, uint64 addr)
 }
 
 void
-error_prompt(UI *ui, const char *errmsg)
+error_prompt(UI *ui, const TCHAR *errmsg)
 {
-	MessageBoxA(ui->hwnd, errmsg, "Error", MB_ICONERROR);
+	MessageBox(ui->hwnd, errmsg, TEXT("Error"), MB_ICONERROR);
 }
 
 void
@@ -861,7 +865,7 @@ handle_char_replace(UI *ui, TCHAR c)
 		}
 		val = val<<4 | (b&0x0f);
 		if (ui->replace_buf_len == ui->replace_buf_cap) {
-			ui->replace_buf = realloc(ui->replace_buf,
+			ui->replace_buf = xrealloc(ui->replace_buf,
 						  ui->replace_buf_cap*2);
 			ui->replace_buf_cap *= 2;
 		}
@@ -927,7 +931,7 @@ init_font(UI *ui)
 }
 
 void
-med_getline(uint64 ln, Buf *p, void *arg, MedTagList *taglist)
+med_getline(uint64 ln, T(Buf) *p, void *arg, MedTagList *taglist)
 {
 	uchar data[N_COL];
 	Buffer *b = (Buffer *) arg;
@@ -944,15 +948,15 @@ med_getline(uint64 ln, Buf *p, void *arg, MedTagList *taglist)
 	} else {
 		end = (int)(bufsize - start);
 	}
-	bprintf(p, TEXT("%08llx:"), addr);
+	T(bprintf)(p, TEXT("%.8llx:"), addr);
 	if (end) {
 		buf_read(b, data, addr, end);
 	}
 	for (i=end; i<N_COL; i++) data[i] = 0;
 	for (i=0; i<N_COL; i++) {
-		bprintf(p, TEXT(" %02x"), data[i]);
+		T(bprintf)(p, TEXT(" %.2x"), data[i]);
 	}
-	bprintf(p, TEXT("  "));
+	T(bprintf)(p, TEXT("  "));
 	for (i=0; i<N_COL; i++) {
 		uchar c = data[i];
 		p->putc(p, (TCHAR)(c < 0x20 || c > 0x7e ? '.' : c));
@@ -997,6 +1001,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 				0, 0, 0, 0,
 				hwnd, (HMENU) ID_MONOEDIT, instance, &medconf);
 	ui->monoedit = monoedit;
+
 	/* subclass monoedit window */
 	SetWindowLongPtr(monoedit, GWLP_USERDATA, (LONG_PTR) ui);
 	ui->med_wndproc = (WNDPROC) SetWindowLongPtr
@@ -1035,6 +1040,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 		     rect.bottom - rect.top,
 		     SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
 
+	/* set focus to edit area */
 	SetFocus(monoedit);
 }
 
@@ -1218,7 +1224,7 @@ update_window_title(UI *ui)
 		int pathlen = lstrlen(ui->filepath);
 		void *top = rgn.cur;
 		TCHAR *title = ralloc(&rgn, (pathlen+13) * sizeof *title);
-		_wsprintf(title, TEXT("%s%s - WHEX"),
+		T(_sprintf)(title, TEXT("%s%s - WHEX"),
 			  ui->filepath,
 			  ui->readonly ? TEXT(" [RO]") : TEXT(""));
 		SetWindowText(ui->hwnd, title);
@@ -1529,7 +1535,7 @@ inputbox_dlgproc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam)
 		case IDOK:
 			edit = GetDlgItem(dlg, IDC_INPUTBOX_EDIT);
 			len = GetWindowTextLength(edit)+1;
-			text = malloc(len * sizeof *text);
+			text = xmalloc(len * sizeof *text);
 			GetWindowText(edit, text, len);
 			conf = (InputBoxConfig *)
 				GetWindowLongPtr(dlg, GWLP_USERDATA);
@@ -1659,7 +1665,7 @@ load_plugin(UI *ui, const char *path)
 	luaL_checktype(L, -1, LUA_TTABLE);
 	n = (int) luaL_len(L, -1);
 	ui->npluginfunc = n;
-	ui->plugin_funcname = malloc(n * sizeof *ui->plugin_funcname);
+	ui->plugin_funcname = xmalloc(n * sizeof *ui->plugin_funcname);
 	for (i=0; i<n; i++) {
 		char *funcname;
 		lua_geti(L, -1, 1+i); /* push {func, funcname} */
@@ -1736,7 +1742,7 @@ det:
 		ft = luaL_checkstring(L, -1);
 	}
 	if (ft) {
-		char *path = asprintfA("%s/filetype/%s.lua", workdir, ft);
+		char *path = asprintf("%s/filetype/%s.lua", workdir, ft);
 		ret = load_plugin(ui, path);
 		free(path);
 	} else {
@@ -1794,7 +1800,7 @@ populate_treeview(UI *ui)
 	addtotree(ui->treeview, 0, tree);
 }
 
-int
+void
 format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 {
 	char *buf;
@@ -1808,7 +1814,7 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		long ival;
 	case F_RAW:
 		*ptypename = "raw";
-		return 0;
+		return;
 	case F_UINT:
 		ival = t->intvalue;
 		buf = ralloc(&rgn, 24);
@@ -1816,18 +1822,21 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		case 1:
 			*ptypename = "uint8";
 			*pvaluerepr = buf;
-			return _wsprintfA(buf, "%lu (%02lx)", ival, ival);
+			_sprintf(buf, "%lu (%.2lx)", ival, ival);
+			return;
 		case 2:
 			*ptypename = "uint16";
 			*pvaluerepr = buf;
-			return _wsprintfA(buf, "%lu (%04lx)", ival, ival);
+			_sprintf(buf, "%lu (%.4lx)", ival, ival);
+			return;
 		case 4:
 			*ptypename = "uint32";
 			*pvaluerepr = buf;
-			return _wsprintfA(buf, "%lu (%08lx)", ival, ival);
+			_sprintf(buf, "%lu (%.8lx)", ival, ival);
+			return;
 		}
 		*ptypename = "uint";
-		return 0;
+		return;
 	case F_INT:
 		ival = t->intvalue;
 		buf = ralloc(&rgn, 12);
@@ -1835,21 +1844,24 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 		case 1:
 			*ptypename = "int8";
 			*pvaluerepr = buf;
-			return _wsprintfA(buf, "%ld", ival);
+			_sprintf(buf, "%ld", ival);
+			return;
 		case 2:
 			*ptypename = "int16";
 			*pvaluerepr = buf;
-			return _wsprintfA(buf, "%ld", ival);
+			_sprintf(buf, "%ld", ival);
+			return;
 		case 4:
 			*ptypename = "int32";
 			*pvaluerepr = buf;
-			return _wsprintfA(buf, "%ld", ival);
+			_sprintf(buf, "%ld", ival);
+			return;
 		}
 		*ptypename = "int";
-		return 0;
+		return;
 	case F_ASCII:
 		*ptypename = "ascii";
-		return 0;
+		return;
 	case F_CUSTOM:
 		L = ui->lua;
 		*ptypename = t->custom_type_name;
@@ -1879,10 +1891,8 @@ format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr)
 			vrlen = n;
 		}
 		lua_pop(L, 3);
-		return vrlen;
+		return;
 	}
-
-	return 0;
 }
 
 int

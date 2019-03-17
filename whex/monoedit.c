@@ -1,17 +1,13 @@
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
-
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #if _MSC_VER <= 1200
 #include "vc6compat.h"
 #endif
 
-#include "types.h"
-#include "buf.h"
+#include "u.h"
 #include "monoedit.h"
 
+/* text attributes */
 typedef struct tag {
 	struct tag *next;
 	int start;
@@ -88,6 +84,7 @@ static void move_right(Med *w);
 static void set_cursor_pos(Med *, HWND, int y, int x);
 static void update_backbuffer(Med *);
 
+/* `l` is the line containing `seg` */
 static void
 paint_segment(Med *w, HDC dc, Line *l, Tag *seg, int y)
 {
@@ -102,11 +99,13 @@ paint_segment(Med *w, HDC dc, Line *l, Tag *seg, int y)
 	SetTextColor(dc, textcolor);
 	SetBkColor(dc, bgcolor);
 	x = seg->start * w->charwidth;
-	/* both TextOut and DrawText flickers on Windows XP */
+	/* both TextOut and DrawText flicker on Windows XP */
 	if (seg->start + seg->len <= l->textlen) {
 		TextOut(dc, x, y, l->text + seg->start, seg->len);
 	} else {
-		TCHAR *text = malloc(seg->len * sizeof *text);
+		/* segment ends beyond text */
+		/* TODO: make sure seg->len is small enough */
+		TCHAR *text = alloca(seg->len * sizeof *text);
 		int src = seg->start;
 		int dst = 0;
 		while (src < l->textlen) {
@@ -116,7 +115,6 @@ paint_segment(Med *w, HDC dc, Line *l, Tag *seg, int y)
 			text[dst++] = ' ';
 		}
 		TextOut(dc, x, y, text, seg->len);
-		free(text);
 	}
 }
 
@@ -185,7 +183,7 @@ add_overlay(Med *w, int row, int start, int len, MedTextAttr *attr)
 	l = &w->buffer[row];
 	assert(l);
 
-	newtag = malloc(sizeof *newtag);
+	newtag = xmalloc(sizeof *newtag);
 	newtag->next = 0;
 	newtag->start = start;
 	newtag->len = len;
@@ -216,7 +214,7 @@ add_overlay(Med *w, int row, int start, int len, MedTextAttr *attr)
 }
 
 void
-default_getline(uint64 _ln, Buf *_b, void *_arg, MedTagList *_taglist)
+default_getline(uint64 _ln, T(Buf) *_b, void *_arg, MedTagList *_taglist)
 {
 }
 
@@ -245,8 +243,8 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 	switch (message) {
 	case WM_NCCREATE:
-		w = calloc(1, sizeof *w);
-		if (!w) return FALSE;
+		w = xmalloc(sizeof *w);
+		memset(w, 0, sizeof *w);
 		w->getline = default_getline;
 		w->bgbrush = (HBRUSH) GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
 		{
@@ -279,18 +277,12 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR) w);
 		break;
 	case WM_NCDESTROY:
-		/* This check is necessary, since we reach here even
-		   when WM_NCCREATE returns FALSE (which means we failed to
-		   allocate 'w'). */
-		if (w) {
-			int i;
-			for (i=0; i<w->nrow; i++) {
-				free_line(&w->buffer[i]);
-			}
-			free(w->buffer);
-			free(w);
-			DeleteDC(w->backbuffer_dc);
-		}
+		{int i; for (i=0; i<w->nrow; i++) {
+			free_line(&w->buffer[i]);
+		}}
+		free(w->buffer);
+		free(w);
+		DeleteDC(w->backbuffer_dc);
 		return 0;
 	case WM_PAINT:
 		{
@@ -582,7 +574,7 @@ med_alloc_text(HWND hwnd, int nch)
 static void
 init_textbuf(Med *w, int len)
 {
-	w->textbuf = malloc(len);
+	w->textbuf = xmalloc(len);
 	FreeList *f = (FreeList *) w->textbuf;
 	f->len = len;
 	f->next = len+8;
@@ -615,7 +607,7 @@ free_line(Line *l)
 static void
 getline(Med *w, int row)
 {
-	HeapBuf hb;
+	T(HeapBuf) hb;
 	Line *l = &w->buffer[row];
 	MedTagList taglist;
 	int n;
@@ -624,11 +616,7 @@ getline(Med *w, int row)
 	int prev_end;
 	Tag *segments, *t;
 
-	if (init_heapbuf(&hb)) {
-		l->text = 0;
-		l->textlen = 0;
-		return;
-	}
+	T(init_heapbuf)(&hb);
 
 	taglist.first = 0;
 	taglist.last = (Tag *) &taglist.first;
@@ -643,7 +631,7 @@ getline(Med *w, int row)
 		t = t->next;
 	}
 	maxnseg = n*2+1;
-	segments = malloc(maxnseg * sizeof *segments);
+	segments = xmalloc(maxnseg * sizeof *segments);
 	t = taglist.first;
 	n = 0;
 	prev_end = 0;
@@ -806,7 +794,7 @@ set_size(Med *w, int nrow, int ncol)
 			free_line(&w->buffer[i]);
 		}
 	}
-	w->buffer = realloc(w->buffer, nrow * sizeof *w->buffer);
+	w->buffer = xrealloc(w->buffer, nrow * sizeof *w->buffer);
 	if (nrow > w->nrow) {
 		memset(&w->buffer[w->nrow], 0,
 		       (nrow - w->nrow) * sizeof w->buffer[0]);
@@ -1071,7 +1059,7 @@ med_update_backbuffer_row(HWND hwnd, int row)
 void
 med_add_tag(MedTagList *taglist, int start, int len, MedTextAttr *attr)
 {
-	Tag *newtag = malloc(sizeof *newtag);
+	Tag *newtag = xmalloc(sizeof *newtag);
 	newtag->next = 0;
 	newtag->start = start;
 	newtag->len = len;

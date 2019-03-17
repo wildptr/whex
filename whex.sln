@@ -1,15 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2013
-VisualStudioVersion = 12.0.21005.1
-MinimumVisualStudioVersion = 10.0.40219.1
+# Visual Studio 2010
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "whex", "whex\whex.vcxproj", "{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "lua", "lua\lua.vcxproj", "{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}"
-EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dasm", "dasm\dasm.vcxproj", "{9FD473B6-04DF-4572-9CF6-6A7DB0E52A3A}"
-EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "util", "util\util.vcxproj", "{3F39C42E-C489-4240-A2D9-0E1AF77BEF8C}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -25,14 +19,6 @@ Global
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug|Win32.Build.0 = Debug|Win32
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release|Win32.ActiveCfg = Release|Win32
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release|Win32.Build.0 = Release|Win32
-		{9FD473B6-04DF-4572-9CF6-6A7DB0E52A3A}.Debug|Win32.ActiveCfg = Debug|Win32
-		{9FD473B6-04DF-4572-9CF6-6A7DB0E52A3A}.Debug|Win32.Build.0 = Debug|Win32
-		{9FD473B6-04DF-4572-9CF6-6A7DB0E52A3A}.Release|Win32.ActiveCfg = Release|Win32
-		{9FD473B6-04DF-4572-9CF6-6A7DB0E52A3A}.Release|Win32.Build.0 = Release|Win32
-		{3F39C42E-C489-4240-A2D9-0E1AF77BEF8C}.Debug|Win32.ActiveCfg = Debug|Win32
-		{3F39C42E-C489-4240-A2D9-0E1AF77BEF8C}.Debug|Win32.Build.0 = Debug|Win32
-		{3F39C42E-C489-4240-A2D9-0E1AF77BEF8C}.Release|Win32.ActiveCfg = Release|Win32
-		{3F39C42E-C489-4240-A2D9-0E1AF77BEF8C}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

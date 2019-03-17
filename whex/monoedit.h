@@ -6,7 +6,7 @@ typedef struct {
 
 typedef struct med_tag_list MedTagList;
 
-typedef void (*MedGetLineProc)(uint64 ln, Buf *buf, void *arg, MedTagList *);
+typedef void (*MedGetLineProc)(uint64 ln, T(Buf) *buf, void *arg, MedTagList *);
 
 typedef struct {
 	uchar mask;

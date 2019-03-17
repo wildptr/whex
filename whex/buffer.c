@@ -1,18 +1,9 @@
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tchar.h>
 
-#include "types.h"
-#include "region.h"
-#include "util.h"
-#include "list.h"
+#include "u.h"
 #include "buffer.h"
-#include "buf.h"
-#include "printf.h"
 
 #define N_CACHE_BLOCK 16
 #define LOG2_CACHE_BLOCK_SIZE 12
@@ -348,13 +339,13 @@ buf_save(Buffer *b, HANDLE dstfile)
 	Region *r = &b->tmp_rgn;
 	void *top = r->cur;
 	while (s) {
-		_printf("%llx--%llx ", s->start, s->end);
+		//_printf("%llx--%llx ", s->start, s->end);
 		switch (s->kind) {
 		case SEG_ZERO:
-			_printf("ZERO\n");
+			//_printf("ZERO\n");
 			break;
 		case SEG_MEM:
-			_printf("MEM\n");
+			//_printf("MEM\n");
 			break;
 		case SEG_FILE:
 			_printf("FILE offset=%llx\n", s->file_offset);
@@ -418,7 +409,6 @@ fail:
 			seek(dstfile, s->start);
 			WriteFile(dstfile, s->filedata, seglen,
 				  &nwritten, 0);
-			free(s->filedata);
 			s->filedata = 0;
 			break;
 		default:
@@ -440,6 +430,7 @@ fail:
 		b->file_size = b->buffer_size;
 		b->firstseg = s;
 	}
+	rfree(r, top);
 	return 0;
 }
 

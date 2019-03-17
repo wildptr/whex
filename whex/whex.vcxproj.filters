@@ -39,6 +39,9 @@
     <ClCompile Include="whex_lua.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="u.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="buffer.h">
@@ -66,6 +69,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="winutil.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="u.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,10 +1,11 @@
+#include "u.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #if _MSC_VER <= 1200
 #include "vc6compat.h"
 #endif
 
-#include "u.h"
 #include "monoedit.h"
 
 /* text attributes */
@@ -347,14 +348,14 @@ wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			short delta = HIWORD(wparam);
 			if (delta > 0) {
 				int n = delta / WHEEL_DELTA;
-				while (n--) {
-					scroll_up_line(w, hwnd);
-				}
+				if (n > w->current_line) n = (int)w->current_line;
+				scroll(w, hwnd, n);
 			} else {
 				int n = (-delta) / WHEEL_DELTA;
-				while (n--) {
-					scroll_down_line(w, hwnd);
+				if (w->current_line + n > w->total_lines) {
+					n = (int)(w->total_lines - w->current_line);
 				}
+				scroll(w, hwnd, -n);
 			}
 		}
 notify:
@@ -993,6 +994,7 @@ move_up(Med *w, HWND hwnd)
 		update_caret_pos(w);
 	} else {
 		scroll_up_line(w, hwnd);
+		notify_parent(w, hwnd);
 	}
 }
 
@@ -1011,6 +1013,7 @@ move_down(Med *w, HWND hwnd)
 		update_caret_pos(w);
 	} else {
 		scroll_down_line(w, hwnd);
+		notify_parent(w, hwnd);
 	}
 }
 

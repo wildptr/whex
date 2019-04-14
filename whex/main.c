@@ -1,8 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
-
-#include <assert.h>
-#include <ctype.h>
-#include <stdlib.h>
+#include "u.h"
 
 #include <lauxlib.h>
 #include <lua.h>
@@ -15,12 +12,12 @@
 #undef putc
 #endif
 
-#include "u.h"
 #include "buffer.h"
 #include "tree.h"
 #include "unicode.h"
 #include "resource.h"
 #include "monoedit.h"
+#include "winutil.h"
 
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 4
@@ -64,10 +61,10 @@ typedef struct {
 	Buffer *buffer;
 	HWND hwnd;
 	HWND monoedit;
-	TCHAR *filepath;
+	TCHAR *filepath; // property
 	WNDPROC med_wndproc;
-	int cursor_y;
-	int cursor_x;
+	int cursor_y; // property cursor_pos
+	int cursor_x; // property cursor_pos
 	int charwidth;
 	int charheight;
 	HFONT mono_font;
@@ -77,32 +74,35 @@ typedef struct {
 	HWND status_bar;
 	HINSTANCE instance;
 	int npluginfunc;
-	char *plugin_name;
+	char *plugin_name; // property
 	char **plugin_funcname;
 	uchar mode;
-	uchar cursor_fine_pos;
+	uchar cursor_fine_pos; // property cursor_pos
 	uchar readonly;
 	HWND treeview;
 	uint64 replace_start;
 	uchar *replace_buf;
 	uint replace_buf_cap;
 	uint replace_buf_len;
-	Tree *tree;
+	Tree *tree; // property
 	Region tree_rgn;
 	HBRUSH bgbrush;
+	uchar filepath_changed;
+	uchar tree_changed;
+	uchar plugin_name_changed;
+	uchar cursor_pos_changed;
+	uchar buffer_changed;
 } UI;
 
 Region rgn;
 /* GetOpenFileName() changes directory, so remember working directory when
    program starts */
-char *workdir;
-int wdlen;
+char *program_dir;
+int program_dir_len;
 
 LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
 static ATOM register_wndclass(void);
-void format_error_code(TCHAR *, size_t, DWORD);
-int file_chooser_dialog(HWND, TCHAR *, int);
 static int start_gui(int, UI *, TCHAR *);
 void set_current_line(UI *, uint64);
 static void update_window_title(UI *ui);
@@ -110,7 +110,6 @@ void update_status_text(UI *, Tree *);
 void update_field_info(UI *);
 void update_logical_cursor_pos(UI *);
 void update_physical_cursor_pos(UI *);
-void after_update_cursor_pos(UI *);
 uint64 cursor_pos(UI *);
 uint64 current_line(UI *);
 void goto_address(UI *, uint64);
@@ -160,6 +159,10 @@ int get_nrow(UI *ui);
 void exit_replace_mode(UI *);
 uchar cursor_in_gap(UI *);
 int col_to_cx(UI *, int);
+void ui_set_tree(UI *, Tree *);
+void ui_set_filepath(UI *, TCHAR *);
+void ui_set_plugin_name(UI *, char *);
+void ui_set_cursor_pos(UI *, int, int, uchar);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -217,30 +220,6 @@ register_wndclass(void)
 	return RegisterClass(&wndclass);
 }
 
-void
-format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
-{
-#if 0
-	DWORD FormatMessage
-	(
-	 DWORD dwFlags,		/* source and processing options */
-	 LPCVOID lpSource,	/* pointer to message source */
-	 DWORD dwMessageId,	/* requested message identifier */
-	 DWORD dwLanguageId,	/* language identifier for requested message */
-	 LPTSTR lpBuffer,	/* pointer to message buffer */
-	 DWORD nSize,		/* maximum size of message buffer */
-	 va_list *Arguments 	/* address of array of message inserts */
-	);
-#endif
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
-		      0,
-		      error_code,
-		      0,
-		      buf,
-		      buflen,
-		      0);
-}
-
 static HMENU
 create_menu(void)
 {
@@ -291,10 +270,10 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 		 CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 		 0, menu, ui->instance, ui);
 	ShowWindow(hwnd, show);
-	update_ui(ui);
 	while (GetMessage(&msg, 0, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
+		if (!PeekMessage(&msg, 0, 0, 0, 0)) update_ui(ui);
 	}
 	return msg.wParam;
 }
@@ -378,14 +357,14 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	Buffer *b;
 	UI *ui;
 
-	workdir = xmalloc(BUFSIZE);
-	wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
-	if (wdlen > BUFSIZE) {
-		free(workdir);
-		workdir = xmalloc(wdlen);
-		wdlen = GetCurrentDirectoryA(BUFSIZE, workdir);
+	program_dir = xmalloc(BUFSIZE);
+	program_dir_len = GetCurrentDirectoryA(BUFSIZE, program_dir);
+	if (program_dir_len > BUFSIZE) {
+		free(program_dir);
+		program_dir = xmalloc(program_dir_len);
+		program_dir_len = GetCurrentDirectoryA(BUFSIZE, program_dir);
 	}
-	if (!wdlen) return 1;
+	if (!program_dir_len) return 1;
 
 	rinit(&rgn);
 	top = rgn.cur;
@@ -428,7 +407,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
 	/* set Lua search path */
 	lua_getglobal(L, "package");
-	lua_pushfstring(L, "%s/?.lua", workdir);
+	lua_pushfstring(L, "%s/?.lua", program_dir);
 	lua_setfield(L, -2, "path");
 	lua_pop(L, 1); /* global 'package' */
 
@@ -468,7 +447,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_setfield(L, -2, "customtype");
 
 	{
-		char *ftdet_path = asprintf("%s/ftdet.lua", workdir);
+		char *ftdet_path = asprintf("%s/ftdet.lua", program_dir);
 		if (luaL_dofile(L, ftdet_path)) {
 			luaerrorbox(0, L);
 			lua_pop(L, 1);
@@ -484,6 +463,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	memset(ui, 0, sizeof *ui);
 	ui->lua = L;
 	ui->buffer = b;
+	ui->buffer_changed = 1;
 	ui->instance = instance;
 	ui->replace_buf_cap = 16;
 	ui->replace_buf = xmalloc(ui->replace_buf_cap);
@@ -566,24 +546,29 @@ update_logical_cursor_pos(UI *ui)
 {
 	int pos[2];
 	int cy, cx;
+	int cursor_y, cursor_x;
+	uchar cursor_fine_pos;
 	med_get_cursor_pos(ui->monoedit, pos);
 	cy = pos[0];
 	cx = pos[1];
-	ui->cursor_y = cy;
+	cursor_y = cy;
 	if (cx < 9) {
-		ui->cursor_fine_pos = POS_GAP;
+		cursor_x = ui->cursor_x;
+		cursor_fine_pos = POS_GAP;
 	} else if (cx < 57) {
-		ui->cursor_x = (cx-9)/3;
-		ui->cursor_fine_pos = (cx-9)%3;
+		cursor_x = (cx-9)/3;
+		cursor_fine_pos = (cx-9)%3;
 	} else if (cx < 59) {
-		ui->cursor_fine_pos = POS_GAP;
+		cursor_x = ui->cursor_x;
+		cursor_fine_pos = POS_GAP;
 	} else if (cx < 75) {
-		ui->cursor_x = cx-59;
-		ui->cursor_fine_pos = POS_ASCII;
+		cursor_x = cx-59;
+		cursor_fine_pos = POS_ASCII;
 	} else {
-		ui->cursor_fine_pos = POS_GAP;
+		cursor_x = ui->cursor_x;
+		cursor_fine_pos = POS_GAP;
 	}
-	after_update_cursor_pos(ui);
+	ui_set_cursor_pos(ui, cursor_y, cursor_x, cursor_fine_pos);
 }
 
 void
@@ -592,12 +577,6 @@ update_physical_cursor_pos(UI *ui)
 	int cx;
 	cx = col_to_cx(ui, ui->cursor_x);
 	med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
-}
-
-void
-after_update_cursor_pos(UI *ui)
-{
-	update_field_info(ui);
 }
 
 uchar
@@ -642,10 +621,11 @@ goto_address(UI *ui, uint64 addr)
 	int cy, cx;
 	uint64 curline;
 	int nrow;
+	uchar cursor_fine_pos = ui->cursor_fine_pos;
 
 	assert(addr >= 0 && addr <= buf_size(ui->buffer));
-	if (ui->cursor_fine_pos == POS_GAP) {
-		ui->cursor_fine_pos = POS_HINIB;
+	if (cursor_fine_pos == POS_GAP) {
+		cursor_fine_pos = POS_HINIB;
 	}
 	cx = col_to_cx(ui, col);
 	curline = current_line(ui);
@@ -662,10 +642,8 @@ goto_address(UI *ui, uint64 addr)
 		cy = (int)(line - dstline);
 		set_current_line(ui, dstline);
 	}
-	ui->cursor_y = cy;
-	ui->cursor_x = col;
+	ui_set_cursor_pos(ui, cy, col, cursor_fine_pos);
 	med_set_cursor_pos(ui->monoedit, cy, cx);
-	after_update_cursor_pos(ui);
 }
 
 void
@@ -730,6 +708,9 @@ handle_char_normal(UI *ui, TCHAR c)
 			char *pat;
 			uint64 start, pos;
 			int ret;
+			uchar back = c == '?';
+			uint64 bufsize;
+			int (*search_fn)(Buffer *, const uchar *, int, uint64, uint64 *);
 #ifdef UNICODE
 			pat = utf16_to_mbcs(text);
 			free(text);
@@ -737,8 +718,12 @@ handle_char_normal(UI *ui, TCHAR c)
 			pat = text;
 #endif
 			start = cursor_pos(ui);
-			ret = buf_kmp_search
-				(ui->buffer, pat, strlen(pat), start, &pos);
+			if (start > (bufsize = buf_size(ui->buffer))) {
+				start = bufsize;
+			}
+			search_fn = back ?
+				buf_kmp_search_backward : buf_kmp_search;
+			ret = search_fn(ui->buffer, pat, strlen(pat), start, &pos);
 			free(pat);
 			if (ret == 0) {
 				goto_address(ui, pos);
@@ -848,7 +833,7 @@ handle_char_replace(UI *ui, TCHAR c)
 		b = ui->replace_buf[ui->replace_buf_len-1];
 		val |= b&0xf0;
 		ui->replace_buf[ui->replace_buf_len-1] = val;
-		ui->cursor_fine_pos = POS_HINIB;
+		ui_set_cursor_pos(ui, ui->cursor_y, ui->cursor_x, POS_HINIB);
 		med_cx = 11+cx*3;
 		med_set_char(med, cy, med_cx, c|32);
 		med_set_char(med, cy, 59+cx, val);
@@ -870,7 +855,7 @@ handle_char_replace(UI *ui, TCHAR c)
 			ui->replace_buf_cap *= 2;
 		}
 		ui->replace_buf[ui->replace_buf_len++] = val;
-		ui->cursor_fine_pos = POS_LONIB;
+		ui_set_cursor_pos(ui, ui->cursor_y, ui->cursor_x, POS_LONIB);
 		med_set_cursor_pos(med, cy, 11+cx*3);
 		med_cx = 10+cx*3;
 		med_set_char(med, cy, med_cx, c|32);
@@ -1030,7 +1015,7 @@ handle_wm_create(UI *ui, LPCREATESTRUCT create)
 
 	/* adjust size of main window */
 	GetWindowRect(hwnd, &rect);
-	rect.right = rect.left + ui->charwidth * N_COL_CHAR;
+	rect.right = rect.left + ui->charwidth * N_COL_CHAR + 256;
 	rect.bottom = rect.top +
 		ui->charheight * INITIAL_N_ROW + /* MonoEdit */
 		sbheight; /* status bar */
@@ -1075,10 +1060,10 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return 0;
 	case WM_SIZE:
 		{
-			/* will crash if we continue */
 			int wid;
 			int med_hei, med_wid;
 			RECT r;
+			/* will crash if we continue */
 			if (wparam == SIZE_MINIMIZED) return 0;
 			wid = LOWORD(lparam);
 			med_wid = 80*ui->charwidth;
@@ -1148,6 +1133,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				default:
 					assert(0);
 				}
+				ui->cursor_pos_changed = 1;
 			}
 			break;
 		case ID_FILE_OPEN:
@@ -1155,7 +1141,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				if (ui->filepath) close_file(ui);
 				open_file(ui, path);
 				med_reset_position(ui->monoedit);
-				update_ui(ui);
 			}
 			break;
 		case ID_FILE_SAVE:
@@ -1171,7 +1156,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			break;
 		case ID_FILE_CLOSE:
 			close_file(ui);
-			update_ui(ui);
 			break;
 		case ID_FILE_EXIT:
 			SendMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
@@ -1187,8 +1171,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 #ifdef UNICODE
 			free(path_mbcs);
 #endif
-			populate_treeview(ui);
-			update_plugin_menu(ui);
 			break;
 		case ID_TOOLS_RUN_LUA_SCRIPT:
 			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
@@ -1207,7 +1189,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 				lua_pop(L, 1);
 				break;
 			}
-			update_ui(ui);
 			break;
 		}
 		return 0;
@@ -1245,12 +1226,14 @@ open_file(UI *ui, TCHAR *path)
 
 	file = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
 			  0 /* lpSecurityAttributes */, OPEN_EXISTING, 0, 0);
+	/* if cannot open file in rw mode, try ro */
 	if (file == INVALID_HANDLE_VALUE &&
 	    GetLastError() == ERROR_SHARING_VIOLATION) {
 		readonly = 1;
 		file = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, 0,
 				  OPEN_EXISTING, 0, 0);
 	}
+	/* still cannot open file, fail */
 	if (file == INVALID_HANDLE_VALUE) {
 		format_error_code(errtext, BUFSIZE, GetLastError());
 		errorbox(ui->hwnd, errtext);
@@ -1260,7 +1243,7 @@ open_file(UI *ui, TCHAR *path)
 		CloseHandle(file);
 		return -1;
 	}
-	ui->filepath = lstrdup(path);
+	ui_set_filepath(ui, lstrdup(path));
 	ui->readonly = readonly;
 
 	load_filetype_plugin(ui, path);
@@ -1273,15 +1256,15 @@ close_file(UI *ui)
 {
 	buf_finalize(ui->buffer);
 	free(ui->filepath);
-	ui->filepath = 0;
-	ui->cursor_x = 0;
+	ui_set_filepath(ui, 0);
+	ui_set_cursor_pos(ui, 0, 0, 0);
 	ui->hl_start = 0;
 	ui->hl_len = 0;
 	ui->npluginfunc = 0;
 	if (ui->plugin_name) {
 		int i;
 		free(ui->plugin_name);
-		ui->plugin_name = 0;
+		ui_set_plugin_name(ui, 0);
 		ui->npluginfunc = 0;
 		for (i=0; i<ui->npluginfunc; i++) {
 			free(ui->plugin_funcname[i]);
@@ -1289,7 +1272,7 @@ close_file(UI *ui)
 		free(ui->plugin_funcname);
 		ui->plugin_funcname = 0;
 	}
-	ui->tree = 0;
+	ui_set_tree(ui, 0);
 	rfreeall(&ui->tree_rgn);
 }
 
@@ -1381,7 +1364,7 @@ update_ui(UI *ui)
 		ID_TOOLS_LOAD_PLUGIN,
 	};
 
-	HMENU menu = GetMenu(ui->hwnd);
+	HMENU menu;
 	MENUITEMINFO mii;
 	uint64 bufsize;
 	uint64 total_lines;
@@ -1390,32 +1373,54 @@ update_ui(UI *ui)
 	mii.cbSize = sizeof mii;
 	mii.fMask = MIIM_STATE;
 
-	update_window_title(ui);
-	update_logical_cursor_pos(ui);
-	if (ui->filepath) {
-		ShowWindow(ui->monoedit, SW_SHOW);
-		mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
-		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
-		mii.fState = MFS_ENABLED;
-	} else {
-		ShowWindow(ui->monoedit, SW_HIDE);
-		mii.fState = MFS_GRAYED;
-		SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
-	}
-	for (i=0; i<NELEM(toggle_menus); i++) {
-		SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
+	if (ui->cursor_pos_changed) {
+		ui->cursor_pos_changed = 0;
+		update_field_info(ui);
 	}
 
-	bufsize = buf_size(ui->buffer);
-	total_lines = bufsize >> LOG2_N_COL;
-	if (bufsize&(N_COL-1)) {
-		total_lines++;
+	if (ui->filepath_changed) {
+		ui->filepath_changed = 0;
+		menu = GetMenu(ui->hwnd);
+		update_window_title(ui);
+		if (ui->filepath) {
+			ShowWindow(ui->monoedit, SW_SHOW);
+			ShowWindow(ui->treeview, SW_SHOW);
+			mii.fState = ui->readonly ? MFS_GRAYED : MFS_ENABLED;
+			SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
+			mii.fState = MFS_ENABLED;
+		} else {
+			ShowWindow(ui->monoedit, SW_HIDE);
+			ShowWindow(ui->treeview, SW_HIDE);
+			mii.fState = MFS_GRAYED;
+			SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
+		}
+		for (i=0; i<NELEM(toggle_menus); i++) {
+			SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
+		}
 	}
-	med_set_total_lines(ui->monoedit, total_lines);
-	med_update_buffer(ui->monoedit);
-	med_update_backbuffer(ui->monoedit);
+		
+	if (ui->buffer_changed) {
+		ui->buffer_changed = 0;
+		bufsize = buf_size(ui->buffer);
+		total_lines = bufsize >> LOG2_N_COL;
+		if (bufsize&(N_COL-1)) {
+			total_lines++;
+		}
+		med_set_total_lines(ui->monoedit, total_lines);
+		med_update_buffer(ui->monoedit);
+		med_update_backbuffer(ui->monoedit);
+		InvalidateRect(ui->monoedit, 0, FALSE);
+	}
 
-	update_plugin_menu(ui);
+	if (ui->plugin_name_changed) {
+		ui->plugin_name_changed = 0;
+		update_plugin_menu(ui);
+	}
+
+	if (ui->tree_changed) {
+		ui->tree_changed = 0;
+		populate_treeview(ui);
+	}
 }
 
 void
@@ -1425,7 +1430,6 @@ move_forward(UI *ui)
 	if (ui->cursor_x+1 < N_COL) {
 		ui->cursor_x++;
 		update_physical_cursor_pos(ui);
-		after_update_cursor_pos(ui);
 	} else {
 		int nrow = get_nrow(ui);
 		uint64 total_lines = med_get_total_lines(ui->monoedit);
@@ -1433,10 +1437,8 @@ move_forward(UI *ui)
 		if (current_line(ui) + (cy+1) < total_lines + nrow) {
 			if (cy+1 < nrow) cy++;
 			else med_scroll_down_line(ui->monoedit);
-			ui->cursor_y = cy;
-			ui->cursor_x = 0;
+			ui_set_cursor_pos(ui, cy, 0, ui->cursor_fine_pos);
 			update_physical_cursor_pos(ui);
-			after_update_cursor_pos(ui);
 		}
 	}
 }
@@ -1450,16 +1452,13 @@ move_backward(UI *ui)
 	if (ui->cursor_x > 0) {
 		ui->cursor_x--;
 		update_physical_cursor_pos(ui);
-		after_update_cursor_pos(ui);
 	} else {
 		int cy = ui->cursor_y;
 		if (current_line(ui) + cy > 0) {
 			if (cy > 0) cy--;
 			else med_scroll_up_line(ui->monoedit);
-			ui->cursor_y = cy;
-			ui->cursor_x = N_COL-1;
+			ui_set_cursor_pos(ui, cy, N_COL-1, ui->cursor_fine_pos);
 			update_physical_cursor_pos(ui);
-			after_update_cursor_pos(ui);
 		}
 	}
 }
@@ -1605,7 +1604,6 @@ getluaobj(lua_State *L, const char *name)
 	lua_remove(L, -2);
 }
 
-/* does not update UI */
 int
 load_plugin(UI *ui, const char *path)
 {
@@ -1649,7 +1647,7 @@ load_plugin(UI *ui, const char *path)
 	if (ui->tree) {
 		rfreeall(&ui->tree_rgn);
 	}
-	ui->tree = tree;
+	ui_set_tree(ui, tree);
 
 	lua_getfield(L, -1, "name"); /* plugin.name */
 	plugin_name = _strdup(luaL_checkstring(L, -1));
@@ -1657,7 +1655,7 @@ load_plugin(UI *ui, const char *path)
 	if (ui->plugin_name) {
 		free(ui->plugin_name);
 	}
-	ui->plugin_name = plugin_name;
+	ui_set_plugin_name(ui, plugin_name);
 
 	getluaobj(L, "plugin");
 	lua_pushstring(L, "functions");
@@ -1713,18 +1711,12 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
 	int i;
 
 	i = lstrlen(path);
-	while (i >= 1) {
-		switch (path[i-1]) {
-		case '/':
-		case '\\':
-			return 0;
-		case '.':
-			goto det;
-		}
-		i--;
+	while (i > 0) {
+		TCHAR c = path[--i];
+		if (c == '.') break;
+		if (c == '/' || c == '\\') return 0;
 	}
-	return 0;
-det:
+	if (!i) return 0;
 	L = ui->lua;
 	getluaobj(L, "ftdet");
 	if (lua_isnil(L, -1)) {
@@ -1742,7 +1734,7 @@ det:
 		ft = luaL_checkstring(L, -1);
 	}
 	if (ft) {
-		char *path = asprintf("%s/filetype/%s.lua", workdir, ft);
+		char *path = asprintf("%s/filetype/%s.lua", program_dir, ft);
 		ret = load_plugin(ui, path);
 		free(path);
 	} else {
@@ -1755,7 +1747,7 @@ det:
 int
 save_file(UI *ui)
 {
-	return buf_save_inplace(ui->buffer);
+	return buf_save_in_place(ui->buffer);
 }
 
 int
@@ -1797,7 +1789,8 @@ void
 populate_treeview(UI *ui)
 {
 	Tree *tree = ui->tree;
-	addtotree(ui->treeview, 0, tree);
+	SendMessage(ui->treeview, TVM_DELETEITEM, 0, (LPARAM) TVI_ROOT);
+	if (tree) addtotree(ui->treeview, 0, tree);
 }
 
 void
@@ -1909,9 +1902,12 @@ exit_replace_mode(UI *ui)
 	ui->mode = MODE_NORMAL;
 	if (ui->replace_buf_len > 0) {
 		if (replace_end > bufsize) {
+			/* this many bytes inserted at end of buffer */
 			size_t extra = (size_t)(replace_end - bufsize);
+			/* may have to update total lines */
 			uint64 total_lines;
 			buf_insert(ui->buffer, bufsize, 0, extra);
+
 			total_lines = replace_end >> LOG2_N_COL;
 			if (replace_end&(N_COL-1)) {
 				total_lines++;
@@ -1921,5 +1917,46 @@ exit_replace_mode(UI *ui)
 		buf_replace(ui->buffer, ui->replace_start,
 			    ui->replace_buf, ui->replace_buf_len);
 		ui->replace_buf_len = 0;
+		ui->buffer_changed = 1;
+	}
+}
+
+void
+ui_set_tree(UI *ui, Tree *tree)
+{
+	if (tree != ui->tree) {
+		ui->tree = tree;
+		ui->tree_changed = 1;
+	}
+}
+
+void
+ui_set_filepath(UI *ui, TCHAR *filepath)
+{
+	if (filepath != ui->filepath) {
+		ui->filepath = filepath;
+		ui->filepath_changed = 1;
+		ui->buffer_changed = 1;
+	}
+}
+
+void
+ui_set_plugin_name(UI *ui, char *plugin_name)
+{
+	if (plugin_name != ui->plugin_name) {
+		ui->plugin_name = plugin_name;
+		ui->plugin_name_changed = 1;
+	}
+}
+
+void
+ui_set_cursor_pos(UI *ui, int cursor_y, int cursor_x, uchar cursor_fine_pos)
+{
+	if (cursor_y != ui->cursor_y || cursor_x != ui->cursor_x ||
+	    cursor_fine_pos != ui->cursor_fine_pos) {
+		ui->cursor_y = cursor_y;
+		ui->cursor_x = cursor_x;
+		ui->cursor_fine_pos = cursor_fine_pos;
+		ui->cursor_pos_changed = 1;
 	}
 }

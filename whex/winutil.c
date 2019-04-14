@@ -1,5 +1,5 @@
-#include <windows.h>
 #include "u.h"
+#include <windows.h>
 #include "winutil.h"
 
 int
@@ -34,4 +34,28 @@ msgboxf(HWND hwnd, const TCHAR *fmt, ...)
 	s = T(finish_heapbuf)(&hb);
 	MessageBox(hwnd, s, classname, MB_OK);
 	free(hb.start);
+}
+
+void
+format_error_code(TCHAR *buf, size_t buflen, DWORD error_code)
+{
+#if 0
+	DWORD FormatMessage
+	(
+	 DWORD dwFlags,		/* source and processing options */
+	 LPCVOID lpSource,	/* pointer to message source */
+	 DWORD dwMessageId,	/* requested message identifier */
+	 DWORD dwLanguageId,	/* language identifier for requested message */
+	 LPTSTR lpBuffer,	/* pointer to message buffer */
+	 DWORD nSize,		/* maximum size of message buffer */
+	 va_list *Arguments 	/* address of array of message inserts */
+	);
+#endif
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
+		      0,
+		      error_code,
+		      0,
+		      buf,
+		      buflen,
+		      0);
 }

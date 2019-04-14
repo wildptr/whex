@@ -1,4 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
+#include "u.h"
 
 #include <lauxlib.h>
 #include <lua.h>
@@ -11,7 +12,6 @@
 #include "vc6compat.h"
 #endif
 
-#include "u.h"
 #include "unicode.h"
 #include "monoedit.h"
 

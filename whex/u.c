@@ -115,7 +115,7 @@ enum {
 union u {
 	int i;
 	long l;
-	INT64 L;
+	INT64_ L;
 };
 
 /* printf */

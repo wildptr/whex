@@ -1,6 +1,5 @@
-#include <windows.h>
-
 #include "u.h"
+#include <windows.h>
 #include "unicode.h"
 
 #if 0

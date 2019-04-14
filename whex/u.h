@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,8 +9,8 @@
 #include <malloc.h>
 
 #define unreachable() assert(0)
-/* For "unsigned INT64" to be valid, INT64 must not be a typedef name. */
-#define INT64 __int64
+/* For "unsigned INT64_" to be valid, INT64_ must not be a typedef name. */
+#define INT64_ __int64
 #define NEW(p, r) p = ralloc(r, sizeof *p)
 #define NEWARRAY(p, n, r) p = ralloc(r, (n) * sizeof *p)
 #define bputc(b, c) (b)->putc(b, c)

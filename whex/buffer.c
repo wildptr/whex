@@ -1,16 +1,16 @@
+#include "u.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tchar.h>
 
-#include "u.h"
 #include "buffer.h"
+#include "winutil.h"
 
 #define N_CACHE_BLOCK 16
 #define LOG2_CACHE_BLOCK_SIZE 12
 #define CACHE_BLOCK_SIZE (1 << LOG2_CACHE_BLOCK_SIZE)
 #define VALID 1
-
-void format_error_code(TCHAR *, size_t, DWORD);
 
 enum {
 	SEG_ZERO,
@@ -45,7 +45,7 @@ struct buffer {
 	Segment *firstseg;
 	struct cache_entry *cache;
 	uchar *cache_data;
-	Region tmp_rgn;
+	Region tmp;
 	int next_cache;
 };
 
@@ -163,7 +163,7 @@ buf_kmp_search(Buffer *b, const uchar *pat, int len, uint64 start, uint64 *pos)
 	int ret;
 
 	assert(len);
-	r = &b->tmp_rgn;
+	r = &b->tmp;
 	top = r->cur;
 	T = ralloc(r, len * sizeof *T);
 	kmp_table(T, pat, len);
@@ -199,8 +199,8 @@ end:
  * position of first mark = start
  * number of bytes after the second mark = N-(start+len-1)
  */
-uint64
-buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
+int
+buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start, uint64 *pos)
 {
 	int *T;
 	uchar *revpat;
@@ -208,9 +208,10 @@ buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 	int i;
 	Region *r;
 	void *top;
+	int ret;
 
 	assert(len);
-	r = &b->tmp_rgn;
+	r = &b->tmp;
 	top = r->cur;
 	T = ralloc(r, len * sizeof *T);
 	revpat = ralloc(r, len);
@@ -226,6 +227,8 @@ buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 		if (pat[i] == buf_getbyte(b, b->buffer_size-1-(m+i))) {
 			if (i == len - 1) {
 				m = b->buffer_size - (m + len);
+				*pos = m;
+				ret = 0;
 				goto end;
 			}
 			i++;
@@ -239,10 +242,10 @@ buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start)
 		}
 	}
 	/* no match */
-	m = b->buffer_size;
+	ret = -1;
 end:
 	rfree(r, top);
-	return m;
+	return ret;
 }
 
 int
@@ -302,7 +305,7 @@ nomem:
 	b->cache = cache;
 	b->cache_data = cache_data;
 	b->next_cache = 0;
-	rinit(&b->tmp_rgn);
+	rinit(&b->tmp);
 
 	return 0;
 }
@@ -326,7 +329,7 @@ buf_finalize(Buffer *b)
 	b->cache = 0;
 	free(b->cache_data);
 	b->cache_data = 0;
-	rfreeall(&b->tmp_rgn);
+	rfreeall(&b->tmp);
 }
 
 int
@@ -336,7 +339,7 @@ buf_save(Buffer *b, HANDLE dstfile)
 
 	uchar inplace = b->file == dstfile;
 	Segment *s = b->firstseg;
-	Region *r = &b->tmp_rgn;
+	Region *r = &b->tmp;
 	void *top = r->cur;
 	while (s) {
 		//_printf("%llx--%llx ", s->start, s->end);
@@ -435,7 +438,7 @@ fail:
 }
 
 int
-buf_save_inplace(Buffer *b)
+buf_save_in_place(Buffer *b)
 {
 	return buf_save(b, b->file);
 }

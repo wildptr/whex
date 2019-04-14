@@ -247,10 +247,10 @@ T_(finish_regionbuf)(T_(RegionBuf) *rb)
 
 PUTNUM10(puti10, i, int)
 PUTNUM10(putl10, l, long)
-PUTNUM10(putL10, L, INT64)
+PUTNUM10(putL10, L, INT64_)
 PUTNUM16(puti16, i, int)
 PUTNUM16(putl16, l, long)
-PUTNUM16(putL16, L, INT64)
+PUTNUM16(putL16, L, INT64_)
 
 typedef _TCHAR *(*T_(conv_fn))(union u *, _TCHAR *, uint);
 
@@ -356,7 +356,7 @@ spec:
 				break;
 			default:
 				conv = T_(putL10);
-				val.L = va_arg(va, INT64);
+				val.L = va_arg(va, INT64_);
 			}
 			T_(putn)(&val, b, conv, prec, flags);
 			break;
@@ -376,7 +376,7 @@ spec:
 				break;
 			default:
 				conv = T_(putL16);
-				val.L = va_arg(va, INT64);
+				val.L = va_arg(va, INT64_);
 			}
 			T_(putn)(&val, b, conv, prec, flags);
 			break;

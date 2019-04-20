@@ -194,60 +194,6 @@ end:
 	return ret;
 }
 
-/*
- * ...|xx|x..
- * position of first mark = start
- * number of bytes after the second mark = N-(start+len-1)
- */
-int
-buf_kmp_search_backward(Buffer *b, const uchar *pat, int len, uint64 start, uint64 *pos)
-{
-	int *T;
-	uchar *revpat;
-	uint64 m;
-	int i;
-	Region *r;
-	void *top;
-	int ret;
-
-	assert(len);
-	r = &b->tmp;
-	top = r->cur;
-	T = ralloc(r, len * sizeof *T);
-	revpat = ralloc(r, len);
-
-	for (i=0; i<len; i++) {
-		revpat[i] = pat[len-1-i];
-	}
-	pat = revpat;
-	kmp_table(T, pat, len);
-	m = start;
-	i = 0;
-	while (m+i < b->buffer_size) {
-		if (pat[i] == buf_getbyte(b, b->buffer_size-1-(m+i))) {
-			if (i == len - 1) {
-				m = b->buffer_size - (m + len);
-				*pos = m;
-				ret = 0;
-				goto end;
-			}
-			i++;
-		} else {
-			if (i) {
-				m += i-T[i];
-				i = T[i];
-			} else {
-				m++;
-			}
-		}
-	}
-	/* no match */
-	ret = -1;
-end:
-	rfree(r, top);
-	return ret;
-}
-
 int
 buf_init(Buffer *b, HANDLE file)
 {

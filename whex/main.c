@@ -92,6 +92,8 @@ typedef struct {
 	uchar plugin_name_changed;
 	uchar cursor_pos_changed;
 	uchar buffer_changed;
+	char *last_pat;
+	int last_pat_len;
 } UI;
 
 Region rgn;
@@ -388,7 +390,7 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
 	/* parse command line arguments */
 	if (argc == 0) {
-		if (file_chooser_dialog(0, openfilename, BUFSIZE)) {
+		if (open_file_chooser_dialog(0, openfilename, BUFSIZE)) {
 			filepath = 0;
 		} else {
 			filepath = openfilename;
@@ -621,11 +623,10 @@ goto_address(UI *ui, uint64 addr)
 	int cy, cx;
 	uint64 curline;
 	int nrow;
-	uchar cursor_fine_pos = ui->cursor_fine_pos;
 
 	assert(addr >= 0 && addr <= buf_size(ui->buffer));
-	if (cursor_fine_pos == POS_GAP) {
-		cursor_fine_pos = POS_HINIB;
+	if (ui->cursor_fine_pos == POS_GAP) {
+		ui->cursor_fine_pos = POS_HINIB;
 	}
 	cx = col_to_cx(ui, col);
 	curline = current_line(ui);
@@ -642,7 +643,7 @@ goto_address(UI *ui, uint64 addr)
 		cy = (int)(line - dstline);
 		set_current_line(ui, dstline);
 	}
-	ui_set_cursor_pos(ui, cy, col, cursor_fine_pos);
+	ui_set_cursor_pos(ui, cy, col, ui->cursor_fine_pos);
 	med_set_cursor_pos(ui->monoedit, cy, cx);
 }
 
@@ -680,6 +681,72 @@ move_right(UI *ui)
 	update_logical_cursor_pos(ui);
 }
 
+int
+read_nibble(TCHAR c)
+{
+	if (c >= '0' && c <= '9') return c-'0';
+	c |= 32;
+	if (c >= 'a' && c <= 'f') return c-'a'+10;
+	return -1;
+}
+
+int
+parse_hex_byte(TCHAR *s)
+{
+	int hi = read_nibble(*s);
+	int lo;
+	if (hi<0) return -1;
+	lo = read_nibble(s[1]);
+	if (lo<0) return -1;
+	return hi<<4|lo;
+}
+
+char *
+parse_hex_pattern(TCHAR *s, int *len)
+{
+	int n = lstrlen(s);
+	char *pat = xmalloc(n);
+	int p = 0;
+	int b;
+	for (;;) {
+		while (*s == ' ') s++;
+		if (!*s) {
+			*len = p;
+			return pat;
+		}
+		b = parse_hex_byte(s);
+		if (b < 0) {
+			free(pat);
+			return 0;
+		}
+		s += 2;
+		pat[p++] = b;
+	}
+}
+
+/* pat is malloc'd */
+void
+search(UI *ui, char *pat, int patlen, int offset)
+{
+	if (patlen > 0) {
+		uint64 start = cursor_pos(ui) + offset;
+		uint64 bufsize, pos;
+		int ret;
+		if (start > (bufsize = buf_size(ui->buffer))) {
+			start = bufsize;
+		}
+		ret = buf_kmp_search(ui->buffer, pat, patlen, start, &pos);
+		if (ret == 0) {
+			goto_address(ui, pos);
+		}
+		if (pat != ui->last_pat) {
+			free(ui->last_pat);
+			ui->last_pat = pat;
+			ui->last_pat_len = patlen;
+		}
+	}
+}
+
 void
 handle_char_normal(UI *ui, TCHAR c)
 {
@@ -693,6 +760,7 @@ handle_char_normal(UI *ui, TCHAR c)
 	case ' ':
 		move_forward(ui);
 		break;
+#if 0
 	case ';':
 	case ':':
 		text = inputbox(ui, TEXT("Command"));
@@ -701,41 +769,34 @@ handle_char_normal(UI *ui, TCHAR c)
 		}
 		SetFocus(ui->monoedit);
 		break;
+#endif
 	case '/':
-	case '?':
 		text = inputbox(ui, TEXT("Text Search"));
 		if (text) {
 			char *pat;
-			uint64 start, pos;
-			int ret;
-			uchar back = c == '?';
-			uint64 bufsize;
-			int (*search_fn)(Buffer *, const uchar *, int, uint64, uint64 *);
+			int patlen;
 #ifdef UNICODE
 			pat = utf16_to_mbcs(text);
 			free(text);
 #else
 			pat = text;
 #endif
-			start = cursor_pos(ui);
-			if (start > (bufsize = buf_size(ui->buffer))) {
-				start = bufsize;
-			}
-			search_fn = back ?
-				buf_kmp_search_backward : buf_kmp_search;
-			ret = search_fn(ui->buffer, pat, strlen(pat), start, &pos);
-			free(pat);
-			if (ret == 0) {
-				goto_address(ui, pos);
-			}
+			patlen = strlen(pat);
+			search(ui, pat, patlen, 0);
 		}
 		SetFocus(ui->monoedit);
 		break;
 	case '\\':
-	case '|':
 		text = inputbox(ui, TEXT("Hex Search"));
 		if (text) {
+			int patlen;
+			char *pat = parse_hex_pattern(text, &patlen);
 			free(text);
+			if (pat) {
+				search(ui, pat, patlen, 0);
+			} else {
+				errorbox(ui->hwnd, TEXT("Syntax error"));
+			}
 		}
 		SetFocus(ui->monoedit);
 		break;
@@ -756,9 +817,6 @@ handle_char_normal(UI *ui, TCHAR c)
 		}
 		SetFocus(ui->monoedit);
 		break;
-	case 'N':
-		//execute_command(ui, cmd_findprev, 0);
-		break;
 	case 'b':
 		move_prev_field(ui);
 		break;
@@ -775,6 +833,7 @@ handle_char_normal(UI *ui, TCHAR c)
 		move_right(ui);
 		break;
 	case 'n':
+		search(ui, ui->last_pat, ui->last_pat_len, 1);
 		break;
 	case 'w':
 		move_next_field(ui);
@@ -1137,7 +1196,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			}
 			break;
 		case ID_FILE_OPEN:
-			if (file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
+			if (open_file_chooser_dialog(hwnd, path, BUFSIZE) == 0) {
 				if (ui->filepath) close_file(ui);
 				open_file(ui, path);
 				med_reset_position(ui->monoedit);
@@ -1149,7 +1208,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			}
 			break;
 		case ID_FILE_SAVEAS:
-			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+			if (save_file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 			if (save_file_as(ui, path)) {
 				errorbox(hwnd, TEXT("Could not save file"));
 			}
@@ -1161,7 +1220,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			SendMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
 			break;
 		case ID_TOOLS_LOAD_PLUGIN:
-			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+			if (open_file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 #ifdef UNICODE
 			path_mbcs = utf16_to_mbcs(path);
 #else
@@ -1173,7 +1232,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 #endif
 			break;
 		case ID_TOOLS_RUN_LUA_SCRIPT:
-			if (file_chooser_dialog(hwnd, path, BUFSIZE)) break;
+			if (open_file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 #ifdef UNICODE
 			path_mbcs = utf16_to_mbcs(path);
 #else

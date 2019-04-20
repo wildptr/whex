@@ -3,7 +3,7 @@
 #include "winutil.h"
 
 int
-file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
+open_file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
 {
 	OPENFILENAME ofn = {0};
 	buf[0] = 0;
@@ -13,6 +13,20 @@ file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
 	ofn.lpstrFile = buf;
 	ofn.nMaxFile = buflen;
 	if (!GetOpenFileName(&ofn)) return -1;
+	return 0;
+}
+
+int
+save_file_chooser_dialog(HWND owner, TCHAR *buf, int buflen)
+{
+	OPENFILENAME ofn = {0};
+	buf[0] = 0;
+	ofn.lStructSize = sizeof ofn;
+	ofn.hwndOwner = owner;
+	ofn.hInstance = GetModuleHandle(0);
+	ofn.lpstrFile = buf;
+	ofn.nMaxFile = buflen;
+	if (!GetSaveFileName(&ofn)) return -1;
 	return 0;
 }
 

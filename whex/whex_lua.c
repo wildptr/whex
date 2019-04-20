@@ -90,7 +90,7 @@ api_buffer_read(lua_State *L)
 	if (checkaddr(L, 2, &addr)) return 0;
 	n = (long) luaL_checkinteger(L, 3);
 	if (addr + n > buf_size(b)) return 0;
-	s = malloc(n+1);
+	s = xmalloc(n+1);
 	buf_read(b, s, addr, n);
 	s[n] = 0;
 	lua_pushlstring(L, (char *) s, n);

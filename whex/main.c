@@ -646,7 +646,12 @@ goto_address(UI *ui, uint64 addr)
 		cy = (int)(line - dstline);
 		set_current_line(ui, dstline);
 	}
-	ui_set_cursor_pos(ui, cy, col, ui->cursor_fine_pos);
+	// ui_set_cursor_pos(ui, cy, col, ui->cursor_fine_pos);
+	/* need to set ui->cursor_pos_changed because current line may have
+	   changed even if cursor_y and cursor_x both remain the same */
+	ui->cursor_y = cy;
+	ui->cursor_x = col;
+	ui->cursor_pos_changed = 1;
 	med_set_cursor_pos(ui->monoedit, cy, cx);
 }
 

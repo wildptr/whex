@@ -134,6 +134,7 @@ void move_forward(UI *);
 void move_backward(UI *);
 void move_next_field(UI *);
 void move_prev_field(UI *);
+/* allocates result on heap */
 TCHAR *inputbox(UI *, TCHAR *title);
 int parse_addr(TCHAR *, uint64 *);
 void errorbox(HWND, TCHAR *);
@@ -150,10 +151,8 @@ int api_buffer_replace(lua_State *L);
 int api_buffer_insert(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
-int init_luatk(lua_State *L);
 void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
-int save_file(UI *);
 int save_file_as(UI *, const TCHAR *);
 void populate_treeview(UI *);
 void format_leaf_value(UI *ui, Tree *t, char **ptypename, char **pvaluerepr);
@@ -165,6 +164,7 @@ void ui_set_tree(UI *, Tree *);
 void ui_set_filepath(UI *, TCHAR *);
 void ui_set_plugin_name(UI *, char *);
 void ui_set_cursor_pos(UI *, int, int, uchar);
+char get_display_char(uchar b);
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -262,8 +262,16 @@ start_gui(int show, UI *ui, TCHAR *filepath)
 	if (!med_register_class()) return 1;
 	if (!register_wndclass()) return 1;
 	if (filepath) {
-		open_file(ui, filepath);
+		int status = open_file(ui, filepath);
 		free(filepath);
+		if (status) return 0;
+	} else {
+		// ui_set_filepath(ui, 0);
+		/* this won't work because (ui->filepath == 0) at the moment,
+		   so nothing will happen */
+		ui->filepath_changed = 1;
+		/* the program will behave as if no file is open, saving,
+		   editing etc. will be disabled */
 	}
 	init_font(ui);
 	menu = create_menu();
@@ -303,11 +311,7 @@ cmdline_to_argv(Region *r, TCHAR *cmdline, int *argc)
 		q = p;
 		if (*q == '"') {
 			p++;
-			/* This causes trouble with vim's auto-indenter. */
-			/* TODO: fix vim. */
-			/* do q++; while (*q && *q != '"'); */
-			do q++;
-			while (*q && *q != '"');
+			do q++; while (*q && *q != '"');
 			/* argument between p and q */
 			n = q-p;
 			if (*q) q++;
@@ -435,8 +439,6 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 	lua_pushcfunction(L, api_buffer_insert);
 	lua_setfield(L, -2, "insert");
 	lua_pop(L, 1); /* 'buffer' */
-
-	if (init_luatk(L)) return -1;
 
 	lua_newtable(L); /* global 'whex' */
 	b = lua_newuserdata(L, sizeof_Buffer);
@@ -579,6 +581,7 @@ update_physical_cursor_pos(UI *ui)
 	int cx;
 	cx = col_to_cx(ui, ui->cursor_x);
 	med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
+	ui->cursor_pos_changed = 1;
 }
 
 uchar
@@ -702,7 +705,7 @@ parse_hex_byte(TCHAR *s)
 }
 
 char *
-parse_hex_pattern(TCHAR *s, int *len)
+parse_hex_string(TCHAR *s, int *len)
 {
 	int n = lstrlen(s);
 	char *pat = xmalloc(n);
@@ -724,7 +727,7 @@ parse_hex_pattern(TCHAR *s, int *len)
 	}
 }
 
-/* pat is malloc'd */
+/* pat is malloc'd; if pattern not found, shows message box */
 void
 search(UI *ui, char *pat, int patlen, int offset)
 {
@@ -736,13 +739,15 @@ search(UI *ui, char *pat, int patlen, int offset)
 			start = bufsize;
 		}
 		ret = buf_kmp_search(ui->buffer, pat, patlen, start, &pos);
-		if (ret == 0) {
-			goto_address(ui, pos);
-		}
 		if (pat != ui->last_pat) {
 			free(ui->last_pat);
 			ui->last_pat = pat;
 			ui->last_pat_len = patlen;
+		}
+		if (ret == 0) {
+			goto_address(ui, pos);
+		} else {
+			msgboxf(ui->hwnd, TEXT("Pattern not found"));
 		}
 	}
 }
@@ -790,7 +795,7 @@ handle_char_normal(UI *ui, TCHAR c)
 		text = inputbox(ui, TEXT("Hex Search"));
 		if (text) {
 			int patlen;
-			char *pat = parse_hex_pattern(text, &patlen);
+			char *pat = parse_hex_string(text, &patlen);
 			free(text);
 			if (pat) {
 				search(ui, pat, patlen, 0);
@@ -842,6 +847,51 @@ handle_char_normal(UI *ui, TCHAR c)
 		if (!cursor_in_gap(ui)) {
 			ui->mode = MODE_REPLACE;
 			ui->replace_start = cursor_pos(ui);
+		} else {
+			MessageBeep(-1);
+		}
+		break;
+	case 'i':
+		if (!cursor_in_gap(ui)) {
+			/* TODO: reduce code duplication */
+			TCHAR *text;
+			if (ui->cursor_fine_pos == POS_ASCII) {
+				text = inputbox(ui, TEXT("Insert Text"));
+				if (text) {
+					char *data;
+					int datalen;
+#ifdef UNICODE
+					data = utf16_to_mbcs(text);
+					free(text);
+#else
+					data = text;
+#endif
+					datalen = strlen(data);
+					buf_insert(ui->buffer,
+						   cursor_pos(ui),
+						   data, datalen);
+					ui->buffer_changed = 1;
+				}
+			} else {
+				text = inputbox(ui, TEXT("Insert Hex"));
+				if (text) {
+					int datalen;
+					char *data = parse_hex_string
+						(text, &datalen);
+					free(text);
+					if (data) {
+						buf_insert(ui->buffer,
+							   cursor_pos(ui),
+							   data, datalen);
+						ui->buffer_changed = 1;
+					} else {
+						errorbox(ui->hwnd,
+							 TEXT("Syntax error"));
+					}
+				}
+			}
+		} else {
+			MessageBeep(-1);
 		}
 		break;
 	}
@@ -895,7 +945,7 @@ handle_char_replace(UI *ui, TCHAR c)
 		ui_set_cursor_pos(ui, ui->cursor_y, ui->cursor_x, POS_HINIB);
 		med_cx = 11+cx*3;
 		med_set_char(med, cy, med_cx, c|32);
-		med_set_char(med, cy, 59+cx, val);
+		med_set_char(med, cy, 59+cx, get_display_char(val));
 		med_update_backbuffer_row(med, cy);
 		med_invalidate_char(med, cy, med_cx);
 		med_invalidate_char(med, cy, 59+cx);
@@ -918,7 +968,7 @@ handle_char_replace(UI *ui, TCHAR c)
 		med_set_cursor_pos(med, cy, 11+cx*3);
 		med_cx = 10+cx*3;
 		med_set_char(med, cy, med_cx, c|32);
-		med_set_char(med, cy, 59+cx, val);
+		med_set_char(med, cy, 59+cx, get_display_char(val));
 		med_update_backbuffer_row(med, cy);
 		med_invalidate_char(med, cy, med_cx);
 		med_invalidate_char(med, cy, 59+cx);
@@ -1003,7 +1053,7 @@ med_getline(uint64 ln, T(Buf) *p, void *arg, MedTagList *taglist)
 	T(bprintf)(p, TEXT("  "));
 	for (i=0; i<N_COL; i++) {
 		uchar c = data[i];
-		p->putc(p, (TCHAR)(c < 0x20 || c > 0x7e ? '.' : c));
+		p->putc(p, (TCHAR)get_display_char(c));
 	}
 
 	if (end < N_COL) {
@@ -1203,11 +1253,13 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			}
 			break;
 		case ID_FILE_SAVE:
-			if (save_file(ui)) {
+			if (!ui->filepath) goto save_as;
+			if (buf_save_in_place(ui->buffer)) {
 				errorbox(hwnd, TEXT("Could not save file"));
 			}
 			break;
 		case ID_FILE_SAVEAS:
+save_as:
 			if (save_file_chooser_dialog(hwnd, path, BUFSIZE)) break;
 			if (save_file_as(ui, path)) {
 				errorbox(hwnd, TEXT("Could not save file"));
@@ -1274,7 +1326,7 @@ update_window_title(UI *ui)
 	}
 }
 
-/* does not update UI */
+/* pops up message box if something goes wrong */
 int
 open_file(UI *ui, TCHAR *path)
 {
@@ -1284,7 +1336,7 @@ open_file(UI *ui, TCHAR *path)
 	uchar readonly = 0;
 
 	file = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
-			  0 /* lpSecurityAttributes */, OPEN_EXISTING, 0, 0);
+			  0 /* lpSecurityAttributes */, OPEN_ALWAYS, 0, 0);
 	/* if cannot open file in rw mode, try ro */
 	if (file == INVALID_HANDLE_VALUE &&
 	    GetLastError() == ERROR_SHARING_VIOLATION) {
@@ -1298,10 +1350,12 @@ open_file(UI *ui, TCHAR *path)
 		errorbox(ui->hwnd, errtext);
 		return -1;
 	}
+	/* initialize buffer */
 	if (buf_init(ui->buffer, file) < 0) {
 		CloseHandle(file);
 		return -1;
 	}
+
 	ui_set_filepath(ui, lstrdup(path));
 	ui->readonly = readonly;
 
@@ -1457,7 +1511,7 @@ update_ui(UI *ui)
 			SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
 		}
 	}
-		
+
 	if (ui->buffer_changed) {
 		ui->buffer_changed = 0;
 		bufsize = buf_size(ui->buffer);
@@ -1804,12 +1858,6 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
 }
 
 int
-save_file(UI *ui)
-{
-	return buf_save_in_place(ui->buffer);
-}
-
-int
 save_file_as(UI *ui, const TCHAR *path)
 {
 	HANDLE dstfile =
@@ -2018,4 +2066,11 @@ ui_set_cursor_pos(UI *ui, int cursor_y, int cursor_x, uchar cursor_fine_pos)
 		ui->cursor_fine_pos = cursor_fine_pos;
 		ui->cursor_pos_changed = 1;
 	}
+}
+
+char
+get_display_char(uchar b)
+{
+	if (b < ' ' || b > '~') return '.';
+	return b;
 }

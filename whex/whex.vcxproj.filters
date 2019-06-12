@@ -18,9 +18,6 @@
     <ClCompile Include="buffer.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="luatk.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="main.c">
       <Filter>Source Files</Filter>
     </ClCompile>

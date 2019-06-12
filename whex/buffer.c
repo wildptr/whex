@@ -283,10 +283,17 @@ buf_save(Buffer *b, HANDLE dstfile)
 {
 	static uchar zero[4096];
 
-	uchar inplace = b->file == dstfile;
-	Segment *s = b->firstseg;
-	Region *r = &b->tmp;
-	void *top = r->cur;
+	uchar inplace;
+	Segment *s;
+	Region *r;
+	void *top;
+
+	assert(dstfile);
+
+	inplace = b->file == dstfile;
+	s = b->firstseg;
+	r = &b->tmp;
+	top = r->cur;
 	while (s) {
 		//_printf("%llx--%llx ", s->start, s->end);
 		switch (s->kind) {

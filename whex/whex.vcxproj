@@ -74,7 +74,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="buffer.c" />
-    <ClCompile Include="luatk.c" />
     <ClCompile Include="u.c" />
     <ClCompile Include="whex_lua.c" />
     <ClCompile Include="main.c" />

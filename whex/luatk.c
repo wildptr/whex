@@ -107,6 +107,7 @@ api_window_show(lua_State *L)
 void
 register_window(lua_State *L, Window *w)
 {
+	/* void lua_createtable(lua_State *L, int narr, int nrec); */
 	lua_createtable(L, END_WINDOW, 0);
 	lua_setuservalue(L, -2);
 	lua_pushlightuserdata(L, w->hwnd);
@@ -176,6 +177,8 @@ init_window(lua_State *L, Window *w, const char *wndclass, DWORD wndstyle,
 		w->hwnd = hwnd;
 		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) w);
 	}
+	/* for now, all this does is set the font of the window to
+	   DEFAULT_GUI_FONT */
 	post_init_window(w);
 	register_window(L, w);
 }

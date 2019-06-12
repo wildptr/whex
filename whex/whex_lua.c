@@ -9,8 +9,6 @@
 #include "buffer.h"
 #include "tree.h"
 
-/* TODO: fix address size issues */
-
 static int
 checkaddr(lua_State *L, int index, uint64 *addr)
 {

@@ -7,16 +7,26 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "lua", "lua\lua.vcxproj", "{
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug Static|Win32 = Debug Static|Win32
 		Debug|Win32 = Debug|Win32
+		Release Static|Win32 = Release Static|Win32
 		Release|Win32 = Release|Win32
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Debug Static|Win32.ActiveCfg = Debug|Win32
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Debug Static|Win32.Build.0 = Debug|Win32
 		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Debug|Win32.ActiveCfg = Debug|Win32
 		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Debug|Win32.Build.0 = Debug|Win32
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Release Static|Win32.ActiveCfg = Release|Win32
+		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Release Static|Win32.Build.0 = Release|Win32
 		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Release|Win32.ActiveCfg = Release|Win32
 		{5B83A03F-71DF-4FC4-A5A2-A3DA41175DDD}.Release|Win32.Build.0 = Release|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug Static|Win32.ActiveCfg = Debug|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug Static|Win32.Build.0 = Debug|Win32
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug|Win32.ActiveCfg = Debug|Win32
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Debug|Win32.Build.0 = Debug|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release Static|Win32.ActiveCfg = Release|Win32
+		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release Static|Win32.Build.0 = Release|Win32
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release|Win32.ActiveCfg = Release|Win32
 		{44EBBCD2-81E5-4B8F-B9EA-02A4952F09D1}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection

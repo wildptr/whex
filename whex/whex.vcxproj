@@ -39,11 +39,11 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <IncludePath>$(SolutionDir)util;$(SolutionDir)lua\lua-5.3.4\src;$(IncludePath)</IncludePath>
+    <IncludePath>$(SolutionDir)util;$(SolutionDir)lua\lua-5.3.5\src;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)$(Configuration);$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>$(SolutionDir)util;$(SolutionDir)lua\lua-5.3.4\src;$(IncludePath)</IncludePath>
+    <IncludePath>$(SolutionDir)util;$(SolutionDir)lua\lua-5.3.5\src;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)$(Configuration);$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">

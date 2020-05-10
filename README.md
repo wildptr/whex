@@ -7,8 +7,8 @@ it is still under heavy development and things may change drastically.
 
 * Handles large (4GB+) files
 * Fast insertion/replacement/deletion anywhere in file
-* Highly extensible and fully scriptable with Lua
+* Highly extensible and fully scriptable with Lua (highly incomplete)
 * Structured binary editing a la 010 Editor's Binary Templates, using Lua as
   the format description language
-* A Tk-style Lua GUI library enabling easy GUI plugin development
+* A Tk-style Lua GUI library enabling easy GUI plugin development (highly incomplete)
 * Uses nothing other than native Win32 API for GUI

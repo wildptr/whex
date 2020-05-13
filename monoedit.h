@@ -40,6 +40,7 @@ void med_set_source(HWND, MedGetLineProc proc, void *arg);
 TCHAR *med_alloc_text(HWND, int nch);
 #endif
 void med_update_buffer(HWND);
+void med_update_buffer_row(HWND, int);
 void med_scroll(HWND, int delta);
 void med_add_overlay(HWND, int ln, int start, int len, MedTextAttr *attr);
 void med_clear_overlay(HWND);

@@ -79,3 +79,12 @@ lstrdup(const TCHAR *s)
     memcpy(ret, s, nb);
     return ret;
 }
+
+DWORD
+get_file_size(HANDLE file, uint64 *psize)
+{
+    DWORD size_lo, size_hi;
+    size_lo = GetFileSize(file, &size_hi);
+    *psize = (uint64)size_lo | (uint64)size_hi << 32;
+    return size_lo == 0xffffffff ? GetLastError() : 0;
+}

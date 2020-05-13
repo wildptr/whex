@@ -126,7 +126,6 @@ union u {
 #undef T_
 #undef _TCHAR
 #ifdef UNICODE
-#define strlen_w wcslen
 #define T_(x) x##_w
 #define _TCHAR wchar_t
 #include "printf.c"

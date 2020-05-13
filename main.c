@@ -15,6 +15,7 @@
 #include "monoedit.h"
 #include "treelistview.h"
 #include "winutil.h"
+#include "luatk.h"
 
 #define INITIAL_N_ROW 32
 #define LOG2_N_COL 4
@@ -31,6 +32,8 @@ enum {
     ID_FILE_SAVEAS,
     ID_FILE_CLOSE,
     ID_FILE_EXIT,
+    ID_EDIT_INSERT,
+    ID_EDIT_DELETE,
     ID_NAV_GOTO,
     ID_NAV_SEARCH,
     ID_NAV_SEARCH_BACKWARDS,
@@ -41,6 +44,14 @@ enum {
     ID_TOOLS_LOAD_PLUGIN,
     ID_TOOLS_RUN_LUA_SCRIPT,
     ID_PLUGIN_0,
+};
+
+enum {
+    MENU_FILE,
+    MENU_EDIT,
+    MENU_NAVIGATE,
+    MENU_TOOLS,
+    MENU_PLUGIN,
 };
 
 enum {
@@ -74,12 +85,13 @@ typedef struct {
     HWND status_bar;
     HINSTANCE instance;
     int npluginfunc;
-    char *plugin_name; // property
-    char **plugin_funcname;
+    TCHAR *plugin_name; // property
+    TCHAR **plugin_funcname;
     //uchar mode;
     uchar cursor_fine_pos; // property cursor_pos
     uchar readonly;
     HWND treeview;
+    //HWND tabctrl;
 #if 0
     uint64 replace_start;
     uchar *replace_buf;
@@ -102,7 +114,7 @@ typedef struct {
 Region the_region;
 /* GetOpenFileName() changes directory, so remember working directory when
    program starts */
-char *program_dir;
+TCHAR *program_dir;
 int program_dir_len;
 
 LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
@@ -115,7 +127,6 @@ void update_field_info(UI *);
 void update_logical_cursor_pos(UI *);
 uint64 current_line(UI *);
 void goto_address(UI *, uint64);
-void error_prompt(UI *, const TCHAR *);
 void goto_bol(UI *);
 void goto_eol(UI *);
 void handle_WM_CHAR(UI *, TCHAR);
@@ -132,10 +143,11 @@ void move_next_field(UI *);
 void move_prev_field(UI *);
 /* allocates result on heap */
 TCHAR *inputbox(UI *, TCHAR *title);
+int parse_uint(TCHAR *, uint64 *);
 int parse_addr(TCHAR *, uint64 *);
 void errorbox(HWND, TCHAR *);
 Tree *convert_tree(Region *, lua_State *);
-int load_plugin(UI *, const char *);
+int load_plugin(UI *, const TCHAR *);
 int api_buffer_peek(lua_State *L);
 int api_buffer_peeku16(lua_State *L);
 int api_buffer_peeku32(lua_State *L);
@@ -147,6 +159,8 @@ int api_buffer_replace(lua_State *L);
 int api_buffer_insert(lua_State *L);
 void getluaobj(lua_State *L, const char *name);
 void luaerrorbox(HWND hwnd, lua_State *L);
+// runs script in a separate environment
+int run_lua_script(lua_State *, const TCHAR *path, int nret);
 void update_plugin_menu(UI *ui);
 int load_filetype_plugin(UI *, const TCHAR *);
 int save_file_as(UI *, const TCHAR *);
@@ -158,7 +172,7 @@ uchar cursor_in_gap(UI *);
 int col_to_cx(UI *, int);
 void ui_set_tree(UI *, Tree *);
 void ui_set_filepath(UI *, TCHAR *);
-void ui_set_plugin_name(UI *, char *);
+void ui_set_plugin_name(UI *, TCHAR *);
 void ui_set_cursor_pos(UI *, int, int);
 void ui_set_cursor_fine_pos(UI *, uchar);
 char get_display_char(uchar b);
@@ -214,13 +228,18 @@ create_menu(void)
     mainmenu = CreateMenu();
 
     m = CreateMenu();
-    AppendMenu(m, MF_STRING, ID_FILE_OPEN, TEXT("Open..."));
+    AppendMenu(m, MF_STRING, ID_FILE_OPEN, TEXT("Open...\tCtrl+O"));
     AppendMenu(m, MF_STRING, ID_FILE_SAVE, TEXT("Save"));
     AppendMenu(m, MF_STRING, ID_FILE_SAVEAS, TEXT("Save As..."));
     AppendMenu(m, MF_STRING, ID_FILE_CLOSE, TEXT("Close"));
     AppendMenu(m, MF_SEPARATOR, 0, 0);
     AppendMenu(m, MF_STRING, ID_FILE_EXIT, TEXT("Exit"));
     AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("File"));
+
+    m = CreateMenu();
+    AppendMenu(m, MF_STRING, ID_FILE_OPEN, TEXT("Insert...\tCtrl+I"));
+    AppendMenu(m, MF_STRING, ID_FILE_OPEN, TEXT("Delete...\tCtrl+D"));
+    AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Edit"));
 
     m = CreateMenu();
     AppendMenu(m, MF_STRING, ID_NAV_GOTO, TEXT("Go to...\tCtrl+G"));
@@ -233,7 +252,7 @@ create_menu(void)
     AppendMenu(m, MF_STRING, ID_NAV_HEX_SEARCH_BACKWARDS,
                TEXT("Backwards hex search..."));
     AppendMenu(m, MF_STRING, ID_NAV_NEXT_MATCH,
-               TEXT("Go to next match"));
+               TEXT("Go to next match\tF3"));
     AppendMenu(m, MF_STRING, ID_NAV_PREV_MATCH,
                TEXT("Go to previous match"));
     AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Navigate"));
@@ -244,7 +263,8 @@ create_menu(void)
                TEXT("Run Lua Script..."));
     AppendMenu(mainmenu, MF_POPUP, (UINT_PTR) m, TEXT("Tools"));
 
-    /* appearance will be overridden by update_ui() */
+    /* This is the plugin menu. Its appearance will be overridden by
+       update_ui(). */
     AppendMenu(mainmenu, MF_SEPARATOR, 0, 0);
 
     return mainmenu;
@@ -255,6 +275,9 @@ static int
 start_gui(int show, UI *ui, TCHAR *filepath)
 {
     static ACCEL accel_table[] = {
+        { FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN },
+        { FCONTROL | FVIRTKEY, 'I', ID_EDIT_INSERT },
+        { FCONTROL | FVIRTKEY, 'D', ID_EDIT_DELETE },
         { FCONTROL | FVIRTKEY, 'G', ID_NAV_GOTO },
         { FCONTROL | FVIRTKEY, 'F', ID_NAV_SEARCH },
         { FCONTROL | FVIRTKEY, 'H', ID_NAV_HEX_SEARCH },
@@ -268,7 +291,8 @@ start_gui(int show, UI *ui, TCHAR *filepath)
     InitCommonControls();
     if (!med_register_class()) return 1;
     if (!tlv_register_class()) return 1;
-    if (!register_wndclass()) return 1;
+    ATOM mainwndclass = register_wndclass();
+    if (!mainwndclass) return 1;
     HACCEL accel = CreateAcceleratorTable(accel_table, NELEM(accel_table));
     if (filepath) {
         int status = open_file(ui, filepath);
@@ -285,7 +309,7 @@ start_gui(int show, UI *ui, TCHAR *filepath)
     init_font(ui);
     menu = create_menu();
     hwnd = CreateWindow
-        (TEXT("WHEX"), 0 /* will be set later */, WS_OVERLAPPEDWINDOW,
+        (CLASSNAME(mainwndclass), 0 /* will be set later */, WS_OVERLAPPEDWINDOW,
          CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
          0, menu, ui->instance, ui);
     ShowWindow(hwnd, show);
@@ -366,12 +390,12 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
     Buffer *b;
     UI *ui;
 
-    program_dir = xmalloc(BUFSIZE);
-    program_dir_len = GetCurrentDirectoryA(BUFSIZE, program_dir);
+    program_dir = xmalloc(BUFSIZE * sizeof *program_dir);
+    program_dir_len = GetCurrentDirectory(BUFSIZE, program_dir);
     if (program_dir_len > BUFSIZE) {
         free(program_dir);
-        program_dir = xmalloc(program_dir_len);
-        program_dir_len = GetCurrentDirectoryA(BUFSIZE, program_dir);
+        program_dir = xmalloc(program_dir_len * sizeof *program_dir);
+        program_dir_len = GetCurrentDirectory(BUFSIZE, program_dir);
     }
     if (!program_dir_len) return 1;
 
@@ -416,7 +440,16 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
     /* set Lua search path */
     lua_getglobal(L, "package");
+#ifdef UNICODE
+    {
+        char *program_dirA = utf16_to_mbcs(program_dir);
+        // TODO: fix Lua
+        lua_pushfstring(L, "%s/?.lua", program_dirA);
+        free(program_dirA);
+    }
+#else
     lua_pushfstring(L, "%s/?.lua", program_dir);
+#endif
     lua_setfield(L, -2, "path");
     lua_pop(L, 1); /* global 'package' */
 
@@ -454,10 +487,14 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
     lua_setfield(L, -2, "customtype");
 
     {
-        char *ftdet_path = asprintf("%s/ftdet.lua", program_dir);
-        if (luaL_dofile(L, ftdet_path)) {
-            luaerrorbox(0, L);
-            lua_pop(L, 1);
+        TCHAR *ftdet_path = T(asprintf)(TEXT("%s/ftdet.lua"), program_dir);
+        int ret = run_lua_script(L, ftdet_path, 1);
+        if (ret) {
+            if (ret > 0) {
+                // Lua error
+                luaerrorbox(0, L);
+                lua_pop(L, 1);
+            } // otherwize we have failed to read the file
         } else {
             lua_setfield(L, -2, "ftdet");
         }
@@ -465,6 +502,12 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
     }
 
     lua_setglobal(L, "whex");
+
+    if (luatk_init() < 0) {
+        errorbox(0, TEXT("LuaTk initialization failed"));
+    } else {
+        luatk_api_open(L);
+    }
 
     NEW(ui, &the_region);
     memset(ui, 0, sizeof *ui);
@@ -497,9 +540,15 @@ update_status_text(UI *ui, Tree *leaf)
         char *path;
         format_leaf_value(ui, leaf, &typename, &valuerepr);
         path = tree_path(&the_region, leaf);
+        TCHAR *T_path;
+#ifdef UNICODE
+        T_path = mbcs_to_utf16_r(&the_region, path);
+#else
+        T_path = path;
+#endif
         SendMessage(sb, SB_SETTEXT, 1, (LPARAM) typename);
         SendMessage(sb, SB_SETTEXT, 2, (LPARAM) valuerepr);
-        SendMessage(sb, SB_SETTEXTA, 3, (LPARAM) path);
+        SendMessage(sb, SB_SETTEXT, 3, (LPARAM) T_path);
         rfree(&the_region, top);
     } else {
         SendMessage(sb, SB_SETTEXT, 1, 0);
@@ -549,7 +598,7 @@ update_logical_cursor_pos(UI *ui)
     med_get_cursor_pos(ui->monoedit, pos);
     cy = pos[0];
     cx = pos[1];
-    int cursor_x;
+    int cursor_x = 0;
     uchar cursor_fine_pos;
     if (cx < 9) {
         cursor_fine_pos = POS_GAP;
@@ -619,15 +668,9 @@ goto_address(UI *ui, uint64 addr)
             dstline = 0;
         }
         cy = (int)(line - dstline);
-        med_set_current_line(ui->monoedit, line);
+        med_set_current_line(ui->monoedit, dstline);
     }
     ui_set_cursor_pos(ui, cy, col);
-}
-
-void
-error_prompt(UI *ui, const TCHAR *errmsg)
-{
-    MessageBox(ui->hwnd, errmsg, TEXT("Error"), MB_ICONERROR);
 }
 
 int
@@ -819,7 +862,7 @@ handle_WM_CHAR(UI *ui, TCHAR c)
                     datalen = strlen(data);
                     buf_insert(ui->buffer, ui->abs_cursor_pos,
                                (uchar*)data, datalen);
-                    ui->buffer_changed = 1;
+                    ui->buffer_changed = true;
                 }
             } else {
                 text = inputbox(ui, TEXT("Insert Hex"));
@@ -831,7 +874,7 @@ handle_WM_CHAR(UI *ui, TCHAR c)
                     if (data) {
                         buf_insert(ui->buffer, ui->abs_cursor_pos,
                                    (uchar*)data, datalen);
-                        ui->buffer_changed = 1;
+                        ui->buffer_changed = true;
                     } else {
                         errorbox(ui->hwnd, TEXT("Syntax error"));
                     }
@@ -942,6 +985,7 @@ handle_char_replace(UI *ui, TCHAR c)
     if (pos >= bufsize) {
         /* this many bytes inserted at end of buffer */
         uint64 end = pos+1;
+        if (!end) return; // overflow... TODO: beep
         size_t extra = (size_t)(end - bufsize);
         /* may have to update total lines */
         uint64 total_lines;
@@ -1013,21 +1057,29 @@ med_getline(uint64 ln, T(Buf) *p, void *arg, MedTagList *taglist)
     uchar data[N_COL];
     Buffer *b = (Buffer *) arg;
     uint64 bufsize = buf_size(b);
-    uint64 addr = ln << LOG2_N_COL;
     uint64 start = ln << LOG2_N_COL;
     int end, i;
 
-    assert(ln >= 0);
-    if (start + N_COL <= bufsize) {
-        end = N_COL;
-    } else if (start >= bufsize) {
+    if (start < ln) {
+        // overflow
+        return;
+    }
+
+    if (start >= bufsize) {
         end = 0;
     } else {
-        end = (int)(bufsize - start);
+        uint64 tmp = bufsize - start;
+        end = min(tmp, N_COL);
     }
-    T(bprintf)(p, TEXT("%.8llx:"), addr);
+    T(bprintf)(p, TEXT("%.8llx:"), start);
+    int header_len = 9;
+    uint tmp = start>>32;
+    while (tmp) {
+        tmp >>= 4;
+        header_len++;
+    }
     if (end) {
-        buf_read(b, data, addr, end);
+        buf_read(b, data, start, end);
     }
     for (i=end; i<N_COL; i++) data[i] = 0;
     for (i=0; i<N_COL; i++) {
@@ -1044,10 +1096,10 @@ med_getline(uint64 ln, T(Buf) *p, void *arg, MedTagList *taglist)
         MedTextAttr attr;
         attr.flags = MED_ATTR_TEXT_COLOR;
         attr.text_color = RGB(192, 192, 192);
-        start = 10 + end * 3;
+        start = header_len + 1 + end * 3;
         len = (N_COL - end) * 3 - 1;
         med_add_tag(taglist, start, len, &attr);
-        start = 11 + N_COL*3 + end;
+        start = header_len + 2 + N_COL*3 + end;
         len = N_COL - end;
         med_add_tag(taglist, start, len, &attr);
     }
@@ -1098,6 +1150,21 @@ handle_WM_CREATE(UI *ui, LPCREATESTRUCT create)
     tlv_add_column(treeview, 64, TEXT("Type"));
     tlv_add_column(treeview, 128, TEXT("Value"));
     tlv_add_column(treeview, 64, TEXT("Offset"));
+
+#if 0
+    /**/
+    ui->tabctrl = CreateWindow
+        (WC_TABCONTROL, TEXT(""),
+         WS_CHILD | WS_VISIBLE,
+         0, 0, 0, 0,
+         hwnd, NULL, instance, NULL);
+    {
+        TC_ITEM ti;
+        ti.mask = TCIF_TEXT;
+        ti.pszText = TEXT("Test");
+        TabCtrl_InsertItem(ui->tabctrl, 1, &ti);
+    }
+#endif
 
     /* create status bar */
     status_bar = CreateStatusWindow
@@ -1159,30 +1226,33 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         return 0;
     case WM_SIZE:
         {
-            int wid;
-            int med_hei, med_wid;
-            RECT r;
             /* will crash if we continue */
             if (wparam == SIZE_MINIMIZED) return 0;
-            wid = LOWORD(lparam);
-            med_wid = 80*ui->charwidth;
+            RECT rect = { 0, 0, LOWORD(lparam), HIWORD(lparam) };
             if (ui->status_bar) {
+                RECT r;
                 /* adjust status bar geometry automatically */
                 SendMessage(ui->status_bar, WM_SIZE, 0, 0);
                 GetWindowRect(ui->status_bar, &r);
                 /* translate top-left from screen to client */
                 ScreenToClient(hwnd, (LPPOINT) &r);
-                med_hei = r.top;
-            } else {
-                GetClientRect(hwnd, &r);
-                med_hei = r.bottom;
+                rect.bottom = r.top;
             }
-            assert(med_wid > 0);
-            if (med_hei < 0) med_hei = 0;
-            SetWindowPos(ui->monoedit, 0, 0, 0, med_wid, med_hei,
+#if 0
+            SetWindowPos(ui->tabctrl, 0,
+                         0, 0, rect.right, rect.bottom,
                          SWP_NOMOVE | SWP_NOZORDER);
+            TabCtrl_AdjustRect(ui->tabctrl, FALSE, &rect);
+#endif
+            int cwid = rect.right - rect.left;
+            int chei = rect.bottom - rect.top;
+            if (cwid < 0) cwid = 0;
+            if (chei < 0) chei = 0;
+            int med_wid = 80*ui->charwidth;
+            SetWindowPos(ui->monoedit, 0, rect.left, rect.top, med_wid, chei,
+                         SWP_NOZORDER);
             SetWindowPos(ui->treeview, 0,
-                         med_wid, 0, wid - med_wid, med_hei,
+                         rect.left + med_wid, rect.top, cwid - med_wid, chei,
                          SWP_NOZORDER);
         }
         return 0;
@@ -1209,7 +1279,6 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         }
         switch (id) {
             TCHAR path[BUFSIZE];
-            char *path_mbcs;
             int ret;
         case ID_MONOEDIT:
             if (HIWORD(wparam) == MED_NOTIFY_POS_CHANGED) {
@@ -1241,6 +1310,47 @@ save_as:
             break;
         case ID_FILE_EXIT:
             SendMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+            break;
+        case ID_EDIT_INSERT:
+            {
+                TCHAR *text = inputbox(ui, TEXT("Insert this many bytes"));
+                uint64 n;
+                if (text) {
+                    if (parse_uint(text, &n)) {
+                        errorbox(ui->hwnd, TEXT("Syntax error"));
+                    } else {
+                        uint64 pos = ui->abs_cursor_pos;
+                        uint64 bufsize = buf_size(ui->buffer);
+                        if (pos > bufsize) pos = bufsize;
+                        buf_insert(ui->buffer, pos, 0, n);
+                        ui->buffer_changed = true;
+                    }
+                    free(text);
+                }
+                SetFocus(ui->monoedit);
+            }
+            break;
+        case ID_EDIT_DELETE:
+            {
+                TCHAR *text = inputbox(ui, TEXT("Delete this many bytes"));
+                uint64 n;
+                if (text) {
+                    if (parse_uint(text, &n)) {
+                        errorbox(ui->hwnd, TEXT("Syntax error"));
+                    } else {
+                        uint64 pos = ui->abs_cursor_pos;
+                        uint64 bufsize = buf_size(ui->buffer);
+                        if (pos > bufsize) pos = bufsize;
+                        if (pos + n > bufsize) {
+                            n = bufsize - pos;
+                        }
+                        buf_delete(ui->buffer, pos, n);
+                        ui->buffer_changed = true;
+                    }
+                    free(text);
+                }
+                SetFocus(ui->monoedit);
+            }
             break;
         case ID_NAV_GOTO:
             {
@@ -1300,29 +1410,13 @@ save_as:
             break;
         case ID_TOOLS_LOAD_PLUGIN:
             if (open_file_chooser_dialog(hwnd, path, BUFSIZE)) break;
-#ifdef UNICODE
-            path_mbcs = utf16_to_mbcs(path);
-#else
-            path_mbcs = path;
-#endif
-            load_plugin(ui, path_mbcs);
-#ifdef UNICODE
-            free(path_mbcs);
-#endif
+            load_plugin(ui, path);
             break;
         case ID_TOOLS_RUN_LUA_SCRIPT:
             if (open_file_chooser_dialog(hwnd, path, BUFSIZE)) break;
-#ifdef UNICODE
-            path_mbcs = utf16_to_mbcs(path);
-#else
-            path_mbcs = path;
-#endif
             L = ui->lua;
-            ret = luaL_dofile(L, path_mbcs);
-#ifdef UNICODE
-            free(path_mbcs);
-#endif
-            if (ret) {
+            ret = run_lua_script(L, path, 0);
+            if (ret > 0) {
                 luaerrorbox(ui->hwnd, L);
                 lua_pop(L, 1);
                 break;
@@ -1377,7 +1471,8 @@ open_file(UI *ui, TCHAR *path)
         return -1;
     }
     /* initialize buffer */
-    if (buf_init(ui->buffer, file) < 0) {
+    if (buf_init(ui->buffer) < 0 || buf_load_file(ui->buffer, file, 0x100000))
+    {
         CloseHandle(file);
         return -1;
     }
@@ -1542,15 +1637,18 @@ update_ui(UI *ui)
             mii.fState = MFS_GRAYED;
             SetMenuItemInfo(menu, ID_FILE_SAVE, FALSE, &mii);
         }
+        // update status of whole Edit menu
+        SetMenuItemInfo(menu, MENU_EDIT, TRUE, &mii);
         // update status of whole Navigate menu
-        SetMenuItemInfo(menu, 1, TRUE, &mii);
+        SetMenuItemInfo(menu, MENU_NAVIGATE, TRUE, &mii);
         for (i=0; i<NELEM(toggle_menus); i++) {
             SetMenuItemInfo(menu, toggle_menus[i], FALSE, &mii);
         }
     }
 
+    /* TODO: finer-grained UI update control */
     if (ui->buffer_changed) {
-        ui->buffer_changed = 0;
+        ui->buffer_changed = false;
         bufsize = buf_size(ui->buffer);
         total_lines = bufsize >> LOG2_N_COL;
         if (bufsize&(N_COL-1)) {
@@ -1713,6 +1811,26 @@ inputbox(UI *ui, TCHAR *title)
 }
 
 int
+parse_uint(TCHAR *s, uint64 *presult)
+{
+    uint64 n = 0;
+    if (!*s) return -1;
+    if (s[0] == '0' && (s[1]|32) == 'x') return parse_addr(s+2, presult);
+    do {
+        TCHAR c = *s++;
+        int d;
+        if (c >= '0' && c <= '9') {
+            d = c-'0';
+        } else {
+            return -1;
+        }
+        n = n*10+d;
+    } while (*s);
+    *presult = n;
+    return 0;
+}
+
+int
 parse_addr(TCHAR *s, uint64 *addr)
 {
     uint64 n = 0;
@@ -1744,7 +1862,10 @@ errorbox(HWND hwnd, TCHAR *msg)
 void
 luaerrorbox(HWND hwnd, lua_State *L)
 {
-    MessageBoxA(hwnd, lua_tostring(L, -1), "Error", MB_OK | MB_ICONERROR);
+    const char *msg = lua_tostring(L, -1);
+    TCHAR *T_msg = UTF8_TO_TSTR(msg);
+    MessageBox(hwnd, T_msg, TEXT("Lua Error"), MB_OK | MB_ICONERROR);
+    free(T_msg);
 }
 
 void
@@ -1755,17 +1876,21 @@ getluaobj(lua_State *L, const char *name)
     lua_remove(L, -2);
 }
 
+// TODO: path encoding
 int
-load_plugin(UI *ui, const char *path)
+load_plugin(UI *ui, const TCHAR *path)
 {
     lua_State *L = ui->lua;
     Tree *tree;
-    char *plugin_name;
+    TCHAR *plugin_name;
     int n, i;
 
-    if (luaL_dofile(L, path)) {
-        luaerrorbox(ui->hwnd, L);
-        lua_pop(L, 1);
+    int ret = run_lua_script(L, path, LUA_MULTRET);
+    if (ret) {
+        if (ret > 0) {
+            luaerrorbox(ui->hwnd, L);
+            lua_pop(L, 1);
+        }
         return -1;
     }
 
@@ -1799,7 +1924,7 @@ load_plugin(UI *ui, const char *path)
     ui_set_tree(ui, tree);
 
     lua_getfield(L, -1, "name"); /* plugin.name */
-    plugin_name = strdup(luaL_checkstring(L, -1));
+    plugin_name = UTF8_TO_TSTR(luaL_checkstring(L, -1));
     lua_pop(L, 1);
     if (ui->plugin_name) {
         free(ui->plugin_name);
@@ -1814,12 +1939,11 @@ load_plugin(UI *ui, const char *path)
     ui->npluginfunc = n;
     ui->plugin_funcname = xmalloc(n * sizeof *ui->plugin_funcname);
     for (i=0; i<n; i++) {
-        char *funcname;
         lua_geti(L, -1, 1+i); /* push {func, funcname} */
         lua_geti(L, -1, 1); /* push func */
         lua_seti(L, -4, 1+i);
         lua_geti(L, -1, 2); /* push funcname */
-        funcname = strdup(luaL_checkstring(L, -1));
+        TCHAR *funcname = UTF8_TO_TSTR(luaL_checkstring(L, -1));
         lua_pop(L, 2);
         ui->plugin_funcname[i] = funcname;
     }
@@ -1837,14 +1961,15 @@ update_plugin_menu(UI *ui)
         int i;
         HMENU plugin_menu = CreateMenu();
         for (i=0; i<ui->npluginfunc; i++) {
-            AppendMenuA(plugin_menu, MF_STRING, ID_PLUGIN_0+i,
-                        ui->plugin_funcname[i]);
+            AppendMenu(plugin_menu, MF_STRING, ID_PLUGIN_0+i,
+                       ui->plugin_funcname[i]);
         }
-        ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_POPUP,
-                    (UINT_PTR) plugin_menu, ui->plugin_name);
+        ModifyMenu(mainmenu, MENU_PLUGIN, MF_BYPOSITION | MF_POPUP,
+                   (UINT_PTR) plugin_menu, ui->plugin_name);
     } else {
-        ModifyMenuA(mainmenu, 2, MF_BYPOSITION | MF_STRING | MF_GRAYED,
-                    0, "Plugin");
+        ModifyMenu(mainmenu, MENU_PLUGIN,
+                   MF_BYPOSITION | MF_STRING | MF_GRAYED,
+                   0, TEXT("Plugin"));
     }
 
     DrawMenuBar(ui->hwnd);
@@ -1855,7 +1980,7 @@ int
 load_filetype_plugin(UI *ui, const TCHAR *path)
 {
     lua_State *L;
-    const char *ft;
+    TCHAR *ft;
     int ret;
     int i;
 
@@ -1873,6 +1998,7 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
         return -1;
     }
     getluaobj(L, "buffer");
+    // call ftdet on buffer
     if (lua_pcall(L, 1, 1, 0)) {
         luaerrorbox(ui->hwnd, L);
         lua_pop(L, 1);
@@ -1880,12 +2006,13 @@ load_filetype_plugin(UI *ui, const TCHAR *path)
     }
     ft = 0;
     if (lua_isstring(L, -1)) {
-        ft = luaL_checkstring(L, -1);
+        ft = UTF8_TO_TSTR(luaL_checkstring(L, -1));
     }
     if (ft) {
-        char *path = asprintf("%s/filetype/%s.lua", program_dir, ft);
+        TCHAR *path = T(asprintf)(TEXT("%s/filetype/%s.lua"), program_dir, ft);
         ret = load_plugin(ui, path);
         free(path);
+        free(ft);
     } else {
         ret = -1;
     }
@@ -1928,7 +2055,6 @@ addtotree(UI *ui, TLV_Item *parent, Tree *tree)
     for (i=0; i<tree->n_child; i++)
         addtotree(treeview, item, tree->children[i]);
 #endif
-    // TODO: Unicode
 
     void *top = the_region.cur;
 
@@ -2111,7 +2237,7 @@ exit_replace_mode(UI *ui)
         buf_replace(ui->buffer, ui->replace_start,
                     ui->replace_buf, ui->replace_buf_len);
         ui->replace_buf_len = 0;
-        ui->buffer_changed = 1;
+        ui->buffer_changed = true;
     }
 }
 #endif
@@ -2131,12 +2257,12 @@ ui_set_filepath(UI *ui, TCHAR *filepath)
     if (filepath != ui->filepath) {
         ui->filepath = filepath;
         ui->filepath_changed = 1;
-        ui->buffer_changed = 1;
+        ui->buffer_changed = true;
     }
 }
 
 void
-ui_set_plugin_name(UI *ui, char *plugin_name)
+ui_set_plugin_name(UI *ui, TCHAR *plugin_name)
 {
     if (plugin_name != ui->plugin_name) {
         ui->plugin_name = plugin_name;
@@ -2170,4 +2296,66 @@ get_display_char(uchar b)
 {
     if (b < ' ' || b > '~') return '.';
     return b;
+}
+
+static char *
+slurp(const TCHAR *path, uint size_limit, uint *psize)
+{
+    TCHAR errmsg[512];
+
+    HANDLE file = CreateFile
+        (path, GENERIC_READ, FILE_SHARE_READ,
+         0 /* lpSecurityAttributes */, OPEN_EXISTING, 0, 0);
+    if (file == INVALID_HANDLE_VALUE) {
+        format_error_code(errmsg, 512, GetLastError());
+        T(eprintf)(TEXT("cannot open %s: %s\n"), path, errmsg);
+        return 0;
+    }
+    uint64 size;
+    DWORD err = get_file_size(file, &size);
+    if (err) {
+        format_error_code(errmsg, 512, err);
+        T(eprintf)(TEXT("GetFileSize() failed: %s\n"), errmsg);
+        return 0;
+    }
+    if (size > size_limit) {
+        eprintf("file too large\n", errmsg);
+        return 0;
+    }
+    uint size_lo = (uint)size;
+    char *data = xmalloc(size_lo);
+    DWORD nread;
+    ReadFile(file, data, size_lo, &nread, 0);
+    if (nread < size_lo) {
+        eprintf("short read (%u/%u)\n", nread, size_lo);
+    }
+    *psize = nread;
+    return data;
+}
+
+int
+run_lua_script(lua_State *L, const TCHAR *path, int nret)
+{
+    uint size;
+    char *script = slurp(path, 0x100000, &size);
+    if (!script) return -1; // TODO: report error properly
+    char *U_path = TSTR_TO_UTF8(path);
+    int ret = luaL_loadbuffer(L, script, size, U_path);
+    free(U_path);
+    free(script);
+    if (ret) return ret;
+    // prepare environment
+    // setmetatable({}, {__index=_G})
+    lua_newtable(L); // the new env. table
+    // construct {__index=_G}
+    lua_newtable(L);
+    lua_pushstring(L, "__index");
+    lua_pushglobaltable(L);
+    lua_rawset(L, -3);
+    //
+    lua_setmetatable(L, -2);
+    // -1 -> env table
+    // -2 -> script
+    lua_setupvalue(L, -2, 1); // set _ENV
+    return lua_pcall(L, 0, nret, 0);
 }

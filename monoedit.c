@@ -211,7 +211,7 @@ add_overlay(Med *w, int row, int start, int len, MedTextAttr *attr)
     }
 }
 
-void
+static void
 default_getline(uint64 _ln, T(Buf) *_b, void *_arg, MedTagList *_taglist)
 {
 }
@@ -400,7 +400,7 @@ notify:
                 si.cbSize = sizeof si;
                 si.fMask = SIF_TRACKPOS;
                 GetScrollInfo(hwnd, SB_VERT, &si);
-                scroll_to(w, hwnd, si.nTrackPos);
+                scroll_to(w, hwnd, (uint64)si.nTrackPos << w->sbscale);
             }
             goto notify;
         }
@@ -447,6 +447,9 @@ med_register_class(void)
 static void
 scroll_to(Med *w, HWND hwnd, uint64 ln)
 {
+    if (ln >= 0x8000000000000000ULL) {
+        eprintf("ln=%llu\n", ln);
+    }
     w->current_line = ln;
     update_buffer(w);
     update_canvas(w);
@@ -618,6 +621,12 @@ getline(Med *w, int row)
 
     taglist.first = 0;
     taglist.last = (Tag *) &taglist.first;
+    /*{
+        if (w->current_line + row > 0x8000000000000000ULL) {
+            eprintf("w->current_line=%llu row=%d\n", w->current_line, row);
+        }
+    }*/
+
     w->getline(w->current_line + row, &hb.buf, w->getline_arg, &taglist);
     l->text = hb.start;
     l->textlen = hb.cur - hb.start;
@@ -665,6 +674,13 @@ getline(Med *w, int row)
 }
 
 static void
+update_buffer_row(Med *w, int i)
+{
+    free_line(&w->buffer[i]);
+    getline(w, i);
+}
+
+static void
 update_buffer(Med *w)
 {
     int i;
@@ -681,15 +697,24 @@ med_update_buffer(HWND hwnd)
     update_buffer(w);
 }
 
+void
+med_update_buffer_row(HWND hwnd, int i)
+{
+    Med *w = (Med *) GetWindowLongPtr(hwnd, 0);
+    update_buffer_row(w, i);
+}
+
 static void
 scroll(Med *w, HWND hwnd, int delta)
 {
+#if 0
     RECT scroll_rect = {
         0,
         0,
         w->charwidth * w->ncol,
         w->charheight * w->nrow
     };
+#endif
     w->current_line -= delta;
     if (delta > 0) {
         /* move lines down, first 'delta' lines exposed */
@@ -933,6 +958,7 @@ update_scrollbar_range(Med *w, HWND hwnd)
     si.nMin = 0;
     si.nMax = maxscroll;
     si.nPos = newpos;
+    //eprintf("nMax=%d nPos=%d\n", si.nMax, si.nPos);
     SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 }
 

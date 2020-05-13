@@ -81,7 +81,7 @@ add_item(TreeListView *c, TLV_Item *parent, int ncol, const TCHAR **cols)
     tvins.hParent = parent_treeitem;
     tvins.hInsertAfter = TVI_LAST;
     tvins.item.mask = TVIF_TEXT | TVIF_PARAM;
-    tvins.item.pszText = cols[0];
+    tvins.item.pszText = (TCHAR*)cols[0]; // won't be modified anyway
     tvins.item.lParam = (LPARAM)item;
     item->treeitem = (HTREEITEM)
         SendMessage(c->treeview, TVM_INSERTITEM, 0, (LPARAM)&tvins);
@@ -120,7 +120,7 @@ header_insert_item(HWND header, int insert_after,
     int index;
 
     hdi.mask = HDI_TEXT | HDI_FORMAT | HDI_WIDTH;
-    hdi.pszText = text;
+    hdi.pszText = (TCHAR*)text;
     hdi.cxy = width;
     hdi.cchTextMax = lstrlen(text);
     hdi.fmt = HDF_LEFT | HDF_STRING;
@@ -170,7 +170,7 @@ tlv_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
                 (WC_TREEVIEW,
                  TEXT(""),
                  WS_CHILD | WS_VISIBLE |
-                 TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS,
+                 TVS_FULLROWSELECT | TVS_LINESATROOT | TVS_HASBUTTONS | TVS_DISABLEDRAGDROP,
                  0, 0, 0, 0,
                  hwnd, (HMENU)1, cs->hInstance, 0);
             c->treeview_wndproc = (WNDPROC) SetWindowLongPtr
@@ -181,6 +181,8 @@ tlv_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
                  WS_CHILD | WS_VISIBLE | HDS_BUTTONS | HDS_HORZ,
                  0, 0, 0, 0,
                  hwnd, (HMENU)2, cs->hInstance, 0);
+            SendMessage(c->header, WM_SETFONT,
+                        (WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);
             c->max_ncol = 4;
             c->colwidth = xmalloc(4 * sizeof *c->colwidth);
 #if 0
@@ -248,18 +250,17 @@ tlv_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 }
 
 static void
-paint_cell(HDC dc, RECT *rect, const TCHAR *text)
+paint_cell(HDC dc, RECT *rect, const TCHAR *text,
+           COLORREF text_color, COLORREF bk_color)
 {
-#if 0
-    if (selected) {
-        FillRect(dc, rect, (HBRUSH)(COLOR_HIGHLIGHT+1));
-        DrawFocusRect(dc, rect);
-        // also need to set background color for TextOut
+    if (text) {
+        SetTextColor(dc, text_color);
+        SetBkColor(dc, bk_color);
+        TextOut(dc, rect->left+1, rect->top+1, text, lstrlen(text));
     }
-#endif
-    if (text) TextOut(dc, rect->left+1, rect->top+1, text, lstrlen(text));
 }
 
+#if 0
 static TLV_Item *
 get_treeitem_lparam(HWND treeview, HTREEITEM treeitem)
 {
@@ -269,6 +270,7 @@ get_treeitem_lparam(HWND treeview, HTREEITEM treeitem)
     TreeView_GetItem(treeview, &tvitem);
     return (TLV_Item *) tvitem.lParam;
 }
+#endif
 
 static void
 handle_ITEMPOSTPAINT(TreeListView *c, NMTVCUSTOMDRAW *tvcd)
@@ -276,8 +278,12 @@ handle_ITEMPOSTPAINT(TreeListView *c, NMTVCUSTOMDRAW *tvcd)
     HTREEITEM treeitem = (HTREEITEM) tvcd->nmcd.dwItemSpec;
     RECT rect;
 
-    TLV_Item *item = get_treeitem_lparam(c->treeview, treeitem);
-    assert(item);
+    TV_ITEM tvitem;
+    tvitem.hItem = treeitem;
+    tvitem.mask = TVIF_PARAM;
+    TreeView_GetItem(c->treeview, &tvitem);
+
+    TLV_Item *item = (TLV_Item *) tvitem.lParam;
 
     // FALSE means we want the entire line occupied by the item
     TreeView_GetItemRect(c->treeview, treeitem, &rect, FALSE);
@@ -287,7 +293,7 @@ handle_ITEMPOSTPAINT(TreeListView *c, NMTVCUSTOMDRAW *tvcd)
         int r = l+c->colwidth[i];
         rect.left = l;
         rect.right = r;
-        paint_cell(dc, &rect, item->cols[i]);
+        paint_cell(dc, &rect, item->cols[i], tvcd->clrText, tvcd->clrTextBk);
         l = r;
     }
 }

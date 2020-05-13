@@ -149,7 +149,7 @@ convert_tree(Region *r, lua_State *L)
     lua_getfield(L, -1, "type");
     if (!lua_isnil(L, -1)) {
         const char *typename = luaL_checkstring(L, -1);
-        tree->custom_type_name = _strdup(typename);
+        tree->custom_type_name = strdup(typename);
         tree->type = F_CUSTOM;
     } else {
         tree->custom_type_name = 0;
@@ -185,7 +185,7 @@ convert_tree(Region *r, lua_State *L)
 int
 api_buffer_tree(lua_State *L)
 {
-    Buffer *b = luaL_checkudata(L, 1, "buffer");
+    /*Buffer *b = */luaL_checkudata(L, 1, "buffer");
     lua_getuservalue(L, 1);
     lua_getfield(L, -1, "value");
     lua_remove(L, -2);

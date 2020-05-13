@@ -30,6 +30,8 @@ typedef uint64_t uint64;
 void *xmalloc(size_t size);
 void *xrealloc(void *ptr, size_t size);
 
+size_t wcslen(const wchar_t *);
+
 /* region */
 
 typedef struct {
@@ -54,6 +56,9 @@ void rfree(Region *r, void *p);
 #include "printf.h"
 #undef T_
 #undef _TCHAR
+#define strlen_w wcslen
+#define fputc_w fputwc
+#define fputs_w fputws
 #endif
 
 #ifdef UNICODE

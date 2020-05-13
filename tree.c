@@ -44,6 +44,7 @@ tree_lookup(Tree *tree, uint64 addr)
         return tree;
     }
     assert(tree->children);
+    // TODO: use binary search
     for (i=0; i<tree->n_child; i++) {
         Tree *result = tree_lookup(tree->children[i], addr);
         if (result) return result;

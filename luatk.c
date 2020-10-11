@@ -88,6 +88,9 @@ typedef struct {
     TCHAR *text;
 } Config;
 
+extern TCHAR *program_dir;
+extern int program_dir_len;
+
 static ATOM the_luatk_class;
 
 static void parse_config(lua_State *L, int index, Config *c);
@@ -117,7 +120,12 @@ luatk_api_open(lua_State *L)
     lua_newtable(L);
     lua_setglobal(L, "luatk_window_map");
 
-    int ret = luaL_dofile(L, "luatk.lua");
+    TCHAR *luatk_lua_path = xmalloc((program_dir_len + 11) * sizeof(TCHAR));
+    T(strcpy)(luatk_lua_path, program_dir);
+    memcpy(luatk_lua_path + program_dir_len, TEXT("\\luatk.lua"), 11*sizeof(TCHAR));
+
+    int ret = luaL_dofile_w(L, luatk_lua_path);
+    free(luatk_lua_path);
     if (ret) {
         // TODO: print message to log window
         const char *msg = lua_tostring(L, -1);
@@ -535,7 +543,7 @@ luatk_api_create_window(lua_State *L)
         SetWindowLongPtr(hwnd, 0, (LONG_PTR)w);
     } else {
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)w);
-        WNDPROC super_wndproc = SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)ctl_wndproc);
+        WNDPROC super_wndproc = (WNDPROC) SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)ctl_wndproc);
         w->super_wndproc = super_wndproc;
         SendMessage(hwnd, WM_SETFONT,
                     (WPARAM) GetStockObject(DEFAULT_GUI_FONT), 0);

@@ -105,7 +105,6 @@ typedef struct {
     bool tree_changed;
     bool plugin_name_changed;
     bool cursor_pos_changed;
-    bool cursor_fine_pos_changed;
     bool buffer_changed;
     char *last_pat;
     int last_pat_len;
@@ -1608,16 +1607,12 @@ update_ui(UI *ui)
     mii.cbSize = sizeof mii;
     mii.fMask = MIIM_STATE;
 
-    if (ui->cursor_pos_changed || ui->cursor_fine_pos_changed) {
-        ui->cursor_fine_pos_changed = false;
+    if (ui->cursor_pos_changed) {
+        ui->cursor_pos_changed = false;
         if (ui->cursor_fine_pos != POS_GAP) {
             int cx = col_to_cx(ui, ui->cursor_x);
             med_set_cursor_pos(ui->monoedit, ui->cursor_y, cx);
         }
-    }
-
-    if (ui->cursor_pos_changed) {
-        ui->cursor_pos_changed = false;
         update_field_info(ui);
     }
 
@@ -2287,7 +2282,7 @@ ui_set_cursor_fine_pos(UI *ui, uchar fpos)
 {
     if (ui->cursor_fine_pos != fpos) {
         ui->cursor_fine_pos = fpos;
-        ui->cursor_fine_pos_changed = true;
+        ui->cursor_pos_changed = true;
     }
 }
 

@@ -18,36 +18,40 @@ utf8_length(uint32_t rune)
     if (rune < 0x80) return 1;
     if (rune < 0x800) return 2;
     if (rune < 0x10000) return 3;
+#if 0
     if (rune < 0x200000) return 4;
     if (rune < 0x4000000) return 5;
     if (rune < 0x80000000) return 6;
     return 7;
+#endif
+    return 4;
 }
 
 int
 to_utf8(uint32_t rune, char *p)
 {
+    int len;
     if (rune < 0x80) {
         *p = (char) rune;
-        return 1;
+        len = 1;
     }
-    if (rune < 0x800) {
+    else if (rune < 0x800) {
         // 11-6
         p[0] = (char)(0xc0 | rune >> 6);
         // 6-0
         p[1] = (char)(0x80 | (rune & 0x3f));
-        return 2;
+        len = 2;
     }
-    if (rune < 0x10000) {
+    else if (rune < 0x10000) {
         // 16-12
         p[0] = (char)(0xe0 | rune >> 12);
         // 12-6
         p[1] = (char)(0x80 | (rune >> 6 & 0x3f));
         // 6-0
         p[2] = (char)(0x80 | (rune & 0x3f));
-        return 3;
+        len = 3;
     }
-    if (rune < 0x200000) {
+    else /*if (rune < 0x200000)*/ {
         // 21-18
         p[0] = (char)(0xf0 | rune >> 18);
         // 18-12
@@ -56,8 +60,10 @@ to_utf8(uint32_t rune, char *p)
         p[2] = (char)(0x80 | (rune >> 6 & 0x3f));
         // 6-0
         p[3] = (char)(0x80 | (rune & 0x3f));
-        return 4;
+        len = 4;
     }
+    return len;
+#if 0
     if (rune < 0x4000000) {
         p[0] = (char)(0xf8 |  rune >> 24);
         p[1] = (char)(0x80 | (rune >> 18 & 0x3f));
@@ -83,20 +89,23 @@ to_utf8(uint32_t rune, char *p)
     p[5] = (char)(0x80 | (rune >>  6 & 0x3f));
     p[6] = (char)(0x80 | (rune       & 0x3f));
     return 7;
+#endif
 }
 
-uint32_t
-decode_utf16(const wchar_t *wp)
+int
+decode_utf16(const wchar_t *wp, int len, uint32_t *rune)
 {
-    uint32_t rune;
-    if ((wp[0] & 0xfc00) == 0xd800 && (wp[1] & 0xfc00) == 0xdc00) {
+    int ret;
+    if ((wp[0] & 0xfc00) == 0xd800 && len > 1 && (wp[1] & 0xfc00) == 0xdc00) {
         // surrogate pair
-        rune = 0x10000 +
+        *rune = 0x10000 +
             ((wp[0] & 0x3ff) << 10 | (wp[1] & 0x3ff));
+        ret = 2;
     } else {
-        rune = *wp;
+        *rune = *wp;
+        ret = 1;
     }
-    return rune;
+    return ret;
 }
 
 // return value in wchar_t's
@@ -105,7 +114,7 @@ utf16_length(uint32_t rune)
 {
     if (rune < 0x10000) return 1;
     if (rune < 0x110000) return 2;
-    return 1; // as if rune were 0xfffd
+    return 1; /* as if rune were 0xfffd */
 }
 
 char *
@@ -113,19 +122,26 @@ utf16_to_utf8(const wchar_t *widestr)
 {
     // first calculate amount of memory needed to hold result UTF-8 string
     const wchar_t *wp = widestr;
-    int n = 0;
-    while (*wp) {
-        uint32_t rune = decode_utf16(wp);
-        n += utf8_length(rune);
-        wp += utf16_length(rune);
+    int len = wcslen(wp);
+    int rem = len;
+    int n_char = 0;
+    while (rem > 0) {
+        uint32_t rune;
+        int n = decode_utf16(wp, rem, &rune);
+        n_char += utf8_length(rune);
+        wp += n;
+        rem -= n;
     }
-    char *buf = xmalloc(n+1);
+    char *buf = xmalloc(n_char+1);
     char *p = buf;
     wp = widestr;
-    while (*wp) {
-        uint32_t rune = decode_utf16(wp);
-        wp += utf16_length(rune);
+    rem = len;
+    while (rem > 0) {
+        uint32_t rune;
+        int n = decode_utf16(wp, rem, &rune);
         p += to_utf8(rune, p);
+        wp += n;
+        rem -= n;
     }
     *p = 0;
     return buf;
@@ -149,51 +165,66 @@ to_utf16(uint32_t rune, wchar_t *p)
     return 1;
 }
 
-// returns 0xfffd if decoded value >= 0x110000
-uint32_t
-decode_utf8(const char *p)
+int
+decode_utf8(const char *p, int len, uint32_t *rune)
 {
+    int ret;
     uint8_t *u = (uint8_t *) p;
     if ((*u & 0x80) == 0x00) {
-        return *u;
+        *rune = *u;
+        ret = 1;
     }
-    if ((*u & 0xe0) == 0xc0) {
-        return (u[0] & 0x1f) << 6
+    else if ((*u & 0xe0) == 0xc0) {
+        if (len < 2) goto bad;
+        *rune= (u[0] & 0x1f) << 6
              | (u[1] & 0x3f);
+        ret = 2;
     }
-    if ((*u & 0xf0) == 0xe0) {
-        return (u[0] & 0x0f) << 12
+    else if ((*u & 0xf0) == 0xe0) {
+        if (len < 3) goto bad;
+        *rune= (u[0] & 0x0f) << 12
              | (u[1] & 0x3f) << 6
              | (u[2] & 0x3f);
+        ret = 3;
     }
-    if ((*u & 0xf8) == 0xf0) {
-        uint32_t rune;
-        rune = (u[0] & 0x07) << 18
+    else /*if ((*u & 0xf8) == 0xf0)*/ {
+        if (len < 4) goto bad;
+        *rune= (u[0] & 0x07) << 18
              | (u[1] & 0x3f) << 12
              | (u[2] & 0x3f) << 6
              | (u[3] & 0x3f);
-        if (rune < 0x110000) return rune;
+        ret = 4;
     }
-    return 0xfffd;
+    return ret;
+bad:
+    *rune = 0xfffd;
+    return len;
 }
 
 wchar_t *
 utf8_to_utf16(const char *str)
 {
     const char *p = str;
-    int nbyte = 0;
-    while (*p) {
-        uint32_t rune = decode_utf8(p);
-        nbyte += utf16_length(rune)*2;
-        p += utf8_length(rune);
+    int len = strlen(str);
+    int rem = len;
+    int n_wchar = 0;
+    while (rem > 0) {
+        uint32_t rune;
+        int n = decode_utf8(p, rem, &rune);
+        n_wchar += utf16_length(rune);
+        p += n;
+        rem -= n;
     }
-    wchar_t *buf = xmalloc(nbyte+2);
+    wchar_t *buf = xmalloc((n_wchar+1)*2);
     wchar_t *wp = buf;
     p = str;
-    while (*p) {
-        uint32_t rune = decode_utf8(p);
-        p += utf8_length(rune);
+    rem = len;
+    while (rem > 0) {
+        uint32_t rune;
+        int n = decode_utf8(p, rem, &rune);
         wp += to_utf16(rune, wp);
+        p += n;
+        rem -= n;
     }
     *wp = 0;
     return buf;

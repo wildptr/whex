@@ -57,6 +57,7 @@ void rfree(Region *r, void *p);
 #undef T_
 #undef _TCHAR
 #define strlen_w wcslen
+#define strcpy_w wcscpy
 #define fputc_w fputwc
 #define fputs_w fputws
 #endif

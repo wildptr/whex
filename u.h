@@ -28,6 +28,7 @@ typedef uint32_t uint32;
 typedef uint64_t uint64;
 
 void *xmalloc(size_t size);
+void *xmalloc0(size_t size);
 void *xrealloc(void *ptr, size_t size);
 
 size_t wcslen(const wchar_t *);

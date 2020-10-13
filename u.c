@@ -12,6 +12,14 @@ xmalloc(size_t size)
 }
 
 void *
+xmalloc0(size_t size)
+{
+    void *p = xmalloc(size);
+    memset(p, 0, size);
+    return p;
+}
+
+void *
 xrealloc(void *ptr, size_t size)
 {
     void *p = realloc(ptr, size);

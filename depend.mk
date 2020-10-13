@@ -4,6 +4,7 @@ luatk_test.o: luatk_test.c u.h printf.h winutil.h unicode.h luatk.h
 main.o: main.c u.h printf.h buffer.h tree.h unicode.h resource.h \
  monoedit.h treelistview.h winutil.h luatk.h
 monoedit.o: monoedit.c u.h printf.h monoedit.h
+newedit.o: newedit.c u.h printf.h winutil.h
 printf.o: printf.c
 tree.o: tree.c u.h printf.h tree.h
 treelistview.o: treelistview.c u.h printf.h treelistview.h

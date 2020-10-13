@@ -1,7 +1,7 @@
 # Makefile for MinGW toolchain
 
 CC := gcc
-CFLAGS := -std=c99 -Wall -Wno-parentheses -Ilua -D_WIN32_IE=0x0400 -DUNICODE -D_WIN32_WINNT=0x0500
+CFLAGS := -g -std=c99 -Wall -Wno-parentheses -Ilua -D_WIN32_IE=0x0400 -DUNICODE -D_WIN32_WINNT=0x0500
 
 .PHONY: all
 all: whex.exe
@@ -24,3 +24,8 @@ treeviewtest.exe: treeviewtest.o u.o treelistview.o
 
 luatk_test.exe: luatk_test.o u.o unicode.o luatk.o
 	gcc -o $@ $^ -luser32 -lkernel32 -Llua -llua
+
+EDIT_OBJS := newedit.o u.o winutil.o
+
+edit.exe: $(EDIT_OBJS)
+	gcc -o $@ $(EDIT_OBJS) -luser32 -lkernel32 -lgdi32 -lcomdlg32

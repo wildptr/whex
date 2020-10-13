@@ -387,14 +387,20 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
             }
             break;
         case VK_UP:
-            if (s->cur_line->prev) {
-                s->cur_line = s->cur_line->prev;
+            if ((l = s->cur_line->prev)) {
+                s->cur_line = l;
+                if (s->cur_line_offset > l->len) {
+                    s->cur_line_offset = l->len;
+                }
                 s->caret_moved = true;
             }
             break;
         case VK_DOWN:
-            if (s->cur_line->next) {
-                s->cur_line = s->cur_line->next;
+            if ((l = s->cur_line->next)) {
+                s->cur_line = l;
+                if (s->cur_line_offset > l->len) {
+                    s->cur_line_offset = l->len;
+                }
                 s->caret_moved = true;
             }
             break;

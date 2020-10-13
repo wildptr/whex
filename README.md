@@ -12,3 +12,8 @@ it is still under heavy development and things may change drastically.
   the format description language
 * A Tk-style Lua GUI library enabling easy GUI plugin development (highly incomplete)
 * Uses nothing other than native Win32 API for GUI
+
+## Technical Details
+
+The Lua included here is Lua 5.3.6 extended with functions that handle
+wide-string paths.

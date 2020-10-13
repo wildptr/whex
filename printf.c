@@ -79,6 +79,8 @@ T_(filebuf_putc)(T_(Buf) *b, _TCHAR c)
 static void
 T_(filebuf_puts)(T_(Buf) *b, const _TCHAR *s, int n)
 {
+    /* cannot directly hand over to fputs() since the string segment is not
+       NULL-terminated */
     while (n--) T_(filebuf_putc)(b, *s++);
 }
 
@@ -122,7 +124,7 @@ T_(regionbuf_grow)(T_(RegionBuf) *rb, int newsize)
     char *oldcur = r->cur;
     int oldlen = oldcur - (char *) rb->start; // this many bytes need to be copied
     new_chunk(r, newsize * sizeof(_TCHAR));
-    /* move data in (rb->start -- r->cur) to new area */
+    /* move data in (rb->start -- oldcur) to new area */
     memcpy(r->cur, rb->start, oldlen);
     rb->start = (_TCHAR *) r->cur;
     r->cur += oldlen;
@@ -281,7 +283,7 @@ T_(vbprintf)(T_(Buf) *b, const _TCHAR *fmt, va_list va)
 {
     _TCHAR ch;
 
-    while ((ch = *fmt++)) {
+    for (;;) {
         uint flags;
         _TCHAR *s;
         int n;
@@ -292,16 +294,24 @@ T_(vbprintf)(T_(Buf) *b, const _TCHAR *fmt, va_list va)
         Formatter f;
         void *d;
 
-        if (ch!='%') {
-            b->putc(b, ch);
-            continue;
-        }
+        const _TCHAR *p = fmt;
+        while ((ch=*p) && ch!='%') p++;
+        int len = p-fmt;
+        if (len) b->puts(b, fmt, len);
 
+        // ch == 0 || ch == '%'
+        if (!ch) break;
+
+        // ch == '%'
         flags = 0;
         prec = 0;
         l = 0;
 
+        fmt = p+1; // fmt -> character following '%'
         ch = *fmt++;
+        /* fmt may be past end of string at this moment, but no out-of-bounds
+           read can happen (see below) */
+
 flags:
         switch (ch) {
         case ' ':

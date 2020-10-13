@@ -24,6 +24,10 @@
 
 #define BUFSIZE 512
 
+/****************************************************************************
+ * Type definitions                                                         *
+ ****************************************************************************/
+
 enum {
     ID_MONOEDIT = 1,
     ID_STATUS_BAR,
@@ -110,12 +114,18 @@ typedef struct {
     int last_pat_len;
 } UI;
 
+/****************************************************************************
+ * Global variables                                                         *
+ ****************************************************************************/
 Region the_region;
 /* GetOpenFileName() changes directory, so remember working directory when
    program starts */
 TCHAR *program_dir;
 int program_dir_len;
 
+/****************************************************************************
+ * Function prototypes                                                      *
+ ****************************************************************************/
 LRESULT CALLBACK med_wndproc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
 static ATOM register_wndclass(void);
@@ -175,6 +185,10 @@ void ui_set_plugin_name(UI *, TCHAR *);
 void ui_set_cursor_pos(UI *, int, int);
 void ui_set_cursor_fine_pos(UI *, uchar);
 char get_display_char(uchar b);
+
+/****************************************************************************
+ * Implementation                                                           *
+ ****************************************************************************/
 
 LRESULT CALLBACK
 med_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -439,10 +453,10 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
     /* set Lua search path */
     lua_getglobal(L, "package");
+    // TODO: code looks suspicious, review
 #ifdef UNICODE
     {
         char *program_dirA = utf16_to_mbcs(program_dir);
-        // TODO: fix Lua
         lua_pushfstring(L, "%s/?.lua", program_dirA);
         free(program_dirA);
     }

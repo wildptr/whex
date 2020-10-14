@@ -3,8 +3,6 @@
 #include <windows.h>
 #include "winutil.h"
 
-#define LINE_HEIGHT 16
-
 /****************************************************************************
  * Type Definitions                                                         *
  ****************************************************************************/
@@ -16,25 +14,30 @@ typedef struct line {
     struct line *next, *prev;
     TCHAR *text; // NOT terminated
     int len, cap;
+    int index;
     uint flags;
 } Line;
 
-typedef struct editor_state {
+typedef struct buffer {
     Line *first_line, *last_line;
+} Buffer;
+
+typedef struct editor_state {
+    Buffer *buf;
     /* cursor */
     Line *cur_line;
     int cur_line_offset;
-    /* font information */
-    //HFONT font;
+    /* text metrics */
     int *charwidth; // starting at 0x20 (' ')
     TEXTMETRIC *textmetric;
+    int line_height;
     /* GUI-related stuff */
     HWND hwnd;
     HBRUSH bg_brush;
-    Line *first_visible_line; // may be NULL
+    int first_visible_line; // first line = 0
     int first_visible_line_y;
-    bool caret_visible;
-    /**/
+    //bool caret_visible;
+    /* flags for UI update */
     bool need_full_repaint;
     bool caret_moved;
 } Editor_State;
@@ -45,6 +48,7 @@ typedef struct paint_params {
     int window_width;
     HBRUSH bg_brush;
     int *charwidth;
+    int line_height;
 } Paint_Params;
 
 /****************************************************************************
@@ -56,8 +60,10 @@ void append_char(Line *l, TCHAR c);
 void insert_char(Line *l, int offset, TCHAR c);
 void append_string(Line *l, TCHAR *s, int len);
 void delete_char(Line *l, int pos);
-Line *insert_line_after(Editor_State *s, Line *l, int cap);
-void delete_line(Editor_State *s, Line *l);
+
+Line *insert_line_after(Buffer *b, Line *l, int cap);
+void delete_line(Buffer *b, Line *l);
+Line *get_line(Buffer *b, int); // NULL-able
 
 bool is_printable_char(TCHAR c);
 int char_width_raw(int *width_table, TCHAR c);
@@ -69,10 +75,13 @@ void paint_line(Paint_Params *p, Line *l);
 LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
 static ATOM register_wndclass(void);
 void update_ui(Editor_State *);
+void repaint(Editor_State *s, HDC dc, bool full_repaint);
 
 /****************************************************************************
  * Implementation                                                           *
  ****************************************************************************/
+
+/* Buffer operations */
 
 Line *
 new_line(int cap)
@@ -138,41 +147,56 @@ delete_char(Line *l, int pos)
 }
 
 Line *
-insert_line_after(Editor_State *s, Line *l, int cap)
+insert_line_after(Buffer *b, Line *l, int cap)
 {
     Line *newl = new_line(cap);
     newl->prev = l;
+    newl->index = l->index+1;
     if (l->next) {
         newl->next = l->next;
         l->next->prev = newl;
     } else {
         // newl->next remains NULL
-        s->last_line = newl;
+        b->last_line = newl;
     }
     l->next = newl;
+
+    for (l = newl->next; l; l = l->next) l->index++;
+
     return newl;
 }
 
 void
-delete_line(Editor_State *s, Line *l)
+delete_line(Buffer *b, Line *l)
 {
     Line *prev = l->prev;
     Line *next = l->next;
 
     if (prev) prev->next = next;
-    else s->first_line = next;
+    else b->first_line = next;
 
     if (next) next->prev = prev;
-    else s->last_line = prev;
-
-    // fix references
-    if (s->first_visible_line == l) {
-        s->first_visible_line = next;
-    }
+    else b->last_line = prev;
 
     free(l->text);
     free(l);
+
+    for (l = next; l; l = l->next) l->index--;
 }
+
+Line *
+get_line(Buffer *b, int i)
+{
+    Line *l = b->first_line;
+    while (i>0) {
+        if (!l) return NULL;
+        l = l->next;
+        i--;
+    }
+    return l;
+}
+
+/**/
 
 bool
 is_printable_char(TCHAR c)
@@ -262,7 +286,7 @@ paint_line(Paint_Params *p, Line *l)
     }
 
     RECT rect = {
-        .top = y, .bottom = y+LINE_HEIGHT,
+        .top = y, .bottom = y+p->line_height,
         .left = x, .right = p->window_width
     };
     FillRect(dc, &rect, p->bg_brush);
@@ -300,6 +324,8 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
             s->textmetric = xmalloc(sizeof *s->textmetric);
             GetTextMetrics(dc, s->textmetric);
 
+            s->line_height = s->textmetric->tmHeight;
+
             ReleaseDC(hwnd, dc);
         }
 
@@ -314,9 +340,9 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
             int y = HIWORD(lparam);
 
             // find the line
-            int vis_rel_y = (y - s->first_visible_line_y)/LINE_HEIGHT;
+            int vis_rel_y = (y - s->first_visible_line_y)/s->line_height;
             if (vis_rel_y < 0) return 0;
-            l = s->first_visible_line;
+            l = get_line(s->buf, s->first_visible_line);
             if (!l) return 0;
             int tmp = vis_rel_y;
             while (tmp) {
@@ -431,7 +457,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
                 // don't delete the last line
                 if (next) {
                     append_string(l, next->text, next->len);
-                    delete_line(s, next);
+                    delete_line(s->buf, next);
                     s->need_full_repaint = true;
                 }
             }
@@ -445,7 +471,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         switch (c) {
         case '\r'/*ENTER*/:
             {
-                Line *newl = insert_line_after(s, l, 256);
+                Line *newl = insert_line_after(s->buf, l, 256);
                 offset = s->cur_line_offset;
                 if (offset < l->len) {
                     // need to break the line
@@ -471,7 +497,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
                 // don't delete the first line
                 if (prev) {
                     append_string(prev, l->text, l->len);
-                    delete_line(s, l);
+                    delete_line(s->buf, l);
                     s->cur_line = prev;
                     s->cur_line_offset = prev->len;
                     s->need_full_repaint = true;
@@ -501,22 +527,7 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
             PAINTSTRUCT ps;
             HDC dc = BeginPaint(hwnd, &ps);
             s = (Editor_State *) GetWindowLongPtr(hwnd, 0);
-            RECT rect;
-            GetClientRect(hwnd, &rect);
-            Paint_Params p = {0};
-            p.dc = dc;
-            p.window_width = rect.right;
-            p.bg_brush = s->bg_brush;
-            p.top = s->first_visible_line_y;
-            p.charwidth = s->charwidth;
-            for (l = s->first_visible_line;
-                 l && p.top < rect.bottom; l = l->next)
-            {
-                paint_line(&p, l);
-                p.top += LINE_HEIGHT;
-            }
-            rect.top = p.top;
-            FillRect(dc, &rect, s->bg_brush);
+            repaint(s, dc, true);
             EndPaint(hwnd, &ps);
         }
         return 0;
@@ -524,19 +535,38 @@ wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
-static ATOM
-register_wndclass(void)
+void
+repaint(Editor_State *s, HDC dc, bool full_repaint)
 {
-    WNDCLASS wndclass = {0};
+    RECT rect;
+    GetClientRect(s->hwnd, &rect);
 
-    wndclass.lpfnWndProc = wndproc;
-    wndclass.cbWndExtra = sizeof(LONG_PTR);
-    wndclass.hInstance = GetModuleHandle(0);
-    wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wndclass.hbrBackground = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
-    wndclass.lpszClassName = TEXT("NEWEDIT");
-    return RegisterClass(&wndclass);
+    Paint_Params p = {
+        .dc = dc,
+        .window_width = rect.right,
+        .bg_brush = s->bg_brush,
+        .top = s->first_visible_line_y,
+        .charwidth = s->charwidth,
+        .line_height = s->line_height,
+    };
+
+    if (full_repaint) {
+        for (Line *l = get_line(s->buf, s->first_visible_line);
+             l && p.top < rect.bottom; l = l->next)
+        {
+            paint_line(&p, l);
+            p.top += s->line_height;
+        }
+        rect.top = p.top;
+        FillRect(dc, &rect, s->bg_brush);
+    } else {
+        for (Line *l = s->buf->first_line; l; l = l->next) {
+            if (l->flags & NEED_REPAINT) {
+                paint_line(&p, l);
+            }
+            p.top += s->line_height;
+        }
+    }
 }
 
 void
@@ -546,33 +576,15 @@ update_ui(Editor_State *s)
     HDC dc = GetDC(hwnd);
     RECT rect;
     GetClientRect(hwnd, &rect);
-    Paint_Params p = {0};
-    p.dc = dc;
-    p.window_width = rect.right;
-    p.bg_brush = s->bg_brush;
-    p.top = s->first_visible_line_y;
-    p.charwidth = s->charwidth;
 
     // hide caret during painting to prevent ghost carets
     HideCaret(hwnd);
 
     if (s->need_full_repaint) {
-        for (Line *l = s->first_visible_line;
-             l && p.top < rect.bottom; l = l->next)
-        {
-            paint_line(&p, l);
-            p.top += LINE_HEIGHT;
-        }
-        rect.top = p.top;
-        FillRect(dc, &rect, s->bg_brush);
+        repaint(s, dc, true);
         s->need_full_repaint = 0;
     } else {
-        for (Line *l = s->first_line; l; l = l->next) {
-            if (l->flags & NEED_REPAINT) {
-                paint_line(&p, l);
-            }
-            p.top += LINE_HEIGHT;
-        }
+        repaint(s, dc, false);
     }
 
     ShowCaret(hwnd);
@@ -584,36 +596,28 @@ update_ui(Editor_State *s)
         assert(offset >= 0);
         if (offset > curline->len) offset = curline->len;
         int x = text_width(s->charwidth, curline->text, offset);
-        int y = s->first_visible_line_y;
-        Line *l = s->first_visible_line;
-        bool found=0;
-        while (l && y < rect.bottom) {
-            if (l == curline) {
-                found=1;
-                break;
-            }
-            y += LINE_HEIGHT;
-            l = l->next;
-        }
-        if (found) {
-            //printf("SetCaretPos(%d, %d)\n", x, y);
-            SetCaretPos(x, y);
-            if (!s->caret_visible) {
-                ShowCaret(hwnd);
-                s->caret_visible = true;
-            }
-        } else {
-#if 0 // not necessary
-            if (s->caret_visible) {
-                HideCaret(hwnd);
-                s->caret_visible = false;
-            }
-#endif
-        }
+        int y = s->first_visible_line_y +
+            (curline->index - s->first_visible_line) * s->line_height;
+        SetCaretPos(x, y);
         s->caret_moved = false;
     }
 
     ReleaseDC(hwnd, dc);
+}
+
+static ATOM
+register_wndclass(void)
+{
+    WNDCLASS wndclass = {0};
+
+    wndclass.lpfnWndProc = wndproc;
+    wndclass.cbWndExtra = sizeof(LONG_PTR);
+    wndclass.hInstance = GetModuleHandle(0);
+    wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wndclass.hCursor = LoadCursor(NULL, IDC_IBEAM);
+    wndclass.hbrBackground = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+    wndclass.lpszClassName = TEXT("NEWEDIT");
+    return RegisterClass(&wndclass);
 }
 
 int APIENTRY
@@ -632,12 +636,16 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
         return 1;
     }
 
-    Editor_State state = {0};
     Line *line = new_line(256);
-    state.first_line = line;
-    state.last_line = line;
-    state.cur_line = line;
-    state.first_visible_line = line;
+    Buffer buf = {
+        .first_line = line,
+        .last_line = line
+    };
+
+    Editor_State state = {
+        .buf = &buf,
+        .cur_line = line,
+    };
 
     hwnd = CreateWindowEx
         (0,//WS_EX_CLIENTEDGE,
@@ -647,9 +655,9 @@ WinMain(HINSTANCE instance, HINSTANCE _prev_instance, LPSTR _cmdline, int show)
 
     ShowWindow(hwnd, show);
 
-    CreateCaret(hwnd, NULL, 1, LINE_HEIGHT);
+    CreateCaret(hwnd, NULL, 1, state.line_height);
     ShowCaret(hwnd);
-    state.caret_visible = true;
+    //state.caret_visible = true;
 
     while (GetMessage(&msg, 0, 0, 0)) {
         TranslateMessage(&msg);
